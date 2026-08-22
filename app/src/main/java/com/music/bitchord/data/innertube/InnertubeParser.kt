@@ -347,6 +347,39 @@ object InnertubeParser {
         return PlaylistShelfPage(songs, suggested, token)
     }
 
+    data class ParsedHistorySection(
+        val title: String,
+        val songs: List<Song>,
+    )
+
+    /** Parses the grouped sections (Today, Yesterday, This week, etc.) off FEmusic_history. */
+    fun parseHistorySections(response: JsonElement): List<ParsedHistorySection> {
+        val sections = response.o("contents")
+            ?.o("singleColumnBrowseResultsRenderer")?.a("tabs")?.firstOrNull()
+            ?.o("tabRenderer")?.o("content")?.o("sectionListRenderer")?.a("contents")
+            ?: response.o("contents")?.o("sectionListRenderer")?.a("contents")
+            ?: emptyList()
+
+        val out = mutableListOf<ParsedHistorySection>()
+        for (section in sections) {
+            val shelf = section.o("musicShelfRenderer") ?: continue
+            val title = shelf.o("title").runs().ifBlank { "Recent" }
+            val songs = shelf.a("contents").orEmpty().mapNotNull { item ->
+                parseResponsiveListItem(item.o("musicResponsiveListItemRenderer"))
+            }
+            if (songs.isNotEmpty()) {
+                out.add(ParsedHistorySection(title, songs))
+            }
+        }
+        if (out.isEmpty()) {
+            val deep = collectSongsDeep(response)
+            if (deep.isNotEmpty()) {
+                out.add(ParsedHistorySection("Today", deep))
+            }
+        }
+        return out
+    }
+
     /**
      * The cards on a library feed — saved playlists, albums, artists, podcasts.
      *

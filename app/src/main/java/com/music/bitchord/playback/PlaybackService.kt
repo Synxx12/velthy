@@ -281,7 +281,7 @@ class PlaybackService : MediaSessionService() {
                     exoPlayer.pause()
                     SleepTimer.cancel()
                 }
-                if (exoPlayer.isPlaying) registerCurrentPlay()
+                mediaItem?.mediaId?.let(PlaybackTracker::onPlaying)
                 prefetchAround(exoPlayer)
                 saveQueue()
                 // Bitrate is per track, so it needs re-reading even when two
@@ -422,7 +422,8 @@ class PlaybackService : MediaSessionService() {
     )
 
     private fun registerCurrentPlay() {
-        player?.currentMediaItem?.mediaId?.let(PlaybackTracker::onPlaying)
+        val videoId = player?.currentMediaItem?.mediaId ?: return
+        PlaybackTracker.onPlaying(videoId)
     }
 
     /**

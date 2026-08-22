@@ -8,14 +8,55 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ### [Unreleased]
 
+---
+
+### [v1.3.4] - 2026-08-22
+
 #### ✨ Fitur Baru
-- **Halaman Riwayat Mendengarkan (Listening History) Parity Apple Music & YouTube Music**:
-  - Menghadirkan halaman riwayat interaktif (`HistoryScreen.kt`) dengan pengelompokan tanggal otomatis (*Hari Ini*, *Kemarin*, *Minggu Ini*, *Bulan Ini*, *Sebelumnya*).
-  - Dilengkapi kontrol cepat **Play All** (Putar Semua), **Shuffle** (Acak Riwayat), dan tombol hapus riwayat (*Clear History*).
-  - Mendukung gesture geser (*swipe-to-dismiss*) untuk menghapus lagu tertentu dari riwayat, menu 3-titik, dan kartu pintasan di tab **Library**.
-- **Sinkronisasi Otomatis YouTube Watch History & Local Playback Storage**:
-  - `PlaybackHistoryManager.kt` mencatat seluruh pemutaran lokal secara persisten di penyimpanan perangkat dengan deduplikasi cerdas.
-  - Setiap lagu yang berbunyi terhubung langsung dan disinkronkan ke riwayat akun YouTube Music pengguna via `PlaybackTracker` (`videostatsPlaybackUrl` & `videostatsWatchtimeUrl`).
+- **Halaman Riwayat Mendengarkan (Listening History) Sesuai Layout Asli YouTube Music**:
+  - Menyelaraskan desain antarmuka dengan tema YouTube Music (Header bar ramping `← History`, filter chip `All`, `Music`, `Podcasts`, dan section header `Today`, `Yesterday`, `This week`).
+  - Menampilkan badge tipe lagu (`REMIX`, `Song • Artist`) dan menu 3-titik di setiap baris lagu.
+  - Menambahkan tombol pintasan **History (🕒)** di pojok kanan atas tab **Library** tepat di samping tombol *Settings* (⚙️).
+- **Perbaikan Sinkronisasi Real-Time YouTube Music & Watchtime Tracking**:
+  - Memperbaiki binding `cpn` (*client-playback-nonce*) pada `postMusic("player")` dan `pingPlayback`/`pingWatchtime` di `Innertube.kt`, sehingga sesi pemutaran audio di Musique tervalidasi secara sah oleh server YouTube Music dan langsung masuk ke riwayat akun YouTube resmi.
+  - Memperluas dukungan ekstraksi cookie SAPISID (`__Secure-3PAPISID`, `__Secure-1PAPISID`, `PAPISID`) untuk autentikasi signature watchtime.
+  - Menambahkan event listener `onIsPlayingChanged` pada `PlaybackService.kt` untuk memastikan pemutaran lagu selalu terdaftar ke Google Account saat status audio aktif.
+- **Fitur Music Recognition (Pengenal Musik / Song Identifier) 100% Client-Side**:
+  - Mengintegrasikan engine pengenal musik cerdas berbasis mikrofon (`AudioRecord` 16-bit PCM 44.1kHz) yang dapat mengidentifikasi musik yang sedang diputar di sekitar pengguna secara instan (*serverless*).
+  - Menyediakan modal interaktif `MusicRecognitionSheet` dengan animasi gelombang suara dinamis (*soundwave visualizer*), pencocokan fingerprint, dan resolusi lagu otomatis ke YouTube Music untuk langsung diputar atau dimasukkan ke antrean.
+  - Menambahkan tombol aktivasi pengenal musik (**`Icons.Rounded.GraphicEq` / `ıll`**) di samping kanan *Search Top Bar*.
+- **Auto-Reseed AutoPlay Saat Mode Loop Dimatikan**:
+  - Memperbaiki `autoplaySeed` di `MainActivity.kt` agar otomatis di-reset saat mode pengulangan (*Repeat / Loop*) dimatikan, sehingga radio mix AutoPlay otomatis ditarik kembali dan antrean terus berlanjut tanpa henti.
+- **Default `stopOnTaskRemoved` Diubah Menjadi Aktif (`true`)**:
+  - Mengubah konfigurasi bawaan `stopOnTaskRemoved` di `AppSettings.kt` menjadi `true`, sehingga audio pemutaran otomatis berhenti saat aplikasi ditutup/dibersihkan dari daftar Recent Apps.
+- **Penyempurnaan Sleep Timer Modal Sheet & Countdown Realtime**:
+  - Menyelaraskan tampilan `SleepTimerModalSheet` di `NowPlayingScreen.kt` dengan `SongActionsSheet.kt`: menampilkan countdown menit & detik yang berjalan realtime (*live countdown*), opsi *"After this song"* di bagian teratas, pilihan preset durasi (15m, 30m, 45m, 1 jam), dan tombol *"Turn Off Timer"* merah yang elegan.
+- **Penyempurnaan Tata Letak & Spasi 4 Tombol Bottom Bar**:
+  - Mengatur spasi horizontal dan kontainer 44dp yang seimbang (`SpaceEvenly`), menyelaraskan baseline vertikal ikon audio switcher dan label nama perangkat TWS/speaker tanpa menekan atau merusak kerapian baris tombol.
+
+#### 🎨 UI, Gestures & Animasi
+- **Penyelarasan Desain Bottom Bar 4-Tombol & Badge Mode Antrean (Apple Music Parity)**:
+  - **4 Tombol Bottom Bar Utama**:
+    1. **Lyrics (Paling Kiri)**: Ikon gelembung dialog tanda kutip (`BitChordIcons.LyricsQuote`) untuk membuka/menutup tab lirik secara instan.
+    2. **Sleep Timer (Kiri-Tengah)**: Ikon bulan sabit (`BitChordIcons.Moon`) dengan indikator dot biru saat aktif; membuka modal sheet pilihan waktu tidur (15m, 30m, 45m, 1 jam, Akhir lagu, Matikan timer).
+    3. **Audio Output Switcher (Tengah / Kanan-Tengah)**: Menampilkan ikon dinamis (`Headphones`, `AirPlay`, `Speaker`) dan teks nama perangkat output aktif secara live (seperti nama TWS/AirPods/Bluetooth headset atau Phone Speaker) via `AudioDeviceHelper`. Posisi ikon sejajar presisi horizontal dengan tombol lainnya tanpa terdorong oleh teks.
+    4. **Queue dengan Badge Mode (Paling Kanan)**: Ikon daftar antrean dilengkapi **badge lingkaran mini di sudut kanan atas** yang menampilkan ikon mode aktif secara dinamis (`🔀` Shuffle, `🔁`/`🔂` Repeat, `♾️` AutoPlay).
+  - **Tombol Kapsul di Panel Antrean**: Memindahkan tombol **Shuffle**, **Repeat/Loop**, dan **AutoPlay** ke bagian atas panel antrean (*Queue*) dalam bentuk 3 tombol kapsul pil modern dengan feedback visual aktif/nonaktif yang kontras.
+- **Penyelarasan Desain Search Tab & Pinned Top Search Bar**:
+  - Memindahkan input pencarian ke **Top Bar yang ter-pin (*pinned top bar*)** di dalam `FrostedTopBar`, sehingga input pencarian tidak ikut tergeser/hilang saat halaman di-scroll ke bawah.
+  - Menghilangkan logo aplikasi dan tombol *Settings* pada tab Search untuk tampilan pencarian yang bersih dan fokus.
+  - Menambahkan section **Recent searches** dengan baris kartu lagu yang baru saja diputar (*horizontal carousel*) serta daftar kata kunci riwayat pencarian lengkap dengan tombol isi-cepat (↖).
+  - Menambahkan 2x2 grid **Explore Categories** dengan kartu gradien modern (*New Releases, Top Charts, Moods & Genres, Podcasts & Shows*).
+- **Adaptasi Kontras Otomatis Strip Handle & Status Bar pada Artwork Terang**:
+  - Mengimplementasikan deteksi luminansi dinamis pada area atas album cover (`isBitmapTopLight` di `MeshGradient.kt`).
+  - Apabila cover lagu memiliki latar belakang putih/terang di bagian atas, strip handle atas (*grab handle*) dan ikon status bar sistem (jam, baterai, sinyal) otomatis beralih menjadi gelap/hitam dengan border kontras halus, sehingga navigasi geser selalu terlihat jelas (*high-contrast visibility*).
+- **Animasi Buka/Tutup Tab Lirik yang Mulus & Ringan (Spring Physics Parity)**:
+  - Mengintegrasikan state animasi pegas `lyricsProgress` (`Spring.StiffnessMediumLow`) yang selaras 100% dengan panel antrean (*Queue*).
+  - Saat tab lirik dibuka/ditutup, teks lirik meluncur naik-turun secara halus (`translationY = 26.dp` + `alpha fade`), artwork mengempis/mengembang secara proporsional, dan judul lagu berpindah posisi tanpa kekakuan atau efek patah sama sekali.
+- **Transisi Crossfade Menyatu & Eliminasi Foto Ganda/Double Saat Menutup Tab**:
+  - Menyambungkan transisi foto kotak album dan foto *fullscreen edge-to-edge* melalui interpolasi `expandProgress` yang mulus di `NowPlayingScreen.kt`.
+  - Memperbaiki geometri thumbnail mini saat menutup tab lirik/antrean pada mode *fullscreen*: thumbnail mini memudar lembut di posisinya tanpa mengembang ke tengah, sehingga **melenyapkan efek foto ganda (double artwork)** sepenuhnya.
+  - Menghilangkan pergeseran horizontal canggung pada latar belakang fullscreen saat gesture geser lagu (*swipe gesture*), sehingga foto layar penuh tetap terkunci stabil dan proporsional di area atas layar.
 
 #### 🌐 Client-Side & Innertube
 - **Zero-Rate-Limit In-App Update Resolution**: Mengimplementasikan pengecekan rilis via HTTP 302 `/releases/latest` redirect header pada `AppUpdateChecker.kt` untuk melenyapkan kendala limitasi kuota 60 request/jam GitHub API REST tanpa autentikasi, sehingga pembaruan versi APK terdeteksi 100% realtime di seluruh jaringan/perangkat.

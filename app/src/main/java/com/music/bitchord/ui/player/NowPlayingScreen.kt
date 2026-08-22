@@ -79,6 +79,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -119,7 +120,18 @@ import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
 import com.music.bitchord.ui.components.thumbnailBorder
 import com.music.bitchord.ui.icons.BitChordIcons
+import com.music.bitchord.ui.theme.SystemBarIcons
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import com.music.bitchord.playback.AudioDeviceHelper
+import com.music.bitchord.playback.AudioDeviceType
+import com.music.bitchord.playback.SleepTimer
+import com.music.bitchord.playback.rememberActiveAudioDevice
 import com.music.bitchord.data.NerdStats
 import com.music.bitchord.data.lyrics.LyricLine
 import com.music.bitchord.data.settings.AppSettings
@@ -328,6 +340,7 @@ fun NowPlayingScreen(
     var queueOpen by remember { mutableStateOf(false) }
     var lyricsOpen by remember { mutableStateOf(false) }
     var isArtExpanded by remember { mutableStateOf(true) }
+    var showSleepTimerSheet by remember { mutableStateOf(false) }
     LaunchedEffect(song.videoId) {
         lyricsOpen = false
     }
@@ -336,7 +349,7 @@ fun NowPlayingScreen(
     BackHandler(enabled = queueOpen) { queueOpen = false }
 
     val expandProgress by animateFloatAsState(
-        targetValue = if (isArtExpanded && !queueOpen && !lyricsOpen) 1f else 0f,
+        targetValue = if (isArtExpanded) 1f else 0f,
         animationSpec = spring(
             stiffness = Spring.StiffnessMediumLow,
             dampingRatio = Spring.DampingRatioNoBouncy,
@@ -356,6 +369,16 @@ fun NowPlayingScreen(
             dampingRatio = Spring.DampingRatioNoBouncy,
         ),
         label = "queueProgress",
+    )
+
+    // 0 = player/queue, 1 = lyrics. Animates lyrics panel with identical spring physics.
+    val lyricsProgress by animateFloatAsState(
+        targetValue = if (lyricsOpen) 1f else 0f,
+        animationSpec = spring(
+            stiffness = Spring.StiffnessMediumLow,
+            dampingRatio = Spring.DampingRatioNoBouncy,
+        ),
+        label = "lyricsProgress",
     )
 
     // Horizontal fling anywhere on the player skips tracks; the artwork
@@ -456,7 +479,8 @@ fun NowPlayingScreen(
                     .height(screenHeight * 0.65f)
                     .align(Alignment.TopCenter)
                     .graphicsLayer {
-                        alpha = expandProgress
+                        val p = maxOf(lyricsProgress, queueProgress)
+                        alpha = expandProgress * (1f - p)
                         compositingStrategy = CompositingStrategy.Offscreen
                     }
                     .drawWithContent {
@@ -472,10 +496,24 @@ fun NowPlayingScreen(
                             blendMode = BlendMode.DstIn,
                         )
                     }
-                    .pointerInput(isArtExpanded) {
+                    .pointerInput(isArtExpanded, queueOpen, lyricsOpen) {
                         detectTapGestures(
-                            onTap = { if (isArtExpanded) isArtExpanded = false },
-                            onDoubleTap = { if (isArtExpanded) isArtExpanded = false },
+                            onTap = {
+                                if (queueOpen || lyricsOpen) {
+                                    queueOpen = false
+                                    lyricsOpen = false
+                                } else if (isArtExpanded) {
+                                    isArtExpanded = false
+                                }
+                            },
+                            onDoubleTap = {
+                                if (queueOpen || lyricsOpen) {
+                                    queueOpen = false
+                                    lyricsOpen = false
+                                } else if (isArtExpanded) {
+                                    isArtExpanded = false
+                                }
+                            },
                         )
                     },
             ) {
@@ -536,6 +574,18 @@ fun NowPlayingScreen(
         ) {
             // The top handle strip: when lyrics or queue is open, dragging down or tapping here
             // closes lyrics/queue smoothly. When in normal player mode, it dismisses the sheet.
+            val isTopLight = meshColors.isTopLight && isArtExpanded && !queueOpen && !lyricsOpen
+            SystemBarIcons(dark = isTopLight)
+
+            val stripColor by animateColorAsState(
+                targetValue = if (isTopLight) Color.Black.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.38f),
+                label = "stripColor",
+            )
+            val stripBorderColor by animateColorAsState(
+                targetValue = if (isTopLight) Color.White.copy(alpha = 0.28f) else Color.Black.copy(alpha = 0.18f),
+                label = "stripBorderColor",
+            )
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -566,8 +616,9 @@ fun NowPlayingScreen(
                     Modifier
                         .width(38.dp)
                         .height(5.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color.White.copy(alpha = 0.32f)),
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(stripColor)
+                        .border(0.5.dp, stripBorderColor, RoundedCornerShape(2.5.dp)),
                 )
             }
 
@@ -599,7 +650,7 @@ fun NowPlayingScreen(
             ) {
                 // Both states collapse the header, but only one of them owns
                 // the panel below it.
-                val p = if (lyricsOpen) 1f else queueProgress
+                val p = maxOf(lyricsProgress, queueProgress)
                 // The sleeve is square, so it is bounded by whichever of the
                 // two axes runs out first: the player's width on a phone, or —
                 // on a tablet, where there is width to spare — the height left
@@ -609,12 +660,12 @@ fun NowPlayingScreen(
                 val fullArt = minOf(maxWidth, maxHeight - ART_TITLE_GAP - HEADER_HEIGHT)
                     .coerceAtLeast(THUMB_SIZE)
                 val remainingVerticalSpace = (maxHeight - fullArt - ART_TITLE_GAP - HEADER_HEIGHT).coerceAtLeast(0.dp)
-                val artSize = lerp(fullArt, THUMB_SIZE, p)
-                val artTop = lerp(remainingVerticalSpace / 2, 0.dp, p)
-                // Expanded and height-bound, the sleeve is narrower than the
-                // player and has to be centred in it; collapsed, it belongs
-                // hard against the left edge with the credits beside it.
-                val artStart = lerp((maxWidth - fullArt) / 2, 0.dp, p)
+                val targetArtSize = if (isArtExpanded) THUMB_SIZE else fullArt
+                val targetArtTop = if (isArtExpanded) 0.dp else remainingVerticalSpace / 2
+                val targetArtStart = if (isArtExpanded) 0.dp else (maxWidth - fullArt) / 2
+                val artSize = lerp(targetArtSize, THUMB_SIZE, p)
+                val artTop = lerp(targetArtTop, 0.dp, p)
+                val artStart = lerp(targetArtStart, 0.dp, p)
                 // Anchors title cleanly at the bottom right above the lyrics preview
                 val titleTop = lerp(maxHeight - HEADER_HEIGHT, 0.dp, p)
                 val titleStart = lerp(0.dp, THUMB_SIZE + 12.dp, p)
@@ -631,26 +682,29 @@ fun NowPlayingScreen(
                             scaleX = idle
                             scaleY = idle
                             translationX = swipeSettle * (1f - p)
-                            alpha = (1f - expandProgress)
+                            alpha = if (isArtExpanded) p else if (p > 0.001f) 1f else (1f - expandProgress)
                         }
                         .shadow(
-                            if (artLoaded) lerp(14.dp, 6.dp, p) else 0.dp,
+                            if (artLoaded && !isArtExpanded) lerp(14.dp, 6.dp, p) else if (artLoaded && p > 0.01f) 6.dp else 0.dp,
                             RoundedCornerShape(lerp(10.dp, 7.dp, p)),
                         )
                         .clip(RoundedCornerShape(lerp(10.dp, 7.dp, p)))
                         .pointerInput(queueOpen, lyricsOpen, isArtExpanded) {
                             detectTapGestures(
                                 onDoubleTap = {
-                                    if (!queueOpen && !lyricsOpen) {
+                                    if (queueOpen || lyricsOpen) {
+                                        queueOpen = false
+                                        lyricsOpen = false
+                                    } else {
                                         isArtExpanded = !isArtExpanded
                                     }
                                 },
                                 onTap = {
-                                    if (isArtExpanded) {
-                                        isArtExpanded = false
-                                    } else if (queueOpen || lyricsOpen) {
+                                    if (queueOpen || lyricsOpen) {
                                         queueOpen = false
                                         lyricsOpen = false
+                                    } else if (isArtExpanded) {
+                                        isArtExpanded = false
                                     }
                                 },
                             )
@@ -781,26 +835,34 @@ fun NowPlayingScreen(
                     }
                 }
 
-                if (lyricsOpen) {
-                    LyricsPanel(
-                        lines = lyrics.orEmpty(),
-                        activeLine = activeLine,
-                        onSeekToLine = onSeek,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = HEADER_HEIGHT + 10.dp),
-                    )
-                }
-
-                // Toggles and the queue arrive after the sleeve has finished
-                // travelling, and leave before it starts coming back.
-                if (!lyricsOpen && queueProgress > 0.01f) {
+                if (lyricsProgress > 0.01f) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = HEADER_HEIGHT + 10.dp)
                             .graphicsLayer {
-                                alpha = ((queueProgress - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                                alpha = ((lyricsProgress - 0.35f) / 0.65f).coerceIn(0f, 1f)
+                                translationY = (1f - lyricsProgress) * 26.dp.toPx()
+                            },
+                    ) {
+                        LyricsPanel(
+                            lines = lyrics.orEmpty(),
+                            activeLine = activeLine,
+                            onSeekToLine = onSeek,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+
+                // Toggles and the queue arrive after the sleeve has finished
+                // travelling, and leave before it starts coming back.
+                if (queueProgress > 0.01f) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = HEADER_HEIGHT + 10.dp)
+                            .graphicsLayer {
+                                alpha = ((queueProgress - 0.35f) / 0.65f).coerceIn(0f, 1f)
                                 translationY = (1f - queueProgress) * 26.dp.toPx()
                             },
                     ) {
@@ -808,6 +870,11 @@ fun NowPlayingScreen(
                             queue = queue,
                             currentIndex = queueIndex,
                             autoplayEnabled = autoplayEnabled,
+                            shuffleEnabled = shuffleEnabled,
+                            onToggleShuffle = onToggleShuffle,
+                            repeatMode = repeatMode,
+                            onCycleRepeat = onCycleRepeat,
+                            onToggleAutoplay = onToggleAutoplay,
                             onJumpTo = onJumpTo,
                             onRemove = onRemoveFromQueue,
                             onMove = onMoveInQueue,
@@ -1022,55 +1089,173 @@ fun NowPlayingScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // ---- Shuffle · Repeat · AutoPlay · Queue ----
-            // These live here rather than in the queue panel so their state is
-            // readable without opening anything.
+            // ---- Bottom: Lyrics · Sleep Timer · Audio Output Switcher · Queue (Apple Music Style) ----
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
-                BottomGlyph(
-                    icon = BitChordIcons.Shuffle,
-                    contentDescription = if (shuffleEnabled) "Shuffle on" else "Shuffle off",
-                    onClick = onToggleShuffle,
-                    highlighted = shuffleEnabled,
-                )
-                BottomGlyph(
-                    icon = if (repeatMode == Player.REPEAT_MODE_ONE) {
-                        BitChordIcons.RepeatOne
-                    } else {
-                        BitChordIcons.Repeat
-                    },
-                    contentDescription = when (repeatMode) {
-                        Player.REPEAT_MODE_ONE -> "Repeat one"
-                        Player.REPEAT_MODE_ALL -> "Repeat all"
-                        else -> "Repeat off"
-                    },
-                    onClick = onCycleRepeat,
-                    highlighted = repeatMode != Player.REPEAT_MODE_OFF,
-                )
-                BottomGlyph(
-                    icon = BitChordIcons.Infinity,
-                    contentDescription = if (autoplayEnabled) "AutoPlay on" else "AutoPlay off",
-                    onClick = onToggleAutoplay,
-                    highlighted = autoplayEnabled,
-                )
-                BottomGlyph(
-                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                    contentDescription = "Up next",
-                    onClick = {
-                        lyricsOpen = false
-                        queueOpen = !queueOpen
-                    },
-                    highlighted = queueOpen,
-                )
+                // 1. Lyrics Button (Paling Kiri)
+                Box(
+                    modifier = Modifier.width(68.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    IconButton(
+                        onClick = {
+                            queueOpen = false
+                            lyricsOpen = !lyricsOpen
+                        },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Icon(
+                            imageVector = BitChordIcons.LyricsQuote,
+                            contentDescription = "Lyrics",
+                            tint = if (lyricsOpen) Color.White else Color.White.copy(alpha = 0.65f),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
+                }
+
+                // 2. Sleep Timer Button (Kiri-Tengah)
+                val sleepChosen by SleepTimer.minutes.collectAsStateWithLifecycle()
+                val sleepAfterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
+                val isSleepActive = sleepChosen != null || sleepAfterTrack
+
+                Box(
+                    modifier = Modifier.width(68.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    IconButton(
+                        onClick = { showSleepTimerSheet = true },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = BitChordIcons.Moon,
+                                contentDescription = "Sleep Timer",
+                                tint = if (isSleepActive) Color.White else Color.White.copy(alpha = 0.65f),
+                                modifier = Modifier.size(24.dp),
+                            )
+                            if (isSleepActive) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .align(Alignment.TopEnd)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF5AC8FA)),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 3. Audio Output Switcher (Tengah / Kanan-Tengah, perfectly aligned)
+                val activeDevice by rememberActiveAudioDevice()
+                val ctx = LocalContext.current
+
+                Box(
+                    modifier = Modifier.width(96.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { AudioDeviceHelper.openAudioOutputSettings(ctx) },
+                    ) {
+                        Box(
+                            modifier = Modifier.size(44.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            val deviceIcon = when (activeDevice.type) {
+                                AudioDeviceType.BLUETOOTH, AudioDeviceType.HEADPHONES -> BitChordIcons.Headphones
+                                AudioDeviceType.USB -> BitChordIcons.Headphones
+                                AudioDeviceType.SPEAKER -> BitChordIcons.AirPlay
+                            }
+                            Icon(
+                                imageVector = deviceIcon,
+                                contentDescription = "Audio Output: ${activeDevice.name}",
+                                tint = Color.White.copy(alpha = 0.75f),
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                        Text(
+                            text = activeDevice.name,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                            color = Color.White.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.offset(y = (-6).dp),
+                        )
+                    }
+                }
+
+                // 4. Queue Button with Dynamic Mode Badge (Paling Kanan)
+                val queueBadgeIcon = when {
+                    shuffleEnabled -> BitChordIcons.Shuffle
+                    repeatMode == Player.REPEAT_MODE_ONE -> BitChordIcons.RepeatOne
+                    repeatMode == Player.REPEAT_MODE_ALL -> BitChordIcons.Repeat
+                    autoplayEnabled -> BitChordIcons.Infinity
+                    else -> null
+                }
+
+                Box(
+                    modifier = Modifier.width(68.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    IconButton(
+                        onClick = {
+                            lyricsOpen = false
+                            queueOpen = !queueOpen
+                        },
+                        modifier = Modifier.size(44.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                contentDescription = "Queue",
+                                tint = if (queueOpen) Color.White else Color.White.copy(alpha = 0.65f),
+                                modifier = Modifier.size(24.dp),
+                            )
+                            if (queueBadgeIcon != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .offset(x = 5.dp, y = (-2).dp)
+                                        .size(15.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF2C2C2E))
+                                        .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = queueBadgeIcon,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(9.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(18.dp))
             }
             }
             }
+        }
+
+        if (showSleepTimerSheet) {
+            SleepTimerModalSheet(
+                onDismiss = { showSleepTimerSheet = false },
+            )
         }
     }
 }
@@ -1591,6 +1776,11 @@ private fun InlineQueue(
     queue: List<Song>,
     currentIndex: Int,
     autoplayEnabled: Boolean,
+    shuffleEnabled: Boolean,
+    onToggleShuffle: () -> Unit,
+    repeatMode: Int,
+    onCycleRepeat: () -> Unit,
+    onToggleAutoplay: () -> Unit,
     onJumpTo: (Int) -> Unit,
     onRemove: (Int) -> Unit,
     onMove: (Int, Int) -> Unit,
@@ -1659,19 +1849,49 @@ private fun InlineQueue(
     )
 
     Column(modifier.fillMaxWidth()) {
+        // Capsule Pill Buttons: Shuffle · Repeat · AutoPlay (Apple Music Parity)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            QueueCapsuleButton(
+                icon = BitChordIcons.Shuffle,
+                contentDescription = "Shuffle",
+                active = shuffleEnabled,
+                onClick = onToggleShuffle,
+                modifier = Modifier.weight(1f),
+            )
+            QueueCapsuleButton(
+                icon = if (repeatMode == Player.REPEAT_MODE_ONE) BitChordIcons.RepeatOne else BitChordIcons.Repeat,
+                contentDescription = "Repeat",
+                active = repeatMode != Player.REPEAT_MODE_OFF,
+                onClick = onCycleRepeat,
+                modifier = Modifier.weight(1f),
+            )
+            QueueCapsuleButton(
+                icon = BitChordIcons.Infinity,
+                contentDescription = "AutoPlay",
+                active = autoplayEnabled,
+                onClick = onToggleAutoplay,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Queue",
-                style = MaterialTheme.typography.titleLarge,
+                text = "Playing Next",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = Color.White,
                 modifier = Modifier.weight(1f),
             )
             Text(
                 text = "Clear",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 color = Color.White.copy(alpha = 0.75f),
                 modifier = Modifier
                     .clip(RoundedCornerShape(percent = 50))
@@ -2061,4 +2281,187 @@ private fun codecLabel(mimeType: String?): String? = when {
     mimeType.endsWith("vorbis") -> "Vorbis"
     mimeType.endsWith("mpeg") -> "MP3"
     else -> mimeType.substringAfter('/').uppercase()
+}
+
+@Composable
+private fun QueueCapsuleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val bgColor by animateColorAsState(
+        targetValue = if (active) Color.White.copy(alpha = 0.92f) else Color.White.copy(alpha = 0.12f),
+        label = "capsuleBg",
+    )
+    val iconColor by animateColorAsState(
+        targetValue = if (active) Color.Black else Color.White.copy(alpha = 0.65f),
+        label = "capsuleIcon",
+    )
+
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .background(bgColor)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = iconColor,
+            modifier = Modifier.size(22.dp),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepTimerModalSheet(
+    onDismiss: () -> Unit,
+) {
+    val chosen by SleepTimer.minutes.collectAsStateWithLifecycle()
+    val afterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
+    val deadline by SleepTimer.deadline.collectAsStateWithLifecycle()
+    val remaining by produceState<Long?>(initialValue = SleepTimer.remainingMs(), deadline) {
+        while (deadline != null) {
+            value = SleepTimer.remainingMs()
+            delay(1_000)
+        }
+    }
+    val countdown = remaining?.let { ms ->
+        val min = TimeUnit.MILLISECONDS.toMinutes(ms)
+        val sec = TimeUnit.MILLISECONDS.toSeconds(ms) % 60
+        "%d:%02d".format(min, sec)
+    }
+    val isRunning = chosen != null || afterTrack
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1C1C1E),
+        contentColor = Color.White,
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(vertical = 12.dp)
+                    .width(36.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(alpha = 0.3f)),
+            )
+        },
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 36.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "Sleep Timer",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = when {
+                            countdown != null -> "$countdown remaining until playback pauses"
+                            afterTrack -> "Pausing when this song finishes"
+                            else -> "Pause playback automatically"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.6f),
+                    )
+                }
+            }
+
+            HorizontalDivider(thickness = 0.5.dp, color = Color.White.copy(alpha = 0.12f))
+            Spacer(Modifier.height(6.dp))
+
+            // 1. After this song (First item, matching SongActionsSheet)
+            SleepTimerOptionRow(
+                label = "After this song",
+                selected = afterTrack,
+                onClick = {
+                    SleepTimer.startAfterTrack()
+                    onDismiss()
+                },
+            )
+
+            // 2. Presets: 15, 30, 45, 60 minutes
+            SleepTimer.PRESETS.forEach { minutes ->
+                val selected = chosen == minutes
+                SleepTimerOptionRow(
+                    label = if (minutes == 60) "1 hour" else "$minutes minutes",
+                    selected = selected,
+                    onClick = {
+                        SleepTimer.start(minutes)
+                        onDismiss()
+                    },
+                )
+            }
+
+            // 3. Turn off timer (if running)
+            if (isRunning) {
+                Spacer(Modifier.height(6.dp))
+                HorizontalDivider(thickness = 0.5.dp, color = Color.White.copy(alpha = 0.08f))
+                Spacer(Modifier.height(6.dp))
+                SleepTimerOptionRow(
+                    label = "Turn Off Timer",
+                    selected = false,
+                    isDestructive = true,
+                    onClick = {
+                        SleepTimer.cancel()
+                        onDismiss()
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SleepTimerOptionRow(
+    label: String,
+    selected: Boolean,
+    isDestructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal),
+            color = when {
+                isDestructive -> MaterialTheme.colorScheme.error
+                selected -> Color(0xFF5AC8FA)
+                else -> Color.White
+            },
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = null,
+                tint = Color(0xFF5AC8FA),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
 }

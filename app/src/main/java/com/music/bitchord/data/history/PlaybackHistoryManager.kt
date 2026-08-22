@@ -99,25 +99,57 @@ object PlaybackHistoryManager {
         if (com.music.bitchord.data.innertube.Innertube.cookie == null) return false
         return runCatching {
             val response = com.music.bitchord.data.innertube.Innertube.browse("FEmusic_history")
-            val ytSongs = com.music.bitchord.data.innertube.InnertubeParser.collectSongsDeep(response)
-            if (ytSongs.isNotEmpty()) {
-                lock.withLock {
-                    val local = _history.value.toMutableList()
-                    val existingVideoIds = local.mapTo(HashSet()) { it.song.videoId }
+            val sections = com.music.bitchord.data.innertube.InnertubeParser.parseHistorySections(response)
+            if (sections.isNotEmpty()) {
+                val now = System.currentTimeMillis()
+                val todayStart = Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.timeInMillis
+                val yesterdayStart = todayStart - (24 * 60 * 60 * 1000L)
+                val thisWeekStart = todayStart - (6 * 24 * 60 * 60 * 1000L)
+                val thisMonthStart = Calendar.getInstance().apply {
+                    set(Calendar.DAY_OF_MONTH, 1)
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }.timeInMillis
+                val olderStart = thisMonthStart - (30 * 24 * 60 * 60 * 1000L)
 
-                    var offset = 60_000L
-                    val newCloudItems = ytSongs.filterNot { it.videoId in existingVideoIds }.map { song ->
-                        offset += 180_000L // spaced back in time
-                        HistoryItem(
-                            song = song,
-                            playedAt = System.currentTimeMillis() - offset,
-                        )
+                val cloudItems = mutableListOf<HistoryItem>()
+                for (sec in sections) {
+                    val baseTime = when {
+                        sec.title.contains("Today", ignoreCase = true) || sec.title.contains("Hari ini", ignoreCase = true) ->
+                            now - 120_000L
+                        sec.title.contains("Yesterday", ignoreCase = true) || sec.title.contains("Kemarin", ignoreCase = true) ->
+                            yesterdayStart + (12 * 60 * 60 * 1000L)
+                        sec.title.contains("week", ignoreCase = true) || sec.title.contains("minggu", ignoreCase = true) ->
+                            thisWeekStart + (24 * 60 * 60 * 1000L)
+                        sec.title.contains("month", ignoreCase = true) || sec.title.contains("bulan", ignoreCase = true) ->
+                            thisMonthStart + (24 * 60 * 60 * 1000L)
+                        else -> olderStart
                     }
+                    var trackOffset = 0L
+                    sec.songs.forEach { song ->
+                        trackOffset += 60_000L
+                        cloudItems.add(HistoryItem(song = song, playedAt = baseTime - trackOffset))
+                    }
+                }
 
-                    val merged = (local + newCloudItems).sortedByDescending { it.playedAt }.take(MAX_HISTORY_ITEMS)
+                lock.withLock {
+                    val local = _history.value
+                    // Keep recent local plays from the last 2 hours at the top if not yet in YouTube's response
+                    val recentLocal = local.filter { (now - it.playedAt) < 2 * 60 * 60 * 1000L }
+                    val cloudIds = cloudItems.mapTo(HashSet()) { it.song.videoId }
+                    val localToAdd = recentLocal.filterNot { it.song.videoId in cloudIds }
+
+                    val merged = (localToAdd + cloudItems).take(MAX_HISTORY_ITEMS)
                     _history.value = merged
                     saveToDisk(merged)
-                    Log.d(TAG, "Synced ${newCloudItems.size} new tracks from YouTube Music history.")
+                    Log.d(TAG, "Synced ${merged.size} tracks from YouTube Music history across ${sections.size} sections.")
                 }
                 true
             } else {

@@ -236,6 +236,56 @@ object BitChordIcons {
         }.build()
     }
 
+    /** Speech bubble with quotation marks inside — Apple Music style lyrics icon. */
+    val LyricsQuote: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_lyrics_quote",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(6.5f, 4.5f)
+                lineTo(17.5f, 4.5f)
+                arcToRelative(2.8f, 2.8f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2.8f, 2.8f)
+                lineTo(20.3f, 13.5f)
+                arcToRelative(2.8f, 2.8f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2.8f, 2.8f)
+                lineTo(10.5f, 16.3f)
+                lineTo(6.5f, 19.5f)
+                lineTo(6.5f, 16.3f)
+                lineTo(6.5f, 16.3f)
+                arcToRelative(2.8f, 2.8f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2.8f, -2.8f)
+                lineTo(3.7f, 7.3f)
+                arcToRelative(2.8f, 2.8f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2.8f, -2.8f)
+                close()
+            }
+            path(fill = stroke) {
+                moveTo(9f, 9.2f)
+                arcToRelative(1.3f, 1.3f, 0f, isMoreThanHalf = true, isPositiveArc = true, -2.6f, 0f)
+                arcToRelative(1.3f, 1.3f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2.6f, 0f)
+                close()
+                moveTo(9f, 9.2f)
+                lineTo(7.8f, 12.8f)
+                lineTo(6.6f, 12.8f)
+                lineTo(7.8f, 9.2f)
+                close()
+                moveTo(14.5f, 9.2f)
+                arcToRelative(1.3f, 1.3f, 0f, isMoreThanHalf = true, isPositiveArc = true, -2.6f, 0f)
+                arcToRelative(1.3f, 1.3f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2.6f, 0f)
+                close()
+                moveTo(14.5f, 9.2f)
+                lineTo(13.3f, 12.8f)
+                lineTo(12.1f, 12.8f)
+                lineTo(13.3f, 9.2f)
+                close()
+            }
+        }.build()
+    }
+
     /** Plain chevron — a disclosure hint, not a directional arrow. */
     val ChevronRight: ImageVector by lazy {
         ImageVector.Builder(
@@ -349,6 +399,158 @@ object BitChordIcons {
                 moveTo(9.2f, 4.8f); lineTo(9.2f, 19.2f)
                 moveTo(13.8f, 4.8f); lineTo(13.8f, 19.2f)
                 moveTo(17.2f, 5.6f); lineTo(20.6f, 18.9f)
+            }
+        }.build()
+    }
+
+    val NorthWest: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_north_west",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(6.5f, 6.5f)
+                lineTo(15.5f, 6.5f)
+                moveTo(6.5f, 6.5f)
+                lineTo(6.5f, 15.5f)
+                moveTo(6.5f, 6.5f)
+                lineTo(17.5f, 17.5f)
+            }
+        }.build()
+    }
+
+    val TrendingUp: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_trending_up",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(3.5f, 17.5f)
+                lineTo(9.5f, 11.5f)
+                lineTo(13.5f, 15.5f)
+                lineTo(20.5f, 7.5f)
+                moveTo(14.5f, 7.5f)
+                lineTo(20.5f, 7.5f)
+                lineTo(20.5f, 13.5f)
+            }
+        }.build()
+    }
+
+    val Podcasts: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_podcasts",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(12f, 11f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = true, isPositiveArc = true, 0f, 4f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = true, isPositiveArc = true, 0f, -4f)
+                moveTo(8.5f, 8.5f)
+                arcToRelative(5f, 5f, 0f, isMoreThanHalf = false, isPositiveArc = true, 7f, 0f)
+                moveTo(6f, 6f)
+                arcToRelative(8.5f, 8.5f, 0f, isMoreThanHalf = false, isPositiveArc = true, 12f, 0f)
+                moveTo(12f, 15f)
+                lineTo(12f, 21f)
+            }
+        }.build()
+    }
+
+    val Moon: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_moon",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(12f, 3f)
+                arcToRelative(9f, 9f, 0f, isMoreThanHalf = true, isPositiveArc = false, 9f, 9f)
+                arcToRelative(9f, 9f, 0f, isMoreThanHalf = false, isPositiveArc = true, -9f, -9f)
+                close()
+            }
+        }.build()
+    }
+
+    val Headphones: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_headphones",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(4f, 12f)
+                arcToRelative(8f, 8f, 0f, isMoreThanHalf = false, isPositiveArc = true, 16f, 0f)
+                moveTo(4f, 12f); lineTo(4f, 17f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = false, 2f, 2f)
+                lineTo(6.5f, 19f)
+                arcToRelative(1.5f, 1.5f, 0f, isMoreThanHalf = false, isPositiveArc = false, 1.5f, -1.5f)
+                lineTo(8f, 13.5f)
+                arcToRelative(1.5f, 1.5f, 0f, isMoreThanHalf = false, isPositiveArc = false, -1.5f, -1.5f)
+                lineTo(4f, 12f)
+                moveTo(20f, 12f); lineTo(20f, 17f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, 2f)
+                lineTo(17.5f, 19f)
+                arcToRelative(1.5f, 1.5f, 0f, isMoreThanHalf = false, isPositiveArc = true, -1.5f, -1.5f)
+                lineTo(16f, 13.5f)
+                arcToRelative(1.5f, 1.5f, 0f, isMoreThanHalf = false, isPositiveArc = true, 1.5f, -1.5f)
+                lineTo(20f, 12f)
+            }
+        }.build()
+    }
+
+    val AirPlay: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_airplay",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(5f, 17f)
+                lineTo(4f, 17f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, -2f)
+                lineTo(2f, 6f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, -2f)
+                lineTo(20f, 4f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2f, 2f)
+                lineTo(22f, 15f)
+                arcToRelative(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2f, 2f)
+                lineTo(19f, 17f)
+                moveTo(12f, 15f)
+                lineTo(7f, 20f)
+                lineTo(17f, 20f)
+                close()
             }
         }.build()
     }

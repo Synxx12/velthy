@@ -50,7 +50,10 @@ private val FallbackColors = listOf(
 
 /** The four mesh colours, wrapped so the backdrop can skip recomposition. */
 @Immutable
-data class MeshPalette(val colors: List<Color>)
+data class MeshPalette(
+    val colors: List<Color>,
+    val isTopLight: Boolean = false,
+)
 
 /**
  * The Apple Music "Now Playing" backdrop: four luminous colour blobs sampled
@@ -158,7 +161,7 @@ fun MeshGradientBackground(
 @Composable
 fun rememberArtworkColors(imageUrl: String?): MeshPalette {
     val context = LocalContext.current
-    var palette by remember { mutableStateOf(MeshPalette(FallbackColors)) }
+    var palette by remember { mutableStateOf(MeshPalette(FallbackColors, isTopLight = false)) }
 
     LaunchedEffect(imageUrl) {
         if (imageUrl == null) return@LaunchedEffect
@@ -169,9 +172,36 @@ fun rememberArtworkColors(imageUrl: String?): MeshPalette {
             .build()
         val result = SingletonImageLoader.get(context).execute(request)
         val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return@LaunchedEffect
-        palette = MeshPalette(paletteOf(bitmap))
+        val topLight = isBitmapTopLight(bitmap)
+        palette = MeshPalette(paletteOf(bitmap), isTopLight = topLight)
     }
     return palette
+}
+
+private fun isBitmapTopLight(bitmap: Bitmap): Boolean {
+    val width = bitmap.width
+    val height = bitmap.height
+    if (width <= 0 || height <= 0) return false
+
+    val topRows = (height * 0.18f).toInt().coerceAtLeast(1)
+    var totalLuminance = 0.0
+    var count = 0
+    val step = (width / 16).coerceAtLeast(1)
+
+    for (y in 0 until topRows) {
+        for (x in 0 until width step step) {
+            val pixel = bitmap.getPixel(x, y)
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+            val lum = 0.2126 * (r / 255.0) + 0.7152 * (g / 255.0) + 0.0722 * (b / 255.0)
+            totalLuminance += lum
+            count++
+        }
+    }
+
+    val avgLuminance = if (count > 0) totalLuminance / count else 0.0
+    return avgLuminance > 0.55
 }
 
 /**

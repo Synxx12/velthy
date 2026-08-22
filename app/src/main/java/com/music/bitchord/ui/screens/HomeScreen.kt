@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LibraryMusic
 import com.music.bitchord.ui.icons.BitChordIcons
 import coil3.compose.AsyncImage
@@ -492,6 +493,23 @@ private fun ShelfCard(
                         imageVector = Icons.Rounded.LibraryMusic,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(40.dp),
+                    )
+                }
+            }
+            "app:history" -> {
+                Box(
+                    modifier = Modifier
+                        .width(SHELF_CARD_WIDTH)
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.tertiaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.History,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
                         modifier = Modifier.size(40.dp),
                     )
                 }

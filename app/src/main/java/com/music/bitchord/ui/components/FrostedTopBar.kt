@@ -11,10 +11,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.HorizontalDivider
@@ -75,6 +78,7 @@ fun FrostedTopBar(
     // A lambda, not a value: the drag changes every frame, and reading it in
     // the caller would recompose the whole app on each one.
     pullFraction: () -> Float = { 0f },
+    searchBar: (@Composable () -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
     val titleAlpha by animateFloatAsState(
@@ -83,7 +87,7 @@ fun FrostedTopBar(
         label = "topBarTitleAlpha",
     )
     val dividerColor by animateColorAsState(
-        targetValue = MaterialTheme.colorScheme.outline.copy(alpha = if (scrolled && ownBackdrop) 0.6f else 0f),
+        targetValue = MaterialTheme.colorScheme.outline.copy(alpha = if (scrolled && ownBackdrop) 0.4f else 0f),
         animationSpec = tween(220),
         label = "topBarDivider",
     )
@@ -95,6 +99,7 @@ fun FrostedTopBar(
             .then(
                 when {
                     !ownBackdrop -> Modifier
+                    searchBar != null && !scrolled -> Modifier
                     reduceDynamicBlur -> Modifier.background(MaterialTheme.colorScheme.surface)
                     else -> Modifier.hazeEffect(
                         state = hazeState,
@@ -107,70 +112,85 @@ fun FrostedTopBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .height(52.dp),
+                .height(56.dp),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    // Reserve room for the back button and the actions so a
-                    // long title truncates instead of running under them.
-                    .padding(horizontal = 96.dp)
-                    .fillMaxWidth()
-                    .graphicsLayer { alpha = titleAlpha },
-            )
-            // On a pushed page the back affordance is always visible, since
-            // there is no large in-list header to fall back on.
-            if (onBack != null) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp),
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            } else {
+            if (searchBar != null) {
                 Row(
                     modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 16.dp),
+                        .fillMaxSize()
+                        .padding(start = if (onBack != null) 4.dp else 16.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Image(
-                        painter = painterResource(R.drawable.ic_logo),
-                        contentDescription = null,
-                        colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
-                        modifier = Modifier.height(18.dp),
-                    )
-                    // The dev flavor gets its own applicationId so it can sit
-                    // installed next to the prod build; this badge is the
-                    // in-app equivalent, so the two are never mixed up at a
-                    // glance once both are running.
-                    if (BuildConfig.FLAVOR == "dev") {
-                        Text(
-                            text = "Dev",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 6.dp),
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = "Back",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                    Box(modifier = Modifier.weight(1f)) {
+                        searchBar()
+                    }
+                    actions()
+                }
+            } else {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 96.dp)
+                        .fillMaxWidth()
+                        .graphicsLayer { alpha = titleAlpha },
+                )
+                if (onBack != null) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_logo),
+                            contentDescription = null,
+                            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
+                            modifier = Modifier.height(18.dp),
+                        )
+                        if (BuildConfig.FLAVOR == "dev") {
+                            Text(
+                                text = "Dev",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(start = 6.dp),
+                            )
+                        }
+                    }
                 }
-            }
-            Row(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                actions()
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    actions()
+                }
             }
         }
         // The divider and the loader line share the bar's bottom edge; the box

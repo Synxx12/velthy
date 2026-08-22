@@ -37,9 +37,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -103,6 +108,7 @@ import com.music.bitchord.ui.components.FrostedTopBar
 import com.music.bitchord.ui.components.LastfmLoginAlert
 import com.music.bitchord.ui.components.ListenBrainzTokenAlert
 import com.music.bitchord.ui.components.MiniPlayer
+import com.music.bitchord.ui.components.MusicRecognitionSheet
 import com.music.bitchord.ui.components.TopFadeBlur
 import com.music.bitchord.ui.components.UpdateAvailableDialog
 import com.music.bitchord.ui.icons.BitChordIcons
@@ -113,6 +119,7 @@ import com.music.bitchord.ui.screens.DetailScreen
 import com.music.bitchord.ui.screens.HomeScreen
 import com.music.bitchord.ui.screens.LibraryScreen
 import com.music.bitchord.ui.screens.SearchScreen
+import com.music.bitchord.ui.screens.SearchTopBarField
 import com.music.bitchord.ui.theme.BitChordTheme
 import com.music.bitchord.ui.theme.rememberArtworkPalette
 import com.music.bitchord.ui.theme.SystemBarIcons
@@ -221,6 +228,12 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     val likeStatuses by viewModel.likeStatuses.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var showRecognitionSheet by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(searchFocusTrigger) {
+        if (searchFocusTrigger > 0) searchFocusRequester.requestFocus()
+    }
 
     // Settings has no tab of its own — it sits on top of whatever tab was
     // selected. A pushed album/artist page (from the player, search, etc.)
@@ -244,9 +257,13 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     LaunchedEffect(autoplay, player.queueIndex, player.queue.size, player.song?.videoId, player.repeatMode) {
         val current = player.song?.videoId
         if (!autoplay || current == null) return@LaunchedEffect
-        if (player.repeatMode == Player.REPEAT_MODE_ALL) return@LaunchedEffect
+        if (player.repeatMode == Player.REPEAT_MODE_ALL) {
+            autoplaySeed = null
+            return@LaunchedEffect
+        }
         if (player.queueIndex < player.queue.lastIndex) return@LaunchedEffect
-        if (autoplaySeed == current) return@LaunchedEffect
+        val hasAutoplayQueued = player.queue.any { it.fromAutoplay }
+        if (autoplaySeed == current && hasAutoplayQueued) return@LaunchedEffect
         autoplaySeed = current
         YtMusicRepository.radio(current).onSuccess { related ->
             val extra = QueueBuilder.extend(player.queue, related, RADIO_BATCH)
@@ -606,15 +623,12 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                 com.music.bitchord.ui.screens.HistoryScreen(
                     historyItems = historyItems,
                     listState = detailListState,
-                    signedIn = signedIn,
                     refreshing = historyRefreshing,
                     onRefresh = syncHistory,
                     pullState = historyPull,
                     onSongClick = play,
                     onSongLongPress = { songActions = it },
                     onRemoveItem = { com.music.bitchord.data.history.PlaybackHistoryManager.removeEntry(it) },
-                    onClearAll = { com.music.bitchord.data.history.PlaybackHistoryManager.clearHistory() },
-                    onBackClick = { viewModel.closeDetail() },
                     contentPadding = listPadding,
                 )
             } else if (page != null) {
@@ -709,43 +723,53 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     pullState = explorePull,
                     contentPadding = listPadding,
                 )
-                TAB_SEARCH -> SearchScreen(
-                    query = query,
-                    onQueryChange = viewModel::onQueryChange,
-                    filter = filter,
-                    onFilterChange = viewModel::onFilterChange,
-                    results = results,
-                    listState = searchListState,
-                    focusTrigger = searchFocusTrigger,
-                    // Search hits are alternatives to each other, not a running
-                    // order — play the one tapped and build a station from it.
-                    onSongClick = { songs, index ->
-                        songs.getOrNull(index)?.let {
-                            // Acting on a hit is what makes the query worth
-                            // keeping — see MainViewModel.recordSearch.
+                TAB_SEARCH -> {
+                    val historyItems by com.music.bitchord.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
+                    SearchScreen(
+                        filter = filter,
+                        onFilterChange = viewModel::onFilterChange,
+                        results = results,
+                        listState = searchListState,
+                        recentSongs = historyItems.map { it.song }.distinctBy { it.videoId },
+                        // Search hits are alternatives to each other, not a running
+                        // order — play the one tapped and build a station from it.
+                        onSongClick = { songs, index ->
+                            songs.getOrNull(index)?.let {
+                                viewModel.recordSearch()
+                                playRadio(it)
+                            }
+                        },
+                        onSongLongPress = { songActions = it },
+                        onSongSwipe = addToQueue,
+                        onBrowseClick = { item ->
                             viewModel.recordSearch()
-                            playRadio(it)
-                        }
-                    },
-                    onSongLongPress = { songActions = it },
-                    onSongSwipe = addToQueue,
-                    onBrowseClick = { item ->
-                        viewModel.recordSearch()
-                        viewModel.openDetail(
-                            browseId = item.browseId,
-                            title = item.title,
-                            subtitle = item.subtitle,
-                            thumbnailUrl = item.thumbnailUrl,
-                            type = item.type,
-                        )
-                    },
-                    history = searchHistory,
-                    onSubmit = viewModel::recordSearch,
-                    onHistoryClick = viewModel::searchFor,
-                    onHistoryRemove = viewModel::removeSearch,
-                    onHistoryClear = viewModel::clearSearchHistory,
-                    contentPadding = listPadding,
-                )
+                            viewModel.openDetail(
+                                browseId = item.browseId,
+                                title = item.title,
+                                subtitle = item.subtitle,
+                                thumbnailUrl = item.thumbnailUrl,
+                                type = item.type,
+                            )
+                        },
+                        history = searchHistory,
+                        onHistoryClick = { term ->
+                            viewModel.onQueryChange(term)
+                            viewModel.recordSearch()
+                        },
+                        onHistoryRemove = viewModel::removeSearch,
+                        onHistoryClear = viewModel::clearSearchHistory,
+                        onCategoryClick = { browseId, title ->
+                            viewModel.openDetail(
+                                browseId = browseId,
+                                title = title,
+                                subtitle = "Explore",
+                                thumbnailUrl = null,
+                                type = BrowseType.PLAYLIST,
+                            )
+                        },
+                        contentPadding = listPadding,
+                    )
+                }
                 else -> LibraryScreen(
                     signedIn = signedIn,
                     state = libraryState,
@@ -807,44 +831,86 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             },
             hazeState = hazeState,
             ownBackdrop = detail == null,
-            // Search has no large in-list header to hand the title back to —
-            // the field takes that space — so its bar title is always up.
             scrolled = when {
                 showSettings || showAccountScrobbling -> true
                 detail != null -> detailScrolled
-                else -> scrolled || selectedTab == TAB_SEARCH
+                else -> scrolled
             },
             refreshing = currentFeed != null && currentFeed in refreshing,
             pullFraction = { currentPull?.distanceFraction ?: 0f },
+            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling) {
+                {
+                    SearchTopBarField(
+                        query = query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onSubmit = viewModel::recordSearch,
+                        onRecognitionClick = { showRecognitionSheet = true },
+                        focusRequester = searchFocusRequester,
+                    )
+                }
+            } else null,
             onBack = when {
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSettings -> ({ showSettings = false })
                 detail != null -> ({ viewModel.closeDetail(); Unit })
+                selectedTab == TAB_SEARCH && (query.isNotEmpty() || results != null) -> ({
+                    viewModel.onQueryChange("")
+                })
                 else -> null
             },
             modifier = Modifier.align(Alignment.TopCenter),
             actions = {
-                // Only worth surfacing where there's room for it and it won't
-                // be mistaken for a per-page action — Home, at rest.
-                if (!showSettings && !showAccountScrobbling && detail == null && selectedTab == TAB_HOME) {
-                    updateNotice?.let { update ->
-                        IconButton(onClick = {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
-                        }) {
+                if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling) {
+                    // Recognition icon is embedded cleanly inside the search pill
+                } else if (detail?.browseId == "app:history") {
+                    IconButton(onClick = {
+                        scope.launch {
+                            com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube()
+                        }
+                    }) {
+                        Icon(
+                            Icons.Rounded.Sync,
+                            contentDescription = "Sync",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                    IconButton(onClick = { showClearHistoryDialog = true }) {
+                        Icon(
+                            Icons.Rounded.DeleteOutline,
+                            contentDescription = "Clear History",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                } else if (!showSettings && !showAccountScrobbling && detail == null) {
+                    if (selectedTab == TAB_HOME) {
+                        updateNotice?.let { update ->
+                            IconButton(onClick = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
+                            }) {
+                                Icon(
+                                    Icons.Rounded.SystemUpdate,
+                                    contentDescription = "Update available: v${update.version}",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                    if (selectedTab == TAB_LIBRARY) {
+                        IconButton(onClick = { viewModel.openDetail("app:history", "History", "Riwayat") }) {
                             Icon(
-                                Icons.Rounded.SystemUpdate,
-                                contentDescription = "Update available: v${update.version}",
-                                tint = MaterialTheme.colorScheme.primary,
+                                Icons.Rounded.History,
+                                contentDescription = "History",
+                                tint = MaterialTheme.colorScheme.onBackground,
                             )
                         }
                     }
-                }
-                if (!showSettings && !showAccountScrobbling) IconButton(onClick = { showSettings = true }) {
-                    Icon(
-                        Icons.Rounded.Settings,
-                        contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                    )
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            Icons.Rounded.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
                 }
             },
         )
@@ -971,13 +1037,12 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                                 Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
                                 else -> Player.REPEAT_MODE_OFF
                             }
-                            // Repeat-all loops the queue as it stands; AutoPlay's
-                            // tracks are the opposite of that — an endless supply
-                            // of new ones — so they come back out first. Native
-                            // REPEAT_MODE_ALL then wraps a plain queue exactly as
-                            // it should, and the LaunchedEffect above leaves it be
-                            // for as long as repeat-all stays on.
-                            if (next == Player.REPEAT_MODE_ALL) it.dropAutoplayTracks()
+                            if (next == Player.REPEAT_MODE_ALL) {
+                                it.dropAutoplayTracks()
+                                autoplaySeed = null
+                            } else if (next == Player.REPEAT_MODE_OFF) {
+                                autoplaySeed = null
+                            }
                             it.repeatMode = next
                         }
                     },
@@ -1173,6 +1238,43 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     },
                 )
             }
+        }
+        if (showClearHistoryDialog) {
+            AlertDialog(
+                onDismissRequest = { showClearHistoryDialog = false },
+                title = { Text("Hapus Riwayat Pemutaran?") },
+                text = { Text("Semua lagu dalam riwayat mendengarkan akan dihapus. Tindakan ini tidak dapat dibatalkan.") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showClearHistoryDialog = false
+                            com.music.bitchord.data.history.PlaybackHistoryManager.clearHistory()
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
+                    ) {
+                        Text("Hapus Semua")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearHistoryDialog = false }) {
+                        Text("Batal")
+                    }
+                },
+            )
+        }
+
+        if (showRecognitionSheet) {
+            MusicRecognitionSheet(
+                onDismiss = { showRecognitionSheet = false },
+                onPlaySong = { play(listOf(it), 0) },
+                onAddToQueue = { addToQueue(it) },
+                onSearchSong = { songQuery ->
+                    viewModel.onQueryChange(songQuery)
+                    viewModel.recordSearch()
+                },
+            )
         }
 
         // ---- Google sign-in (full screen WebView) ----

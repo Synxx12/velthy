@@ -294,10 +294,11 @@ object Innertube {
      * clients are answered at all, so it never sees this block. Null for
      * guests: there's no account history to update.
      */
-    suspend fun playbackTracking(videoId: String): PlaybackTracking? {
+    suspend fun playbackTracking(videoId: String, cpn: String): PlaybackTracking? {
         if (cookie == null) return null
         val response = postMusic("player") {
             put("videoId", videoId)
+            put("cpn", cpn)
             put("contentCheckOk", true)
             put("racyCheckOk", true)
             // Real clients always describe where playback is happening; the
@@ -360,12 +361,14 @@ object Innertube {
         parameter("cver", WEB_REMIX_VERSION)
         parameter("cpn", cpn)
         extras()
+        header("User-Agent", WEB_USER_AGENT)
         header("X-Origin", MUSIC_ORIGIN)
         header("Origin", MUSIC_ORIGIN)
         header("Referer", "$MUSIC_ORIGIN/")
         visitorData?.let { header("X-Goog-Visitor-Id", it) }
         cookie?.let { c ->
             header("Cookie", c)
+            header("X-Goog-AuthUser", "0")
             sapisidFrom(c)?.let { header("Authorization", sapisidHash(it)) }
         }
     }.status.value
@@ -670,10 +673,13 @@ object Innertube {
         else -> null
     }
 
-    private fun sapisidFrom(cookieHeader: String): String? =
-        cookieHeader.split("; ", ";")
-            .firstOrNull { it.trim().startsWith("SAPISID=") }
-            ?.substringAfter("=")
+    private fun sapisidFrom(cookieHeader: String): String? {
+        val cookies = cookieHeader.split(";").map { it.trim() }
+        return cookies.firstOrNull { it.startsWith("SAPISID=") }?.substringAfter("=")
+            ?: cookies.firstOrNull { it.startsWith("__Secure-3PAPISID=") }?.substringAfter("=")
+            ?: cookies.firstOrNull { it.startsWith("__Secure-1PAPISID=") }?.substringAfter("=")
+            ?: cookies.firstOrNull { it.startsWith("PAPISID=") }?.substringAfter("=")
+    }
 
     private fun sapisidHash(sapisid: String, origin: String = MUSIC_ORIGIN): String {
         val timestamp = System.currentTimeMillis() / 1000

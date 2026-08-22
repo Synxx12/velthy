@@ -1,19 +1,13 @@
 package com.music.bitchord.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,28 +20,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Shuffle
-import androidx.compose.material.icons.rounded.Sync
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
@@ -58,8 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,45 +61,27 @@ import com.music.bitchord.ui.components.PullToRefresh
 fun HistoryScreen(
     historyItems: List<HistoryItem>,
     listState: LazyListState,
-    signedIn: Boolean,
     refreshing: Boolean,
     onRefresh: () -> Unit,
     pullState: PullToRefreshState,
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onRemoveItem: (HistoryItem) -> Unit,
-    onClearAll: () -> Unit,
-    onBackClick: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
-    var showClearDialog by remember { mutableStateOf(false) }
-    val grouped = remember(historyItems) {
-        PlaybackHistoryManager.groupHistory(historyItems)
+    var selectedFilter by remember { mutableStateOf("All") }
+
+    val filteredItems = remember(historyItems, selectedFilter) {
+        when (selectedFilter) {
+            "Music" -> historyItems.filter { !it.song.isVideo }
+            "Podcasts" -> historyItems.filter { it.song.isVideo }
+            else -> historyItems
+        }
     }
 
-    if (showClearDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDialog = false },
-            title = { Text("Hapus Riwayat Pemutaran?") },
-            text = { Text("Semua lagu dalam riwayat mendengarkan lokal akan dihapus. Tindakan ini tidak dapat dibatalkan.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showClearDialog = false
-                        onClearAll()
-                    },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) {
-                    Text("Hapus Semua")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) {
-                    Text("Batal")
-                }
-            },
-        )
+    val grouped = remember(filteredItems) {
+        PlaybackHistoryManager.groupHistory(filteredItems)
     }
 
     PullToRefresh(
@@ -129,53 +95,79 @@ fun HistoryScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = contentPadding,
         ) {
-            // Top Header
-            item(key = "history_header") {
-                HistoryHeader(
-                    totalCount = historyItems.size,
-                    signedIn = signedIn,
-                    onBackClick = onBackClick,
-                    onRefreshClick = onRefresh,
-                    onPlayAll = {
-                        if (historyItems.isNotEmpty()) {
-                            onSongClick(historyItems.map { it.song }, 0)
-                        }
-                    },
-                    onShuffle = {
-                        if (historyItems.isNotEmpty()) {
-                            val shuffled = historyItems.map { it.song }.shuffled()
-                            onSongClick(shuffled, 0)
-                        }
-                    },
-                    onClearClick = { showClearDialog = true },
-                )
+            // Filter Chips (Music / Podcasts)
+            item(key = "ytm_filter_chips", contentType = "header_chips") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = selectedFilter == "All",
+                        onClick = { selectedFilter = "All" },
+                        label = { Text("All") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
+                    )
+                    FilterChip(
+                        selected = selectedFilter == "Music",
+                        onClick = { selectedFilter = "Music" },
+                        label = { Text("Music") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
+                    )
+                    FilterChip(
+                        selected = selectedFilter == "Podcasts",
+                        onClick = { selectedFilter = "Podcasts" },
+                        label = { Text("Podcasts") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
+                    )
+                }
             }
 
-            if (historyItems.isEmpty()) {
-                item(key = "history_empty") {
+            if (filteredItems.isEmpty()) {
+                item(key = "ytm_empty_history", contentType = "empty_state") {
                     EmptyHistoryState()
                 }
             } else {
                 grouped.forEach { section ->
-                    // Section Title (Hari Ini, Kemarin, dll.)
-                    item(key = "group_${section.group.name}") {
+                    // Section Header (Today, Yesterday, This week, etc.)
+                    item(key = "group_${section.group.name}", contentType = "section_header") {
                         Text(
-                            text = section.label,
-                            style = MaterialTheme.typography.titleMedium.copy(
+                            text = when (section.group) {
+                                PlaybackHistoryManager.TimeGroup.TODAY -> "Today"
+                                PlaybackHistoryManager.TimeGroup.YESTERDAY -> "Yesterday"
+                                PlaybackHistoryManager.TimeGroup.THIS_WEEK -> "This week"
+                                PlaybackHistoryManager.TimeGroup.EARLIER_THIS_MONTH -> "Earlier this month"
+                                PlaybackHistoryManager.TimeGroup.OLDER -> "Older"
+                            },
+                            style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 17.sp,
+                                fontSize = 20.sp,
                             ),
                             color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                            modifier = Modifier
+                                .graphicsLayer { }
+                                .padding(start = 16.dp, top = 20.dp, bottom = 10.dp, end = 16.dp),
                         )
                     }
 
-                    // Section Items with Swipe-to-Dismiss
+                    // Section Items with Controlled Swipe-To-Dismiss
                     items(
                         items = section.items,
                         key = { "hist_${it.song.videoId}_${it.playedAt}" },
+                        contentType = { "song_row" },
                     ) { item ->
                         val dismissState = rememberSwipeToDismissBoxState(
+                            positionalThreshold = { totalDistance -> totalDistance * 0.45f },
                             confirmValueChange = { dismissValue ->
                                 if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
                                     onRemoveItem(item)
@@ -206,15 +198,14 @@ fun HistoryScreen(
                                 }
                             },
                         ) {
-                            HistorySongRow(
+                            YtmHistorySongRow(
                                 item = item,
                                 onClick = {
-                                    val allSongs = historyItems.map { it.song }
+                                    val allSongs = filteredItems.map { it.song }
                                     val idx = allSongs.indexOfFirst { it.videoId == item.song.videoId }
                                     onSongClick(allSongs, if (idx >= 0) idx else 0)
                                 },
                                 onLongPress = { onSongLongPress(item.song) },
-                                onRemove = { onRemoveItem(item) },
                             )
                         }
                     }
@@ -225,150 +216,14 @@ fun HistoryScreen(
 }
 
 @Composable
-private fun HistoryHeader(
-    totalCount: Int,
-    signedIn: Boolean,
-    onBackClick: () -> Unit,
-    onRefreshClick: () -> Unit,
-    onPlayAll: () -> Unit,
-    onShuffle: () -> Unit,
-    onClearClick: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp, bottom = 12.dp),
-    ) {
-        // Back Button & Action Bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            IconButton(onClick = onBackClick) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "Kembali",
-                    tint = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onRefreshClick) {
-                    Icon(
-                        imageVector = Icons.Rounded.Sync,
-                        contentDescription = "Sinkronkan Riwayat YouTube",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
-                if (totalCount > 0) {
-                    IconButton(onClick = onClearClick) {
-                        Icon(
-                            imageVector = Icons.Rounded.DeleteOutline,
-                            contentDescription = "Hapus Riwayat",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-
-        // Title & Stats
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-            Text(
-                text = "Listening History",
-                style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 32.sp,
-                    letterSpacing = (-0.5).sp,
-                ),
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                if (signedIn) {
-                    Icon(
-                        imageVector = Icons.Rounded.CloudDone,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        text = if (totalCount > 0) "Tersinkronisasi dengan YouTube • $totalCount lagu" else "Tersinkronisasi dengan YouTube",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else {
-                    Text(
-                        text = if (totalCount > 0) "Riwayat Lokal • $totalCount lagu" else "Riwayat masih kosong",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        // Quick Controls (Play All & Shuffle)
-        if (totalCount > 0) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = onPlayAll,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    ),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Putar Semua", fontWeight = FontWeight.SemiBold)
-                }
-
-                OutlinedButton(
-                    onClick = onShuffle,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Shuffle,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Acak", fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HistorySongRow(
+private fun YtmHistorySongRow(
     item: HistoryItem,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
-    onRemove: () -> Unit,
 ) {
     val song = item.song
-    val playedTimeStr = remember(item.playedAt) {
-        PlaybackHistoryManager.formatPlayedTime(item.playedAt)
+    val isRemix = remember(song.title) {
+        song.title.contains("remix", ignoreCase = true) || song.title.contains("jedag jedug", ignoreCase = true)
     }
 
     Surface(
@@ -380,14 +235,15 @@ private fun HistorySongRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp),
+                .graphicsLayer { }
+                .padding(horizontal = 16.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Artwork
+            // Thumbnail
             Box(
                 modifier = Modifier
-                    .size(50.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .size(width = 54.dp, height = 48.dp)
+                    .clip(RoundedCornerShape(4.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
             ) {
                 AsyncImage(
@@ -400,7 +256,7 @@ private fun HistorySongRow(
 
             Spacer(Modifier.width(14.dp))
 
-            // Title & Artist + Time
+            // Title & Subtitle (YouTube Music Layout)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.Center,
@@ -412,45 +268,49 @@ private fun HistorySongRow(
                         fontSize = 15.sp,
                     ),
                     color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
 
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(3.dp))
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
+                    if (isRemix) {
+                        Surface(
+                            shape = RoundedCornerShape(3.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(end = 2.dp),
+                        ) {
+                            Text(
+                                text = "REMIX",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                            )
+                        }
+                    }
+
                     Text(
-                        text = song.artist,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = if (song.artist.isNotBlank()) "Song • ${song.artist}" else "Song",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 13.sp,
+                        ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-
-                    Text(
-                        text = "•",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    )
-
-                    Text(
-                        text = playedTimeStr,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
 
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
 
-            // 3-dot Menu
+            // 3-dot Menu Icon
             IconButton(
                 onClick = onLongPress,
                 modifier = Modifier.size(36.dp),
@@ -458,7 +318,7 @@ private fun HistorySongRow(
                 Icon(
                     imageVector = Icons.Rounded.MoreVert,
                     contentDescription = "Menu",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -477,20 +337,20 @@ private fun EmptyHistoryState() {
     ) {
         Box(
             modifier = Modifier
-                .size(72.dp)
+                .size(64.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Rounded.History,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(36.dp),
+                modifier = Modifier.size(32.dp),
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
 
         Text(
             text = "Belum Ada Riwayat",
@@ -498,13 +358,12 @@ private fun EmptyHistoryState() {
             color = MaterialTheme.colorScheme.onBackground,
         )
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
 
         Text(
-            text = "Lagu yang kamu putar akan otomatis tercatat dan disinkronkan di sini.",
+            text = "Lagu yang kamu dengarkan di YouTube Music & aplikasi ini akan muncul di sini.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp),
         )
     }
 }

@@ -144,9 +144,9 @@ object YtMusicRepository {
         }
     }
 
-    suspend fun search(query: String, filter: SearchFilter): Result<List<SearchResult>> =
-        call("search:${filter.name}") {
-            InnertubeParser.parseSearch(Innertube.search(query, filter.params))
+    suspend fun search(query: String, filter: SearchFilter? = null): Result<List<SearchResult>> =
+        call("search:${filter?.name ?: "all"}") {
+            InnertubeParser.parseSearch(Innertube.search(query, filter?.params))
         }
 
     /**
@@ -168,15 +168,34 @@ object YtMusicRepository {
      */
     suspend fun resolveAudio(song: Song): Song {
         if (!song.isVideo) return song
+
+        val lowerTitle = song.title.lowercase()
+        // If it's a mix, compilation, DJ set, live performance, or full album, keep the original video audio!
+        if (lowerTitle.contains("full album") ||
+            lowerTitle.contains("mix") ||
+            lowerTitle.contains("remix") ||
+            lowerTitle.contains("nonstop") ||
+            lowerTitle.contains("jedag jedug") ||
+            lowerTitle.contains("dj ") ||
+            lowerTitle.contains("kompilasi") ||
+            lowerTitle.contains("acoustic") ||
+            lowerTitle.contains("akustik") ||
+            lowerTitle.contains("live") ||
+            lowerTitle.contains("cover")
+        ) {
+            return song
+        }
+
         val candidates = search("${song.title} ${song.artist}", SearchFilter.SONGS)
             .getOrNull()
             ?.filterIsInstance<SearchResult.Track>()
             ?.map { it.song }
             .orEmpty()
         val normalizedTitle = normalizeTitle(song.title)
-        return candidates.firstOrNull { normalizeTitle(it.title) == normalizedTitle }
-            ?: candidates.firstOrNull()
-            ?: song
+        return candidates.firstOrNull { 
+            val normCandidate = normalizeTitle(it.title)
+            normCandidate == normalizedTitle || normCandidate.contains(normalizedTitle) || normalizedTitle.contains(normCandidate)
+        } ?: song
     }
 
     /** Strips the "(Official Video)" / "(Lyrical)" noise a title match would trip on. */

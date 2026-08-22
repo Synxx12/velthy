@@ -110,16 +110,17 @@ object PlaybackTracker {
     }
 
     private suspend fun open(videoId: String) = lock.withLock {
-        val tracking = Innertube.playbackTracking(videoId)
+        val cpn = Innertube.newCpn()
+        val tracking = Innertube.playbackTracking(videoId, cpn)
         if (tracking == null) {
             Log.d(TAG, "no playback tracking for $videoId (guest, or player call failed)")
             return@withLock
         }
-        val fresh = Session(videoId, Innertube.newCpn(), tracking)
+        val fresh = Session(videoId, cpn, tracking)
         val status = Innertube.pingPlayback(tracking.playbackUrl, fresh.cpn)
         session = fresh
         _registeredPlays.value++
-        Log.d(TAG, "history entry created for $videoId (HTTP $status)")
+        Log.d(TAG, "history entry created for $videoId with cpn=$cpn (HTTP $status)")
     }
 
     private suspend fun flush(target: Session, positionSeconds: Long) = lock.withLock {
