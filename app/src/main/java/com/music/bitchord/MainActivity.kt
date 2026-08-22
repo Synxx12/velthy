@@ -1185,13 +1185,9 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
         if (showUpdateDialog) {
             updateNotice?.let { update ->
                 UpdateAvailableDialog(
-                    version = update.version,
+                    updateInfo = update,
                     hazeState = hazeState,
                     onDismiss = { showUpdateDialog = false },
-                    onUpdate = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
-                        showUpdateDialog = false
-                    },
                 )
             }
         }

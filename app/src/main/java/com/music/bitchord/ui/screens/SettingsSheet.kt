@@ -41,10 +41,12 @@ import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SurroundSound
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Waves
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -87,6 +89,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import com.music.bitchord.ui.components.thumbnailBorder
+import com.music.bitchord.data.AppUpdateChecker
 import com.music.bitchord.data.model.Account
 import com.music.bitchord.data.scrobbling.LastFM
 import com.music.bitchord.data.settings.AppSettings
@@ -94,6 +97,8 @@ import com.music.bitchord.data.settings.AudioQuality
 import com.music.bitchord.data.settings.ThemeMode
 import com.music.bitchord.playback.AudioCache
 import com.music.bitchord.playback.DolbyAtmos
+import com.music.bitchord.ui.components.UpdateAvailableDialog
+import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -150,6 +155,9 @@ fun SettingsScreen(
     var picking by remember { mutableStateOf<QualityTarget?>(null) }
     var showListenBrainzTokenDialog by remember { mutableStateOf(false) }
     var showLastfmLoginDialog by remember { mutableStateOf(false) }
+    var manualUpdateInfo by remember { mutableStateOf<AppUpdateChecker.UpdateInfo?>(null) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    val hazeState = remember { HazeState() }
     val scrobbleScope = rememberCoroutineScope()
 
     // Coming back from the system Atmos panel is the one moment the answer is
@@ -433,6 +441,47 @@ fun SettingsScreen(
             )
         }
 
+        SettingsGroup(header = "Updates") {
+            SettingsRow(
+                icon = Icons.Rounded.SystemUpdate,
+                title = "Check for updates",
+                subtitle = if (checkingUpdate) "Checking latest release..." else "Current version: v$version",
+                trailing = {
+                    if (checkingUpdate) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                },
+                onClick = {
+                    if (!checkingUpdate) {
+                        checkingUpdate = true
+                        scrobbleScope.launch {
+                            val update = AppUpdateChecker.check(force = true)
+                            checkingUpdate = false
+                            if (update != null) {
+                                manualUpdateInfo = update
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    "Musique v$version sudah versi paling baru 🎉",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
+                    }
+                },
+            )
+        }
+
         Text(
             text = buildAnnotatedString {
                 append("Musique $version  ")
@@ -476,6 +525,14 @@ fun SettingsScreen(
                 },
             )
         }
+    }
+
+    manualUpdateInfo?.let { update ->
+        UpdateAvailableDialog(
+            updateInfo = update,
+            hazeState = hazeState,
+            onDismiss = { manualUpdateInfo = null },
+        )
     }
 
     if (showListenBrainzTokenDialog) {

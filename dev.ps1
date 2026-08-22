@@ -14,20 +14,29 @@ function Get-AdbDevice {
 }
 
 function Run-BuildAndLaunch {
-    Write-Host "`n[+] Mengompilasi dan menginstall ke HP..." -ForegroundColor Green
+    Write-Host "`n[+] Mengompilasi dev build..." -ForegroundColor Green
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     
-    .\gradlew.bat installDevDebug
+    .\gradlew.bat assembleDevDebug
     if ($LASTEXITCODE -eq 0) {
+        $apkPath = Get-ChildItem -Path "app\build\outputs\apk\dev\debug\*.apk" | Select-Object -First 1
         $targetDevice = Get-AdbDevice
-        if ($targetDevice) {
-            Write-Host "[+] Membuka aplikasi di perangkat: $targetDevice" -ForegroundColor Cyan
-            adb -s $targetDevice shell am start -n com.dev.bitchord/com.music.bitchord.MainActivity | Out-Null
+        
+        if ($apkPath -and (Test-Path $apkPath.FullName)) {
+            Write-Host "[+] Memasang APK ($($apkPath.Name)) ke HP via ADB..." -ForegroundColor Cyan
+            if ($targetDevice) {
+                adb -s $targetDevice install -r -d -t $apkPath.FullName
+                adb -s $targetDevice shell am start -n com.musique.client.dev/com.music.bitchord.MainActivity | Out-Null
+            } else {
+                adb install -r -d -t $apkPath.FullName
+                adb shell am start -n com.musique.client.dev/com.music.bitchord.MainActivity | Out-Null
+            }
+            $stopwatch.Stop()
+            Write-Host "[OK] Berhasil dipasang dan dibuka dalam $($stopwatch.Elapsed.TotalSeconds.ToString("0.0"))s!" -ForegroundColor Green
         } else {
-            adb shell am start -n com.dev.bitchord/com.music.bitchord.MainActivity | Out-Null
+            $stopwatch.Stop()
+            Write-Host "[X] APK file tidak ditemukan di app\build\outputs\apk\dev\debug" -ForegroundColor Red
         }
-        $stopwatch.Stop()
-        Write-Host "[OK] Berhasil dipasang dan dibuka dalam $($stopwatch.Elapsed.TotalSeconds.ToString("0.0"))s!" -ForegroundColor Green
     } else {
         $stopwatch.Stop()
         Write-Host "[X] Build gagal. Cek error di atas." -ForegroundColor Red
