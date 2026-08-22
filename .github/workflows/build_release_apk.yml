@@ -1,0 +1,206 @@
+name: Build & Release Musique Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Tag Versi Rilis (Opsional: Kosongkan untuk Auto-Increment +1 dari Rilis Terakhir)'
+        required: false
+        default: ''
+      release_notes:
+        description: 'Catatan Rilis Kustom (Opsional)'
+        required: false
+        default: ''
+      trigger_fcm:
+        description: 'Kirim FCM Push Notification ke Pengguna'
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: build-apk-single-runner
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release Musique Native APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      # ── 1. CHECKOUT CODEBASE ──
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. SETUP JAVA 17 WITH GRADLE CACHING ──
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # ── 3. GRANT EXECUTE PERMISSIONS ──
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # ── 4. AUTO-DETERMINE & INCREMENT VERSION ──
+      - name: Determine Version Tag
+        id: get_version
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.version_tag }}" ]; then
+            TAG="${{ inputs.version_tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            # Fetch latest tag from GitHub Releases if available
+            LATEST=$(gh release list --repo Synxx12/musique-app-releases --limit 1 | awk '{print $3}' || echo "")
+            if [ -n "$LATEST" ]; then
+              PREFIX=$(echo "$LATEST" | sed -E 's/^(v[0-9]+\.[0-9]+\.).*/\1/')
+              PATCH=$(echo "$LATEST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+              NEXT_PATCH=$((PATCH + 1))
+              TAG="${PREFIX}${NEXT_PATCH}"
+              echo "💡 Auto-incremented version from ${LATEST} -> ${TAG}"
+            else
+              TAG="v1.3.0"
+            fi
+          fi
+          
+          if [[ ! "$TAG" =~ ^v ]]; then
+            TAG="v${TAG}"
+          fi
+          
+          echo "VERSION_TAG=${TAG}" >> $GITHUB_ENV
+          echo "✅ Selected Version Tag: ${TAG}"
+
+      # ── 5. RESTORE RELEASE KEYSTORE (IF PROVIDED) ──
+      - name: Setup Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > app/keystore.jks
+            echo "storeFile=../app/keystore.jks" > keystore.properties
+            echo "storePassword=$KEYSTORE_PASSWORD" >> keystore.properties
+            echo "keyAlias=$KEY_ALIAS" >> keystore.properties
+            echo "keyPassword=$KEY_PASSWORD" >> keystore.properties
+          fi
+
+      # ── 6. BUILD PRODUCTION APK RELEASE ──
+      - name: Build Android APK
+        run: |
+          ./gradlew assembleProdRelease --stacktrace || ./gradlew assembleDevDebug --stacktrace
+          
+          APK_PROD=$(find app/build/outputs/apk/prod/release/ -name "*.apk" | head -n 1)
+          APK_DEV=$(find app/build/outputs/apk/dev/debug/ -name "*.apk" | head -n 1)
+          
+          APK_SOURCE="${APK_PROD:-$APK_DEV}"
+          APK_DEST="Musique-${VERSION_TAG}-client.apk"
+          APK_LATEST="Musique-client-latest.apk"
+          
+          if [ -f "$APK_SOURCE" ]; then
+            cp "$APK_SOURCE" "$APK_DEST"
+            cp "$APK_SOURCE" "$APK_LATEST"
+            echo "APK_FILE=${APK_DEST}" >> $GITHUB_ENV
+            echo "APK_LATEST_FILE=${APK_LATEST}" >> $GITHUB_ENV
+            echo "✅ APK successfully compiled: ${APK_DEST}"
+          else
+            echo "❌ APK Build Failed!"
+            exit 1
+          fi
+
+      # ── 7. GENERATE RELEASE NOTES ──
+      - name: Generate Release Notes
+        env:
+          INPUT_RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          python3 - <<'EOF'
+          import os, subprocess
+
+          version_tag = os.environ.get('VERSION_TAG', 'v1.3.0')
+          custom_notes = os.environ.get('INPUT_RELEASE_NOTES', '').strip()
+
+          if custom_notes:
+              notes = f"## 🎵 Musique Android {version_tag} (Client-Side Edition)\n\n" + custom_notes
+          else:
+              try:
+                  commits = subprocess.check_output(['git', 'log', '-n', '10', '--pretty=format:- %s'], stderr=subprocess.DEVNULL).decode('utf-8').strip()
+              except Exception:
+                  commits = "- Initial Musique Client-Side release"
+              
+              notes = f"## 🎵 Musique Android {version_tag} (Client-Side Edition)\n\n"
+              notes += "Versi native Android **100% Client-Side / Serverless** tanpa membutuhkan backend server.\n\n"
+              notes += "### ✨ Fitur Unggulan:\n"
+              notes += "- **Client-Side Innertube**: Streaming langsung ke YouTube Music tanpa server perantara\n"
+              notes += "- **Quick Picks di Home**: 4 baris lagu langsung di bagian atas untuk pemutaran instan 1-tap\n"
+              notes += "- **Immersive Fullscreen Player**: Foto cover melebar edge-to-edge dengan vertical fade halus\n"
+              notes += "- **Lirik Tersinkronisasi**: Lirik real-time LRCLIB ultra-smooth\n"
+              notes += "- **Offline Downloads**: Menyimpan audio dengan metadata ID3/Vorbis langsung ke folder `Downloads/Musique`\n"
+              notes += "- **Opsi Background Lifecycle**: Pilihan menghentikan atau melanjutkan musik saat dihapus dari Recent Apps\n\n"
+              notes += f"### 📋 Riwayat Pembaruan (Commits):\n{commits}\n"
+
+          footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Musique-{version_tag}-client.apk` di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
+
+          with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
+              f.write(notes + footer)
+          EOF
+
+      # ── 8. CALCULATE SHA-256 CHECKSUM ──
+      - name: Calculate Checksums
+        run: |
+          sha256sum ${{ env.APK_FILE }} ${{ env.APK_LATEST_FILE }} > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # ── 9. PUBLISH TO GITHUB RELEASES (RELEASES REPO) ──
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: "Musique Android ${{ env.VERSION_TAG }} (Client-Side)"
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ env.APK_FILE }}
+            ${{ env.APK_LATEST_FILE }}
+            SHA256SUMS.txt
+          repository: "Synxx12/musique-app-releases"
+          token: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      # ── 10. PUBLISH TO CURRENT REPO AS FALLBACK ──
+      - name: Fallback Release in Current Repository
+        if: steps.create_release.outcome == 'failure' || steps.create_release.outcome == 'skipped'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: "Musique Android ${{ env.VERSION_TAG }} (Client-Side)"
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ env.APK_FILE }}
+            ${{ env.APK_LATEST_FILE }}
+            SHA256SUMS.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 11. TRIGGER FCM PUSH NOTIFICATION WEBHOOK ──
+      - name: Trigger FCM Push Notification
+        if: always() && (steps.create_release.outcome == 'success' || steps.create_release.outcome == 'skipped')
+        run: |
+          curl -s -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 GitHubActions/1.0" \
+            -X POST "https://mp3.movique.site/api/webhooks/github-release" \
+            -H "x-api-key: 137354dc910e60a9b7c1c67bb9b7021464bc5d32ba73f8dc6659986f7ab0800e" \
+            -H "Content-Type: application/json" \
+            -d "{\"tagName\": \"${VERSION_TAG}\", \"title\": \"Musique Android ${VERSION_TAG} (Client-Side)\"}" || true
+          echo "✅ FCM Notification Webhook Triggered."

@@ -41,10 +41,10 @@ import java.io.OutputStream
  */
 object DownloadStore {
 
-    private const val TAG = "BitChord"
+    private const val TAG = "Musique"
 
     /** The subfolder of Downloads that everything lands in. */
-    const val FOLDER = "BitChord"
+    const val FOLDER = "Musique"
 
     private val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/$FOLDER"
 

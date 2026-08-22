@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run & Install to Phone (DevDebug)",
+            "type": "shell",
+            "command": ".\\gradlew.bat installDevDebug ; $dev = (adb devices | Where-Object { $_ -match '\tdevice$' } | Select-Object -First 1).Split(\"`t\")[0]; if ($dev) { adb -s $dev shell am start -n com.dev.bitchord/com.music.bitchord.MainActivity } else { adb shell am start -n com.dev.bitchord/com.music.bitchord.MainActivity }",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "focus": false,
+                "clear": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}

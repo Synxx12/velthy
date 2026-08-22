@@ -49,11 +49,27 @@ object YtMusicRepository {
             val recent = async { runCatching { recentlyPlayed() }.getOrNull() }
             val homeRaw = async { Innertube.browse("FEmusic_home") }
             val newReleases = async { runCatching { shelvesOf("FEmusic_new_releases") }.getOrDefault(emptyList()) }
+            val charts = async { runCatching { shelvesOf("FEmusic_charts") }.getOrDefault(emptyList()) }
             val home = homeRaw.await()
-            val shelves = listOfNotNull(recent.await()) +
-                InnertubeParser.parseHome(home) +
+            val parsedHome = InnertubeParser.parseHome(home)
+
+            // Prioritize shelves with playable songs (Quick picks, Listen again, Trending songs)
+            val songShelves = parsedHome.filter { shelf -> shelf.items.any { it.videoId != null } }
+            val otherShelves = parsedHome.filter { shelf -> shelf.items.none { it.videoId != null } }
+
+            val fallbackSongShelves = if (recent.await() == null && songShelves.isEmpty()) {
+                charts.await().filter { it.items.any { item -> item.videoId != null } }.take(1)
+            } else {
+                emptyList()
+            }
+
+            val combined = listOfNotNull(recent.await()) +
+                songShelves +
+                fallbackSongShelves +
+                otherShelves +
                 newReleases.await()
-            HomeFeed(shelves, InnertubeParser.continuationToken(home))
+
+            HomeFeed(combined.distinctBy { it.title.lowercase() }, InnertubeParser.continuationToken(home))
         }
     }
 

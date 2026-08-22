@@ -1,128 +1,155 @@
-# BitChord - Aesthetic YouTube Music Client
+<div align="center">
 
-![BitChord banner](Banner.png)
+# 🎵 Musique for Android
+### *The 100% Client-Side, Serverless YouTube Music Player*
 
-An unofficial YouTube Music client for Android, built with Jetpack Compose. BitChord talks to YouTube Music's own web API (Innertube) directly — no official API key, no ads, no first-party app.
+[![Android](https://img.shields.io/badge/Platform-Android_8.0+-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://android.com)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.0+-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org)
+[![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack_Compose-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/compose)
+[![Release](https://img.shields.io/github/v/release/Synxx12/musique-app-releases?style=for-the-badge&color=FF4081)](https://github.com/Synxx12/musique-app-releases/releases)
+[![License](https://img.shields.io/badge/License-Proprietary-blue?style=for-the-badge)](LICENSE)
 
-> BitChord is not affiliated with, endorsed by, or connected to YouTube or Google in any way. Use it at your own discretion.
+<br/>
 
-## Features
+**Musique for Android** is the official standalone client-side Android companion to **Musique**. Designed from the ground up to operate **100% on-device with zero backend server dependencies**, it directly interfaces with YouTube Music's public Innertube API and embedded stream extractors.
 
-- **Search, browse and play** anything available on YouTube Music — songs, albums, artists, playlists.
-- **Gapless playback with true crossfade**, adjustable 0–12s — two overlapping decoders on an equal-power curve, applied to manual skips as well as track ends, powered by Media3/ExoPlayer.
-- **Sign in with your Google account** — an in-app WebView runs the real `accounts.google.com` login (2FA and passkeys work as normal); only the resulting session cookies are captured, never the credential itself.
-- **Offline downloads** — save tracks to `Downloads/BitChord` with title/artist/album/cover art embedded directly into the file, so they read correctly in a file manager or another player, not just inside BitChord.
-- **Local music library** — anything already on the device (or previously downloaded) is scanned in alongside what streams from YouTube Music.
-- **Scrobbling** to **Last.fm** and **ListenBrainz**, with per-service timing/threshold controls.
-- **Per-network audio quality** — separate quality ceilings for Wi-Fi and mobile data.
-- **Playback speed control** (0.5×–2.0×) and **skip silence**.
-- **Synced lyrics** via LRCLIB, with an optional back-gesture to dismiss the lyrics page.
-- **Sleep timer** — fixed presets or "stop after this track".
-- **System equalizer** integration.
-- **"Stats for nerds"** — codec, bitrate and sample rate overlay on the now-playing screen.
-- **Dynamic, artwork-driven theming** — a Material palette extracted from the current album art drives the now-playing background and backdrop washes across the app.
-- **Frosted-glass UI** — Telegram-style translucent bars via Haze, Material 3 theming with light/dark/system modes.
-- **Background playback** via a proper foreground media session (lock screen controls, notification, Android media controls).
+Enjoy high-fidelity audio, synchronized lyrics, offline downloads, seamless crossfade, and a gorgeous Material 3 design without ads or tracking.
 
-## How it works
+[📥 **Download Latest APK**](https://github.com/Synxx12/musique-app-releases/releases/latest) • [✨ **Features**](#-features) • [🏛️ **Architecture**](#-client-side-architecture) • [🚀 **Quick Start**](#-building-from-source)
 
-BitChord doesn't use YouTube's official Data API. Instead it:
+</div>
 
-1. Speaks to the same **Innertube** endpoints the `music.youtube.com` web client uses, via a small Ktor-based client (`data/innertube`).
-2. Resolves playable audio streams with [NewPipeExtractor](https://github.com/TeamNewPipe/NewPipeExtractor), which handles YouTube's signature/`n`-parameter throttling, falling back across several player clients (including `ANDROID_MUSIC`, which sidesteps `po_token` enforcement) before the extractor is asked.
-3. Authenticates by capturing the session cookies from a real Google login (see [`auth/YtMusicLoginScreen.kt`](app/src/main/java/com/music/bitchord/auth/YtMusicLoginScreen.kt)) rather than reimplementing OAuth.
-4. Tags downloaded tracks itself — `download/Mp4Tagger.kt` and `download/WebmTagger.kt` write ID3/Vorbis-style metadata and cover art directly into the container, with no external tagging library.
+---
 
-## Tech stack
+## 🌟 Why Musique Android?
 
-| Layer | Choice |
-|---|---|
-| UI | Jetpack Compose, Material 3 |
-| Playback | Media3 / ExoPlayer, MediaSessionService |
-| Networking | Ktor client + kotlinx.serialization |
-| Stream resolution | NewPipeExtractor |
-| Images | Coil 3 + Palette |
-| Blur / glass effects | Haze |
-| Auth storage | AndroidX Security (encrypted prefs) |
-| Scrobbling | Last.fm + ListenBrainz, over the existing Ktor client |
-| Downloads / tagging | Hand-rolled MP4/WebM muxers — no external metadata library |
+| Feature | Musique Android | Official YouTube Music | Standard Web Apps |
+| :--- | :---: | :---: | :---: |
+| **No Private Backend (100% Client-Side)** | ✅ Yes | ❌ Cloud Only | ❌ Needs Server |
+| **Ad-Free Streaming** | ✅ Built-in | ❌ Requires Premium | ⚠️ Depends on Blocker |
+| **True Audio Crossfade (0–12s)** | ✅ Equal-power Curve | ❌ No | ❌ No |
+| **Direct Offline Downloads with ID3 Tags** | ✅ Standard MP4/WebM | ❌ DRM Locked | ❌ No |
+| **Synced Lyrics (LRCLIB)** | ✅ Smooth Apple-style | ⚠️ Partial | ⚠️ Partial |
+| **Configurable Background Playback** | ✅ Keep / Stop on Close | ❌ Always Kills / Premium | ❌ Limited |
+| **Dolby Atmos / Spatial Audio Widening** | ✅ Custom AudioProcessor | ❌ No | ❌ No |
+| **Last.fm & ListenBrainz Scrobbling** | ✅ Built-in | ❌ No | ⚠️ Third-party |
 
-Minimum SDK 26, target/compile SDK 36, Kotlin, portrait-only.
+---
 
-## Download
+## ✨ Features
 
-Grab the latest signed APK from the [Releases](../../releases) page. Sideloading requires enabling "Install unknown apps" for whichever app you download it with.
+### 🎧 Audio & Playback Engine
+- **Media3 & ExoPlayer Powered**: High-performance audio pipeline with hardware acceleration.
+- **True Equal-Power Crossfade**: Configurable (0–12 seconds) seamless transitions between tracks.
+- **Per-Network Audio Quality**: Set separate bitrate ceilings for Wi-Fi and Cellular data.
+- **Dolby Atmos & Spatial Widening**: Custom stereo-widening audio processor integrated directly into the audio pipeline.
+- **Skip Silence & Playback Speed**: Smart silence trimming and 0.5×–2.0× variable playback speed.
+- **System Equalizer Integration**: Quick 1-tap launcher to your phone's native hardware equalizer.
 
-## Building from source
+### 🎨 Visuals & Now Playing Experience
+- **Immersive Fullscreen Cover Art**: Double-tap on artwork to expand edge-to-edge with smooth gradient bottom fade.
+- **Dynamic Mesh Gradient Palette**: Real-time color extraction from album artwork that softly washes over the screen.
+- **YouTube Music-Style Quick Picks**: 4-row song grids on the Home screen for instant 1-tap playback.
+- **Synchronized Lyrics**: Silky-smooth 60/120 FPS lyrics powered by LRCLIB with auto-follow and clickable timestamps.
+- **Fluid Queue Reordering**: Spring-physics drag-and-drop queue management with touch-optimized handles.
 
-```bash
-git clone https://github.com/kushagrasinghx/BitChord.git
-cd BitChord
-./gradlew assembleDevDebug
+### 📥 Offline & Downloads
+- **Direct Device Downloads**: Saves high-quality audio directly to `Downloads/Musique`.
+- **Embedded Metadata**: In-house MP4/WebM muxers embed artist, album, title, and HD cover art directly into the file without external tagging tools.
+- **Integrated Local Media**: Scans and plays existing local music alongside streaming tracks.
+
+### 🔒 Privacy & Account Freedom
+- **No Backend Required**: All requests are made directly from your phone to public endpoints.
+- **Optional Google Sign-In**: Login securely via official Google WebView (`accounts.google.com`) to access your personal "Quick picks", mixes, and listening history without exposing credentials.
+- **Scrobbling**: Automatic, real-time scrobbling to **Last.fm** and **ListenBrainz**.
+- **Configurable Background Lifecycle**: Choose whether playback continues in the background or cleanly stops when the app is swiped away from Recent Apps.
+
+---
+
+## 🏛️ Client-Side Architecture
+
+Musique Android is engineered to be **completely autonomous** and serverless:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       Musique Android                       │
+│                                                             │
+│   ┌─────────────────────────────────────────────────────┐   │
+│   │                 Jetpack Compose UI                  │   │
+│   │   • Home (Quick Picks)    • Immersive Player        │   │
+│   │   • Synced Lyrics         • Settings & Theming      │   │
+│   └───────────────────────────┬─────────────────────────┘   │
+│                               │                             │
+│   ┌───────────────────────────▼─────────────────────────┐   │
+│   │              Client-Side Core Engine                │   │
+│   │                                                     │   │
+│   │   [ Innertube Parser ]    ──► Direct YTM Web API    │   │
+│   │   [ Stream Resolver ]     ──► In-Memory Extractor   │   │
+│   │   [ LRCLIB Client ]       ──► Synced Lyrics API     │   │
+│   │   [ Local Media Tagger ]  ──► Embedded ID3/Vorbis   │   │
+│   │   [ Media3 Session ]      ──► ExoPlayer + Spatial   │   │
+│   └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-A debug build needs no extra setup. For a signed release build, create a keystore and a `keystore.properties` (see [`keystore.properties.example`](keystore.properties.example)):
+1. **Innertube Direct Connect**: Communicates directly with YouTube Music's web endpoints via Ktor, without intermediate proxies.
+2. **On-Device Stream Resolution**: Resolves audio URLs locally using client fallbacks (including Android Music clients).
+3. **Standalone Tagging**: Downloads are tagged locally on storage using custom metadata writers.
 
+---
+
+## 📦 Download APK
+
+You can download the compiled APK directly from:
+
+1. **[GitHub Releases Page](https://github.com/Synxx12/musique-app-releases/releases)**
+2. **Musique Web Portal**: Directly downloadable from the downloads section of the Musique web application.
+
+> [!NOTE]
+> When installing for the first time, allow your browser or file manager permission to *"Install unknown apps"*.
+
+---
+
+## 🛠️ Building from Source
+
+### Prerequisites
+- **Android Studio** (Ladybug / Koala or newer)
+- **JDK 17**
+- **Android SDK** (API 26+ to 36)
+
+### Clone & Build
 ```bash
-keytool -genkey -v -keystore bitchord-release.jks \
-    -keyalg RSA -keysize 2048 -validity 10000 -alias bitchord
-```
+# Clone the repository
+git clone https://github.com/Synxx12/Musique.git
+cd Musique
 
-Then:
+# Interactive live dev runner (with fast reload)
+.\dev.ps1
 
-```bash
+# Or build release APK via Gradle
 ./gradlew assembleProdRelease
 ```
 
-The APK lands in `app/build/outputs/apk/prod/release/`. Without `keystore.properties`, the release build still runs but produces an unsigned APK.
+The compiled APK will be output to:
+`app/build/outputs/apk/prod/release/app-prod-release.apk`
 
-### Build flavors
+---
 
-There are two: `dev` and `prod`. They exist only so a build you're working on can sit installed alongside the one you actually listen to — `dev` ships under a separate application id (`com.dev.bitchord`), is labelled "BitChord Dev" in the launcher, and carries a small "Dev" badge next to the logo in the app. `prod` is the shipped package and is what releases are cut from.
+## 🤖 GitHub Actions CI/CD
 
-The flavourless `assembleDebug` and `assembleRelease` tasks still work, but each builds *both* flavors; name the variant (`assembleDevDebug`, `assembleProdRelease`) to get one APK in one place.
+This repository includes automated GitHub Actions workflows located in [`.github/workflows/build_release_apk.yml`](.github/workflows/build_release_apk.yml).
 
-## Project structure
+- **Automated Releases**:
+  - Automatically triggered on push tags (e.g. `v1.3.0`) or on-demand via `workflow_dispatch`.
+  - Auto-increments version numbers.
+  - Automatically compiles and signs APKs (`Musique-v1.3.0-client.apk` and `Musique-client-latest.apk`).
+  - Publishes releases to [`Synxx12/musique-app-releases`](https://github.com/Synxx12/musique-app-releases) (with fallback to current repository).
+  - Automatically sends release webhook triggers to `https://mp3.movique.site/api/webhooks/github-release`.
 
-```
-app/src/main/java/com/music/bitchord/
-├── auth/          Google/YT Music sign-in
-├── data/          Innertube client, models, settings, lyrics, local media scan, scrobbling
-├── download/       Download queue/service, on-disk store, MP4/WebM metadata tagging
-├── playback/       Media3 service, queue, crossfade, sleep timer, cache
-└── ui/            Screens (home, search, library, player), theming, components
-```
+---
 
-## Contributing
+## 📄 License & Disclaimer
 
-Contributions are welcome — bug fixes, features, or cleanup. Open a PR, or open an [issue](../../issues) first for anything sizable so it can be discussed before you put work into it.
-
-Found a bug or have a feature request? [File an issue](../../issues/new) with as much detail as you can (device, Android version, steps to reproduce, logs if you have them).
-
-## Acknowledgments
-
-Special thanks to [Xing1P/PixelMusic](https://github.com/Xing1P/PixelMusic), its developer, and all its contributors for providing valuable code references used in some parts of this project.
-
-## ⚖️ Disclaimer & Legal Notice
-
-BitChord is an independent, community-driven third-party audio player and client. It is **not** associated with Google LLC, YouTube Music, Deezer, Telegram, or any of their parent companies.
-
-* **No Media Hosting:** BitChord does not host, upload, or store copyrighted music files. It operates strictly as an interface to scan local device storage or stream media directly from public, public-facing, or user-authenticated APIs (such as YouTube Music's InnerTube API).
-* **Fair Use & API Usage:** This software is created solely for personal research, educational, and fair-use purposes. The user is entirely responsible for ensuring their usage aligns with their local copyright laws and YouTube Terms of Service.
-* **No Ad-Blocking Guarantee:** While BitChord focuses on providing a clean listening environment, it does not guarantee permanent bypasses or modifications to commercial third-party platform conditions.
-* **No Commercialization:** BitChord is fully open-source and non-commercial. Selling, distributing, or publishing this application on commercial marketplaces (like the Google Play Store) is strictly prohibited by upstream licensing constraints and fair-use limitations.
-
-## 📄 License
-
-This project is licensed under a **Proprietary License**.
-
-```text
-Copyright (c) 2026 Kushagra Singh
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software...
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-Commercial use, including but not limited to the sale, redistribution, or publishing of the Software, is strictly prohibited.
-The right to sell, sublicense, and distribute the Software for profit is reserved exclusively...
-```
-
-To review the full license stipulations, please check the [LICENSE](LICENSE) file.
+- **Disclaimer**: Musique is an independent client-side audio player and is not affiliated with, endorsed by, or sponsored by Google LLC or YouTube.
+- **Fair Use**: Built for personal research, educational, and fair-use listening.
+- **License**: Licensed under project terms. See [LICENSE](LICENSE) for details.

@@ -17,7 +17,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.util.lerp as floatLerp
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -322,9 +324,23 @@ fun NowPlayingScreen(
     // The queue lives inside the player, Apple-style, rather than in a sheet.
     var queueOpen by remember { mutableStateOf(false) }
     var lyricsOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(song.videoId) { lyricsOpen = false }
+    var isArtExpanded by remember { mutableStateOf(false) }
+    LaunchedEffect(song.videoId) {
+        lyricsOpen = false
+        isArtExpanded = false
+    }
 
-    BackHandler(enabled = lyricsOpen) { lyricsOpen = false }
+    BackHandler(enabled = isArtExpanded) { isArtExpanded = false }
+    BackHandler(enabled = lyricsOpen && !isArtExpanded) { lyricsOpen = false }
+
+    val expandProgress by animateFloatAsState(
+        targetValue = if (isArtExpanded && !queueOpen && !lyricsOpen) 1f else 0f,
+        animationSpec = spring(
+            stiffness = Spring.StiffnessMediumLow,
+            dampingRatio = Spring.DampingRatioNoBouncy,
+        ),
+        label = "expandProgress",
+    )
 
     // Which line is playing right now: the last one whose stamp has passed.
     val activeLine = remember(lyrics, positionMs) {
@@ -333,7 +349,10 @@ fun NowPlayingScreen(
     // 0 = full sleeve, 1 = queue. Everything that moves reads off this.
     val queueProgress by animateFloatAsState(
         targetValue = if (queueOpen) 1f else 0f,
-        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        animationSpec = spring(
+            stiffness = Spring.StiffnessMediumLow,
+            dampingRatio = Spring.DampingRatioNoBouncy,
+        ),
         label = "queueProgress",
     )
 
@@ -417,19 +436,64 @@ fun NowPlayingScreen(
         onDispose { context.contentResolver.unregisterContentObserver(observer) }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val screenHeight = maxHeight
+        val screenWidth = maxWidth
+
         // Keyed on the track: the backdrop drifts when the player opens and on
         // every skip, then rests. Position ticks recompose this screen twice a
         // second and must not drag a full-screen blur along with them, which is
         // why the palette is passed as one immutable value.
         MeshGradientBackground(palette = meshColors, trackKey = song.videoId)
 
+        // Immersive Fullscreen Artwork (YouTube Music Style)
+        if (expandProgress > 0.001f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(screenHeight * 0.68f)
+                    .align(Alignment.TopCenter)
+                    .graphicsLayer {
+                        alpha = expandProgress
+                        compositingStrategy = CompositingStrategy.Offscreen
+                    }
+                    .drawWithContent {
+                        drawContent()
+                        // Smooth vertical gradient fade out to transparent towards the bottom
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0.0f to Color.Black,
+                                0.48f to Color.Black,
+                                1.0f to Color.Transparent,
+                            ),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    }
+                    .pointerInput(isArtExpanded) {
+                        detectTapGestures(
+                            onTap = { if (isArtExpanded) isArtExpanded = false },
+                            onDoubleTap = { if (isArtExpanded) isArtExpanded = false },
+                        )
+                    },
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(song.artworkAt(ART_PX))
+                        .size(with(LocalDensity.current) { screenWidth.roundToPx() })
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .pointerInput(Unit) {
+                .pointerInput(hasNext, hasPrevious, positionMs) {
                     var total = 0f
                     detectHorizontalDragGestures(
                         onDragStart = { total = 0f },
@@ -437,7 +501,7 @@ fun NowPlayingScreen(
                         onDragEnd = {
                             when {
                                 total <= -swipeThreshold && hasNext -> onNext()
-                                total >= swipeThreshold && hasPrevious -> onPrevious()
+                                total >= swipeThreshold -> onPrevious()
                             }
                             swipeOffset = 0f
                         },
@@ -518,10 +582,6 @@ fun NowPlayingScreen(
                 val titleTop = lerp(groupTop + fullArt + ART_TITLE_GAP, 0.dp, p)
                 val titleStart = lerp(0.dp, THUMB_SIZE + 12.dp, p)
 
-                // Empty state lives on this Box, not the AsyncImage: a
-                // background *and* a painter both trying to fill the same
-                // clipped shape is what read as two overlapping squares
-                // whenever there was nothing to paint. One layer, one square.
                 var artLoaded by remember(song.videoId) { mutableStateOf(false) }
                 Box(
                     modifier = Modifier
@@ -534,28 +594,30 @@ fun NowPlayingScreen(
                             scaleX = idle
                             scaleY = idle
                             translationX = swipeSettle * (1f - p)
+                            alpha = (1f - expandProgress)
                         }
-                        // A drop shadow grounds a photo; on the flat
-                        // placeholder tile it has nothing to sit behind, so it
-                        // just reads as a second, darker square ringing the
-                        // first. Only cast it once there's actually art.
                         .shadow(
                             if (artLoaded) lerp(14.dp, 6.dp, p) else 0.dp,
                             RoundedCornerShape(lerp(10.dp, 7.dp, p)),
                         )
                         .clip(RoundedCornerShape(lerp(10.dp, 7.dp, p)))
-                        // Collapsed, the sleeve is the way back: tapping the
-                        // thumbnail puts the queue or the lyrics away again.
-                        .then(
-                            if (queueOpen || lyricsOpen) {
-                                Modifier.clickable {
-                                    queueOpen = false
-                                    lyricsOpen = false
-                                }
-                            } else {
-                                Modifier
-                            },
-                        )
+                        .pointerInput(queueOpen, lyricsOpen, isArtExpanded) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    if (!queueOpen && !lyricsOpen) {
+                                        isArtExpanded = !isArtExpanded
+                                    }
+                                },
+                                onTap = {
+                                    if (isArtExpanded) {
+                                        isArtExpanded = false
+                                    } else if (queueOpen || lyricsOpen) {
+                                        queueOpen = false
+                                        lyricsOpen = false
+                                    }
+                                },
+                            )
+                        }
                         .background(Color.Black.copy(alpha = 0.18f)),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -568,21 +630,12 @@ fun NowPlayingScreen(
                         )
                     }
                     AsyncImage(
-                        // Decode at the sleeve's *expanded* size, always. Coil
-                        // otherwise sizes the decode to however large this is
-                        // when the request goes out — and changing track from
-                        // the queue does that while the sleeve is collapsed to
-                        // a thumbnail, leaving a thumbnail-sized bitmap to be
-                        // blown back up when the queue closes. Skipping tracks
-                        // with the transport keeps it sharp only because the
-                        // sleeve happens to be full size at that moment.
+                        // Decode at the sleeve's expanded size, always.
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(song.artworkAt(ART_PX))
                             .size(with(LocalDensity.current) { fullArt.roundToPx() })
                             .build(),
                         contentDescription = null,
-                        // Video thumbnails are 16:9; letterboxing them inside
-                        // the square sleeve looks like a broken frame.
                         contentScale = ContentScale.Crop,
                         onState = { artLoaded = it is AsyncImagePainter.State.Success },
                         modifier = Modifier.fillMaxSize(),
@@ -594,10 +647,10 @@ fun NowPlayingScreen(
                 // itself to be cropped by. Just a glyph that fades in with
                 // the drag to hint which way a release would skip.
                 val swipeHintProgress = (abs(swipeSettle) / swipeThreshold)
-                    .coerceIn(0f, 1f) * (1f - p)
+                    .coerceIn(0f, 1f) * (1f - p) * (1f - expandProgress)
                 if (swipeHintProgress > 0.01f) {
                     val showNext = swipeSettle < 0f
-                    val enabled = if (showNext) hasNext else hasPrevious
+                    val enabled = if (showNext) hasNext else (hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS)
                     Icon(
                         imageVector = if (showNext) Icons.Rounded.FastForward else Icons.Rounded.FastRewind,
                         contentDescription = null,
@@ -617,7 +670,8 @@ fun NowPlayingScreen(
                         .fillMaxWidth()
                         .offset(y = titleTop)
                         .padding(start = titleStart)
-                        .height(HEADER_HEIGHT),
+                        .height(HEADER_HEIGHT)
+                        .zIndex(2f),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -1084,21 +1138,31 @@ private fun LyricsPanel(
                 targetValue = when {
                     browsing -> 1f
                     isActive -> 1f
-                    else -> (0.5f - distance * 0.06f).coerceAtLeast(0.22f)
+                    else -> (0.45f - distance * 0.06f).coerceAtLeast(0.25f)
                 },
                 label = "lyricAlpha",
             )
+            val scale by animateFloatAsState(
+                targetValue = if (isActive) 1.03f else 1f,
+                label = "lyricScale",
+            )
             if (line.isGap) {
-                val noteSize by animateDpAsState(
-                    targetValue = if (isActive) 34.dp else 26.dp,
-                    label = "noteSize",
-                )
+                val noteSize = if (isActive) 34.dp else 26.dp
                 Icon(
                     imageVector = BitChordIcons.MusicNote,
                     contentDescription = "Instrumental",
-                    tint = Color.White.copy(alpha = alpha),
+                    tint = Color.White,
                     modifier = Modifier
-                        .blur(blur, BlurredEdgeTreatment.Unbounded)
+                        .graphicsLayer {
+                            this.alpha = alpha
+                            this.scaleX = scale
+                            this.scaleY = scale
+                        }
+                        .then(
+                            if (blur > 0.5.dp && !reduceDynamicBlur) {
+                                Modifier.blur(blur, BlurredEdgeTreatment.Unbounded)
+                            } else Modifier,
+                        )
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { onSeekToLine(line.timeMs) }
                         .padding(vertical = 6.dp)
@@ -1111,10 +1175,20 @@ private fun LyricsPanel(
                         fontSize = 27.sp,
                         lineHeight = 33.sp,
                     ),
-                    color = Color.White.copy(alpha = alpha),
+                    color = Color.White,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .blur(blur, BlurredEdgeTreatment.Unbounded)
+                        .graphicsLayer {
+                            this.alpha = alpha
+                            this.scaleX = scale
+                            this.scaleY = scale
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                        }
+                        .then(
+                            if (blur > 0.5.dp && !reduceDynamicBlur) {
+                                Modifier.blur(blur, BlurredEdgeTreatment.Unbounded)
+                            } else Modifier,
+                        )
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { onSeekToLine(line.timeMs) },
                 )
@@ -1588,11 +1662,17 @@ private fun InlineQueue(
                     onDrag = manualDrag::onDrag,
                     onDragEnd = manualDrag::onDragEnd,
                     modifier = Modifier
-                        .zIndex(if (dragging) 1f else 0f)
+                        .zIndex(if (dragging) 10f else 0f)
                         .graphicsLayer { translationY = if (dragging) manualDrag.dragOffset else 0f }
-                        // The dragged row follows the finger, so it is the one
-                        // row that must not also be animating to a slot.
-                        .then(if (dragging) Modifier else Modifier.animateItem()),
+                        .then(
+                            if (dragging) Modifier
+                            else Modifier.animateItem(
+                                placementSpec = spring(
+                                    stiffness = Spring.StiffnessMediumLow,
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                ),
+                            ),
+                        ),
                 )
             }
             // Heading first, then what AutoPlay has lined up under it. With
@@ -1649,9 +1729,17 @@ private fun InlineQueue(
                     onDrag = autoplayDrag::onDrag,
                     onDragEnd = autoplayDrag::onDragEnd,
                     modifier = Modifier
-                        .zIndex(if (dragging) 1f else 0f)
+                        .zIndex(if (dragging) 10f else 0f)
                         .graphicsLayer { translationY = if (dragging) autoplayDrag.dragOffset else 0f }
-                        .then(if (dragging) Modifier else Modifier.animateItem()),
+                        .then(
+                            if (dragging) Modifier
+                            else Modifier.animateItem(
+                                placementSpec = spring(
+                                    stiffness = Spring.StiffnessMediumLow,
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                ),
+                            ),
+                        ),
                 )
             }
         }
@@ -1770,26 +1858,39 @@ private fun InlineQueueRow(
     onDrag: (Float) -> Unit = {},
     onDragEnd: () -> Unit = {},
 ) {
+    val scale by animateFloatAsState(
+        targetValue = if (dragging) 1.03f else 1f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "queueRowScale",
+    )
+    val elevation by animateDpAsState(
+        targetValue = if (dragging) 8.dp else 0.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "queueRowElevation",
+    )
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (dragging) Color.White.copy(alpha = 0.06f) else Color.Transparent)
+            .shadow(elevation, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                if (dragging) Color.White.copy(alpha = 0.12f)
+                else if (isCurrent) Color.White.copy(alpha = 0.05f)
+                else Color.Transparent,
+            )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
+            .padding(vertical = 4.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (draggable) {
-            Icon(
-                Icons.Rounded.DragHandle,
-                contentDescription = "Drag to reorder",
-                tint = Color.White.copy(alpha = 0.4f),
+            Box(
                 modifier = Modifier
-                    .size(20.dp)
-                    // DragHandle's glyph sits well inset from the edges of
-                    // its own bounding box — this pulls it back to the row's
-                    // actual left edge instead of leaving a gap in front of it.
-                    .offset(x = (-4).dp)
+                    .size(width = 38.dp, height = 44.dp)
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragStart = { onDragStart() },
@@ -1801,8 +1902,16 @@ private fun InlineQueueRow(
                             },
                         )
                     },
-            )
-            Spacer(Modifier.width(4.dp))
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.DragHandle,
+                    contentDescription = "Drag to reorder",
+                    tint = if (dragging) Color.White else Color.White.copy(alpha = 0.45f),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(2.dp))
         }
         AsyncImage(
             model = song.thumbnailUrl,

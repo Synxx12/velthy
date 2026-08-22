@@ -328,6 +328,21 @@ class PlaybackService : MediaSessionService() {
             .build()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (AppSettings.stopOnTaskRemoved.value) {
+            val p = player
+            if (p != null) {
+                p.stop()
+                p.clearMediaItems()
+            }
+            mediaSession?.release()
+            mediaSession = null
+            stopSelf()
+        } else {
+            super.onTaskRemoved(rootIntent)
+        }
+    }
+
     /**
      * The crossfade's tail player: plays out the last seconds of the track
      * being left behind while the real player gets on with the next one.
@@ -807,8 +822,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     private companion object {
-        const val CHANNEL_ID = "bitchord_playback"
-        const val SESSION_ID = "BitChordPlayback"
+        const val CHANNEL_ID = "musique_playback"
+        const val SESSION_ID = "MusiquePlayback"
 
         /** How often played-seconds are sampled off the player. */
         const val PROGRESS_SAMPLE_MS = 5_000L
