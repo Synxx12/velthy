@@ -352,28 +352,30 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     }
 
     val play: (List<Song>, Int) -> Unit = { songs, index ->
-        scope.launch {
-            val starting = YtMusicRepository.resolveAudio(songs[index])
-            val queued = songs.toMutableList().also { it[index] = starting }
-            controller?.playSongs(queued, index)
-            showNowPlaying = true
-            // Starting playback only waits on the track about to play; the
-            // rest of a long album/playlist resolves in the background and
-            // is patched into the queue well before it's reached.
-            queued.forEachIndexed { i, song ->
-                if (i == index || !song.isVideo) return@forEachIndexed
-                launch {
-                    val resolved = YtMusicRepository.resolveAudio(song)
-                    if (resolved.videoId == song.videoId) return@launch
-                    // Found by id rather than by the index it went in at:
-                    // shuffling and queue edits both move tracks around while
-                    // this is in flight, and a song that has since been removed
-                    // must not have something else overwritten in its place.
-                    val c = controller ?: return@launch
-                    val at = (0 until c.mediaItemCount)
-                        .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
-                        ?: return@launch
-                    c.replaceMediaItem(at, resolved.toMediaItem())
+        if (songs.isNotEmpty() && index in songs.indices) {
+            scope.launch {
+                runCatching {
+                    val starting = YtMusicRepository.resolveAudio(songs[index])
+                    val queued = songs.toMutableList().also { it[index] = starting }
+                    controller?.playSongs(queued, index)
+                    showNowPlaying = true
+                    // Starting playback only waits on the track about to play; the
+                    // rest of a long album/playlist resolves in the background and
+                    // is patched into the queue well before it's reached.
+                    queued.forEachIndexed { i, song ->
+                        if (i == index || !song.isVideo) return@forEachIndexed
+                        launch {
+                            runCatching {
+                                val resolved = YtMusicRepository.resolveAudio(song)
+                                if (resolved.videoId == song.videoId) return@launch
+                                val c = controller ?: return@launch
+                                val at = (0 until c.mediaItemCount)
+                                    .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
+                                    ?: return@launch
+                                c.replaceMediaItem(at, resolved.toMediaItem())
+                            }
+                        }
+                    }
                 }
             }
         }

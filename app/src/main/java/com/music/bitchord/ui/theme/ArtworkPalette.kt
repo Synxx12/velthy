@@ -104,23 +104,25 @@ fun rememberArtworkPalette(
 
     LaunchedEffect(imageUrl, artPx) {
         if (imageUrl == null || seed != null) return@LaunchedEffect
-        val request = ImageRequest.Builder(context)
-            // The size the artwork is *displayed* at, deliberately: the fetch
-            // then shares a disk-cache entry with the row, card or backdrop
-            // drawing the same artwork, instead of pulling its own copy over
-            // the wire — which is the difference between a surface that is
-            // tinted as it opens and one that turns colour a second later.
-            .data(imageUrl.artworkAt(artPx))
-            .size(PALETTE_PX) // palette quality holds up here, and it's far faster
-            .allowHardware(false) // Palette needs pixel access
-            .build()
-        val result = SingletonImageLoader.get(context).execute(request)
-        val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return@LaunchedEffect
-        // Quantising 128² pixels is not free, and this coroutine is on the main
-        // dispatcher — left there it stutters whatever is animating the surface in.
-        val found = withContext(Dispatchers.Default) { seedOf(bitmap) } ?: return@LaunchedEffect
-        seedCache[imageUrl] = found
-        seed = found
+        runCatching {
+            val request = ImageRequest.Builder(context)
+                // The size the artwork is *displayed* at, deliberately: the fetch
+                // then shares a disk-cache entry with the row, card or backdrop
+                // drawing the same artwork, instead of pulling its own copy over
+                // the wire — which is the difference between a surface that is
+                // tinted as it opens and one that turns colour a second later.
+                .data(imageUrl.artworkAt(artPx))
+                .size(PALETTE_PX) // palette quality holds up here, and it's far faster
+                .allowHardware(false) // Palette needs pixel access
+                .build()
+            val result = SingletonImageLoader.get(context).execute(request)
+            val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return@runCatching
+            // Quantising 128² pixels is not free, and this coroutine is on the main
+            // dispatcher — left there it stutters whatever is animating the surface in.
+            val found = withContext(Dispatchers.Default) { seedOf(bitmap) } ?: return@runCatching
+            seedCache[imageUrl] = found
+            seed = found
+        }
     }
 
     val target = seed?.toPalette(dark) ?: ArtworkPalette(

@@ -127,7 +127,11 @@ class PlaybackService : MediaSessionService() {
         ) { dataSpec ->
             val videoId = dataSpec.uri.getQueryParameter("v")
                 ?: return@Factory dataSpec
-            val downloadedUri = runBlocking { com.music.bitchord.download.Downloads.savedUri(this@PlaybackService, videoId) }
+            val downloadedUri = runBlocking {
+                runCatching {
+                    com.music.bitchord.download.Downloads.savedUri(this@PlaybackService, videoId)
+                }.getOrNull()
+            }
             if (downloadedUri != null) {
                 return@Factory dataSpec.buildUpon().setUri(downloadedUri).build()
             }
@@ -137,6 +141,13 @@ class PlaybackService : MediaSessionService() {
                 }
             } catch (e: TimeoutCancellationException) {
                 throw java.io.IOException("Stream resolution timed out for $videoId", e)
+            } catch (e: java.io.IOException) {
+                throw e
+            } catch (e: Throwable) {
+                throw java.io.IOException("Stream resolution failed for $videoId: ${e.message}", e)
+            }
+            if (streamUrl.isBlank()) {
+                throw java.io.IOException("Resolved empty stream URL for $videoId")
             }
             dataSpec.buildUpon()
                 .setUri(Uri.parse(streamUrl))
