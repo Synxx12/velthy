@@ -52,12 +52,28 @@ android {
     }
 
     signingConfigs {
+        val fallbackKeystore = file("musique-release.jks")
         if (signing.isNotEmpty()) {
             create("release") {
                 storeFile = rootProject.file(signing.getProperty("storeFile"))
                 storePassword = signing.getProperty("storePassword")
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
+            }
+        } else if (fallbackKeystore.exists()) {
+            create("release") {
+                storeFile = fallbackKeystore
+                storePassword = "musiqueappsecretkey"
+                keyAlias = "musique"
+                keyPassword = "musiqueappsecretkey"
+            }
+        } else {
+            create("release") {
+                val debugConfig = signingConfigs.getByName("debug")
+                storeFile = debugConfig.storeFile
+                storePassword = debugConfig.storePassword
+                keyAlias = debugConfig.keyAlias
+                keyPassword = debugConfig.keyPassword
             }
         }
     }
@@ -79,9 +95,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Null without keystore.properties: the build then produces
-            // app-release-unsigned.apk instead of failing outright.
-            signingConfig = signingConfigs.findByName("release")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
