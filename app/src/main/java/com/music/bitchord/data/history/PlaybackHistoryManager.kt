@@ -87,7 +87,43 @@ object PlaybackHistoryManager {
         storageFile = File(context.filesDir, HISTORY_FILE_NAME)
         scope.launch {
             loadFromDisk()
+            syncWithYouTube()
         }
+    }
+
+    /**
+     * Synchronizes listening history with the user's YouTube Music account (FEmusic_history)
+     * if signed in. Seamlessly merges cloud history with local playback storage.
+     */
+    suspend fun syncWithYouTube(): Boolean {
+        if (com.music.bitchord.data.innertube.Innertube.cookie == null) return false
+        return runCatching {
+            val response = com.music.bitchord.data.innertube.Innertube.browse("FEmusic_history")
+            val ytSongs = com.music.bitchord.data.innertube.InnertubeParser.collectSongsDeep(response)
+            if (ytSongs.isNotEmpty()) {
+                lock.withLock {
+                    val local = _history.value.toMutableList()
+                    val existingVideoIds = local.mapTo(HashSet()) { it.song.videoId }
+
+                    var offset = 60_000L
+                    val newCloudItems = ytSongs.filterNot { it.videoId in existingVideoIds }.map { song ->
+                        offset += 180_000L // spaced back in time
+                        HistoryItem(
+                            song = song,
+                            playedAt = System.currentTimeMillis() - offset,
+                        )
+                    }
+
+                    val merged = (local + newCloudItems).sortedByDescending { it.playedAt }.take(MAX_HISTORY_ITEMS)
+                    _history.value = merged
+                    saveToDisk(merged)
+                    Log.d(TAG, "Synced ${newCloudItems.size} new tracks from YouTube Music history.")
+                }
+                true
+            } else {
+                false
+            }
+        }.getOrDefault(false)
     }
 
     /**

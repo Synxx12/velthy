@@ -591,9 +591,25 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                 )
             } else if (page != null && (page.browseId == "app:history" || key == "app:history")) {
                 val historyItems by com.music.bitchord.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
+                var historyRefreshing by remember { mutableStateOf(false) }
+                val historyPull = rememberPullToRefreshState()
+                val syncHistory: () -> Unit = {
+                    scope.launch {
+                        historyRefreshing = true
+                        com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube()
+                        historyRefreshing = false
+                    }
+                }
+                LaunchedEffect(Unit) {
+                    syncHistory()
+                }
                 com.music.bitchord.ui.screens.HistoryScreen(
                     historyItems = historyItems,
                     listState = detailListState,
+                    signedIn = signedIn,
+                    refreshing = historyRefreshing,
+                    onRefresh = syncHistory,
+                    pullState = historyPull,
                     onSongClick = play,
                     onSongLongPress = { songActions = it },
                     onRemoveItem = { com.music.bitchord.data.history.PlaybackHistoryManager.removeEntry(it) },

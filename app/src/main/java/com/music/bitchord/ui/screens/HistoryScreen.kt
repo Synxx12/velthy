@@ -26,13 +26,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.ClearAll
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +48,7 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -67,12 +70,17 @@ import com.music.bitchord.data.history.PlaybackHistoryManager
 import com.music.bitchord.data.history.PlaybackHistoryManager.HistoryItem
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.artworkAt
+import com.music.bitchord.ui.components.PullToRefresh
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
     historyItems: List<HistoryItem>,
     listState: LazyListState,
+    signedIn: Boolean,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
+    pullState: PullToRefreshState,
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onRemoveItem: (HistoryItem) -> Unit,
@@ -110,96 +118,105 @@ fun HistoryScreen(
         )
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
+    PullToRefresh(
+        refreshing = refreshing,
+        onRefresh = onRefresh,
+        state = pullState,
+        modifier = modifier,
     ) {
-        // Top Header
-        item(key = "history_header") {
-            HistoryHeader(
-                totalCount = historyItems.size,
-                onBackClick = onBackClick,
-                onPlayAll = {
-                    if (historyItems.isNotEmpty()) {
-                        onSongClick(historyItems.map { it.song }, 0)
-                    }
-                },
-                onShuffle = {
-                    if (historyItems.isNotEmpty()) {
-                        val shuffled = historyItems.map { it.song }.shuffled()
-                        onSongClick(shuffled, 0)
-                    }
-                },
-                onClearClick = { showClearDialog = true },
-            )
-        }
-
-        if (historyItems.isEmpty()) {
-            item(key = "history_empty") {
-                EmptyHistoryState()
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+        ) {
+            // Top Header
+            item(key = "history_header") {
+                HistoryHeader(
+                    totalCount = historyItems.size,
+                    signedIn = signedIn,
+                    onBackClick = onBackClick,
+                    onRefreshClick = onRefresh,
+                    onPlayAll = {
+                        if (historyItems.isNotEmpty()) {
+                            onSongClick(historyItems.map { it.song }, 0)
+                        }
+                    },
+                    onShuffle = {
+                        if (historyItems.isNotEmpty()) {
+                            val shuffled = historyItems.map { it.song }.shuffled()
+                            onSongClick(shuffled, 0)
+                        }
+                    },
+                    onClearClick = { showClearDialog = true },
+                )
             }
-        } else {
-            grouped.forEach { section ->
-                // Section Title (Hari Ini, Kemarin, dll.)
-                item(key = "group_${section.group.name}") {
-                    Text(
-                        text = section.label,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 17.sp,
-                        ),
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
+
+            if (historyItems.isEmpty()) {
+                item(key = "history_empty") {
+                    EmptyHistoryState()
                 }
-
-                // Section Items with Swipe-to-Dismiss
-                items(
-                    items = section.items,
-                    key = { "hist_${it.song.videoId}_${it.playedAt}" },
-                ) { item ->
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { dismissValue ->
-                            if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
-                                onRemoveItem(item)
-                                true
-                            } else {
-                                false
-                            }
-                        },
-                    )
-
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        enableDismissFromStartToEnd = false,
-                        enableDismissFromEndToStart = true,
-                        backgroundContent = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(MaterialTheme.colorScheme.errorContainer)
-                                    .padding(horizontal = 24.dp),
-                                contentAlignment = Alignment.CenterEnd,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.DeleteOutline,
-                                    contentDescription = "Hapus",
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                )
-                            }
-                        },
-                    ) {
-                        HistorySongRow(
-                            item = item,
-                            onClick = {
-                                val allSongs = historyItems.map { it.song }
-                                val idx = allSongs.indexOfFirst { it.videoId == item.song.videoId }
-                                onSongClick(allSongs, if (idx >= 0) idx else 0)
-                            },
-                            onLongPress = { onSongLongPress(item.song) },
-                            onRemove = { onRemoveItem(item) },
+            } else {
+                grouped.forEach { section ->
+                    // Section Title (Hari Ini, Kemarin, dll.)
+                    item(key = "group_${section.group.name}") {
+                        Text(
+                            text = section.label,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp,
+                            ),
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                         )
+                    }
+
+                    // Section Items with Swipe-to-Dismiss
+                    items(
+                        items = section.items,
+                        key = { "hist_${it.song.videoId}_${it.playedAt}" },
+                    ) { item ->
+                        val dismissState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = { dismissValue ->
+                                if (dismissValue == SwipeToDismissBoxValue.EndToStart) {
+                                    onRemoveItem(item)
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                        )
+
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            enableDismissFromStartToEnd = false,
+                            enableDismissFromEndToStart = true,
+                            backgroundContent = {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.errorContainer)
+                                        .padding(horizontal = 24.dp),
+                                    contentAlignment = Alignment.CenterEnd,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        contentDescription = "Hapus",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    )
+                                }
+                            },
+                        ) {
+                            HistorySongRow(
+                                item = item,
+                                onClick = {
+                                    val allSongs = historyItems.map { it.song }
+                                    val idx = allSongs.indexOfFirst { it.videoId == item.song.videoId }
+                                    onSongClick(allSongs, if (idx >= 0) idx else 0)
+                                },
+                                onLongPress = { onSongLongPress(item.song) },
+                                onRemove = { onRemoveItem(item) },
+                            )
+                        }
                     }
                 }
             }
@@ -210,7 +227,9 @@ fun HistoryScreen(
 @Composable
 private fun HistoryHeader(
     totalCount: Int,
+    signedIn: Boolean,
     onBackClick: () -> Unit,
+    onRefreshClick: () -> Unit,
     onPlayAll: () -> Unit,
     onShuffle: () -> Unit,
     onClearClick: () -> Unit,
@@ -230,19 +249,29 @@ private fun HistoryHeader(
         ) {
             IconButton(onClick = onBackClick) {
                 Icon(
-                    imageVector = Icons.Rounded.ArrowBack,
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                     contentDescription = "Kembali",
                     tint = MaterialTheme.colorScheme.onBackground,
                 )
             }
 
-            if (totalCount > 0) {
-                IconButton(onClick = onClearClick) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onRefreshClick) {
                     Icon(
-                        imageVector = Icons.Rounded.DeleteOutline,
-                        contentDescription = "Hapus Riwayat",
+                        imageVector = Icons.Rounded.Sync,
+                        contentDescription = "Sinkronkan Riwayat YouTube",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                if (totalCount > 0) {
+                    IconButton(onClick = onClearClick) {
+                        Icon(
+                            imageVector = Icons.Rounded.DeleteOutline,
+                            contentDescription = "Hapus Riwayat",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -259,12 +288,31 @@ private fun HistoryHeader(
                 color = MaterialTheme.colorScheme.onBackground,
             )
 
-            Text(
-                text = if (totalCount > 0) "$totalCount lagu diputar" else "Riwayat masih kosong",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                if (signedIn) {
+                    Icon(
+                        imageVector = Icons.Rounded.CloudDone,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = if (totalCount > 0) "Tersinkronisasi dengan YouTube • $totalCount lagu" else "Tersinkronisasi dengan YouTube",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    Text(
+                        text = if (totalCount > 0) "Riwayat Lokal • $totalCount lagu" else "Riwayat masih kosong",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
 
         // Quick Controls (Play All & Shuffle)
