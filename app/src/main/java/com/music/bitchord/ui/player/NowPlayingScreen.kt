@@ -14,7 +14,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -91,6 +93,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -136,7 +139,7 @@ private const val ART_PX = 1200
 
 private val THUMB_SIZE = 54.dp
 private val HEADER_HEIGHT = 60.dp
-private val ART_TITLE_GAP = 20.dp
+private val ART_TITLE_GAP = 14.dp
 /** Only drags starting in this top strip reach the sheet and close the player. */
 private val DISMISS_STRIP_HEIGHT = 44.dp
 /** The player's side margin. Scrollable panels reach back across it. */
@@ -324,14 +327,13 @@ fun NowPlayingScreen(
     // The queue lives inside the player, Apple-style, rather than in a sheet.
     var queueOpen by remember { mutableStateOf(false) }
     var lyricsOpen by remember { mutableStateOf(false) }
-    var isArtExpanded by remember { mutableStateOf(false) }
+    var isArtExpanded by remember { mutableStateOf(true) }
     LaunchedEffect(song.videoId) {
         lyricsOpen = false
-        isArtExpanded = false
     }
 
-    BackHandler(enabled = isArtExpanded) { isArtExpanded = false }
-    BackHandler(enabled = lyricsOpen && !isArtExpanded) { lyricsOpen = false }
+    BackHandler(enabled = lyricsOpen) { lyricsOpen = false }
+    BackHandler(enabled = queueOpen) { queueOpen = false }
 
     val expandProgress by animateFloatAsState(
         targetValue = if (isArtExpanded && !queueOpen && !lyricsOpen) 1f else 0f,
@@ -451,7 +453,7 @@ fun NowPlayingScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(screenHeight * 0.68f)
+                    .height(screenHeight * 0.65f)
                     .align(Alignment.TopCenter)
                     .graphicsLayer {
                         alpha = expandProgress
@@ -463,7 +465,8 @@ fun NowPlayingScreen(
                         drawRect(
                             brush = Brush.verticalGradient(
                                 0.0f to Color.Black,
-                                0.48f to Color.Black,
+                                0.32f to Color.Black,
+                                0.65f to Color.Black.copy(alpha = 0.45f),
                                 1.0f to Color.Transparent,
                             ),
                             blendMode = BlendMode.DstIn,
@@ -487,6 +490,23 @@ fun NowPlayingScreen(
                 )
             }
         }
+
+        // Protective dark gradient scrim behind the bottom half of the player
+        // Ensures title, scrubber, and control buttons are crisp, contrast-safe, and never clash with background artwork
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(screenHeight * 0.58f)
+                .align(Alignment.BottomCenter)
+                .background(
+                    brush = Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.22f to Color.Black.copy(alpha = 0.28f),
+                        0.55f to Color.Black.copy(alpha = 0.62f),
+                        1.0f to Color.Black.copy(alpha = 0.82f),
+                    ),
+                ),
+        )
 
         Column(
             modifier = Modifier
@@ -514,13 +534,32 @@ fun NowPlayingScreen(
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // The only strip that passes drags through to the sheet, so the
-            // player closes from the handle and the space around it — not from
-            // a stray downward swipe on the artwork or the controls.
+            // The top handle strip: when lyrics or queue is open, dragging down or tapping here
+            // closes lyrics/queue smoothly. When in normal player mode, it dismisses the sheet.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(DISMISS_STRIP_HEIGHT),
+                    .height(DISMISS_STRIP_HEIGHT)
+                    .then(
+                        if (lyricsOpen || queueOpen) {
+                            Modifier
+                                .pointerInput(lyricsOpen, queueOpen) {
+                                    detectVerticalDragGestures { change, dragAmount ->
+                                        if (dragAmount > 6f) {
+                                            change.consume()
+                                            lyricsOpen = false
+                                            queueOpen = false
+                                        }
+                                    }
+                                }
+                                .clickable {
+                                    lyricsOpen = false
+                                    queueOpen = false
+                                }
+                        } else {
+                            Modifier
+                        }
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
@@ -556,7 +595,7 @@ fun NowPlayingScreen(
                     .weight(1f)
                     .widthIn(max = PLAYER_MAX_WIDTH)
                     .fillMaxWidth()
-                    .padding(top = 14.dp, bottom = 18.dp),
+                    .padding(top = 8.dp, bottom = 0.dp),
             ) {
                 // Both states collapse the header, but only one of them owns
                 // the panel below it.
@@ -569,17 +608,15 @@ fun NowPlayingScreen(
                 // credits down across the scrubber on anything but a phone.
                 val fullArt = minOf(maxWidth, maxHeight - ART_TITLE_GAP - HEADER_HEIGHT)
                     .coerceAtLeast(THUMB_SIZE)
-                // Artwork and the title row travel together as one block, so
-                // the pair sits centred while the queue is closed.
-                val groupTop = ((maxHeight - fullArt - ART_TITLE_GAP - HEADER_HEIGHT) / 2)
-                    .coerceAtLeast(0.dp)
+                val remainingVerticalSpace = (maxHeight - fullArt - ART_TITLE_GAP - HEADER_HEIGHT).coerceAtLeast(0.dp)
                 val artSize = lerp(fullArt, THUMB_SIZE, p)
-                val artTop = lerp(groupTop, 0.dp, p)
+                val artTop = lerp(remainingVerticalSpace / 2, 0.dp, p)
                 // Expanded and height-bound, the sleeve is narrower than the
                 // player and has to be centred in it; collapsed, it belongs
                 // hard against the left edge with the credits beside it.
                 val artStart = lerp((maxWidth - fullArt) / 2, 0.dp, p)
-                val titleTop = lerp(groupTop + fullArt + ART_TITLE_GAP, 0.dp, p)
+                // Anchors title cleanly at the bottom right above the lyrics preview
+                val titleTop = lerp(maxHeight - HEADER_HEIGHT, 0.dp, p)
                 val titleStart = lerp(0.dp, THUMB_SIZE + 12.dp, p)
 
                 var artLoaded by remember(song.videoId) { mutableStateOf(false) }
@@ -678,10 +715,16 @@ fun NowPlayingScreen(
                         // Shrinks as the header collapses, so the queue's
                         // heading doesn't have to compete with it.
                         val titleSize = lerp(20.sp, 16.sp, p)
+                        val textShadow = Shadow(
+                            color = Color.Black.copy(alpha = 0.75f),
+                            offset = Offset(0f, 2f),
+                            blurRadius = 6f,
+                        )
                         Text(
                             text = song.title,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontSize = titleSize,
+                                shadow = textShadow,
                             ),
                             color = Color.White,
                             maxLines = 1,
@@ -695,8 +738,9 @@ fun NowPlayingScreen(
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontWeight = FontWeight.W500,
                                 fontSize = titleSize,
+                                shadow = textShadow,
                             ),
-                            color = Color.White.copy(alpha = 0.55f),
+                            color = Color.White.copy(alpha = 0.75f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.opensPage(song.artistId, onOpenArtist),
@@ -719,11 +763,22 @@ fun NowPlayingScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    CircleGlyph(
-                        icon = Icons.Rounded.MoreHoriz,
-                        contentDescription = "More",
-                        onClick = onOpenMenu,
-                    )
+                    if (lyricsOpen || queueOpen) {
+                        CircleGlyph(
+                            icon = Icons.Rounded.Close,
+                            contentDescription = if (lyricsOpen) "Close Lyrics" else "Close Queue",
+                            onClick = {
+                                lyricsOpen = false
+                                queueOpen = false
+                            },
+                        )
+                    } else {
+                        CircleGlyph(
+                            icon = Icons.Rounded.MoreHoriz,
+                            contentDescription = "More",
+                            onClick = onOpenMenu,
+                        )
+                    }
                 }
 
                 if (lyricsOpen) {
@@ -782,11 +837,7 @@ fun NowPlayingScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        // The slider's touch target reaches ~13dp above the
-                        // drawn bar, so the strip reads as further off it than
-                        // it is. Nudged down into that dead space, the same way
-                        // the timestamps below are pulled back up into it.
-                        .offset(y = 6.dp)
+                        .padding(top = 4.dp, bottom = 8.dp)
                         .graphicsLayer { alpha = 1f - queueProgress },
                 ) {
                     if (!lyrics.isNullOrEmpty()) {
@@ -1638,7 +1689,7 @@ private fun InlineQueue(
                 // drag on itself and slides the whole player away.
                 .nestedScroll(keepScroll)
                 .fadingEdges(),
-            contentPadding = PaddingValues(horizontal = PLAYER_GUTTER),
+            contentPadding = PaddingValues(horizontal = PLAYER_GUTTER, vertical = 6.dp),
         ) {
             // What was asked for: the album, playlist or station the queue was
             // started from, plus anything queued by hand since.
@@ -1864,7 +1915,7 @@ private fun InlineQueueRow(
         label = "queueRowScale",
     )
     val elevation by animateDpAsState(
-        targetValue = if (dragging) 8.dp else 0.dp,
+        targetValue = if (dragging) 12.dp else 0.dp,
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "queueRowElevation",
     )
@@ -1872,19 +1923,26 @@ private fun InlineQueueRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .shadow(elevation, RoundedCornerShape(10.dp))
-            .clip(RoundedCornerShape(10.dp))
+            .shadow(elevation, RoundedCornerShape(12.dp), spotColor = Color.Black.copy(alpha = 0.6f))
+            .clip(RoundedCornerShape(12.dp))
+            .border(
+                width = if (dragging) 1.dp else 0.dp,
+                color = if (dragging) Color.White.copy(alpha = 0.22f) else Color.Transparent,
+                shape = RoundedCornerShape(12.dp),
+            )
             .background(
-                if (dragging) Color.White.copy(alpha = 0.12f)
-                else if (isCurrent) Color.White.copy(alpha = 0.05f)
-                else Color.Transparent,
+                when {
+                    dragging -> Color(0xFF1E1E22).copy(alpha = 0.96f)
+                    isCurrent -> Color.White.copy(alpha = 0.08f)
+                    else -> Color.Transparent
+                }
             )
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp, horizontal = 4.dp),
+            .padding(vertical = 5.dp, horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (draggable) {

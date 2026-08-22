@@ -104,6 +104,8 @@ object StreamResolver {
      * PO Token — the most reliable client as of July 2026.
      */
     private val CLIENTS = listOf(
+        PlayerClient.MWEB,
+        PlayerClient.WEB_REMIX,
         PlayerClient.ANDROID_MUSIC,
         PlayerClient.TVHTML5,
         PlayerClient.ANDROID_VR,
@@ -949,13 +951,13 @@ object StreamResolver {
 
     /**
      * How much the probe asks for, in one range.
-     * Sized to verify HTTP 206 partial content and valid media container bytes
-     * without blocking slow cellular connections.
+     * Matches STREAM_CHUNK_BYTES (2MB) so that URLs that fail on full chunk requests
+     * are caught immediately during probe and safely fallback.
      */
-    private const val PROBE_RANGE_BYTES = 128L * 1024
+    private const val PROBE_RANGE_BYTES = 2L * 1024 * 1024
 
     /** How much of the answer must actually arrive, to catch a stalled body. */
-    private const val PROBE_READ_BYTES = 8L * 1024
+    private const val PROBE_READ_BYTES = 16L * 1024
 
     // ---- Clients stood down -------------------------------------------------
 
@@ -1133,7 +1135,7 @@ object StreamResolver {
         withContext(Dispatchers.IO) {
             val waited = SystemClock.elapsedRealtime()
             val extractor = ServiceList.YouTube.getStreamExtractor(
-                "https://www.youtube.com/watch?v=$videoId",
+                ServiceList.YouTube.getStreamLHFactory().fromId(videoId),
             )
             extractor.fetchPage()
             val candidates = extractor.audioStreams

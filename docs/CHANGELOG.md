@@ -10,6 +10,32 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ---
 
+### [v1.3.3] - 2026-08-22
+
+#### 🎨 UI, Gestures & Animasi
+- **Navigasi & Gesture Penutupan Lirik/Antrean yang Lebih Intuitif**:
+  - Mengubah perilaku handle bar di bagian atas saat panel lirik/antrean terbuka: geser ke bawah (*swipe down*) atau tap pada handle atas kini **menutup panel lirik/antrean** kembali ke player, bukan menutup seluruh sheet player.
+  - Mengubah ikon menu header kanan atas menjadi tombol **Close (X)** saat lirik atau antrean aktif agar pengguna dapat menutup panel lirik langsung dari atas dengan sekali tap.
+- **Default Immersive Full Artwork Player**:
+  - Mengatur mode artwork cover album edge-to-edge full screen sebagai tampilan standar bawaan saat player dibuka, dengan transisi halus dan persistensi antarlagu.
+- **Optimalisasi Spacing Player & Lyrics Preview Touch Target**:
+  - Menggeser baris *lyrics preview* ke atas menjauhi area scrubber bar untuk mencegah sentuhan lirik tidak sengaja menggeser posisi waktu lagu.
+  - Memangkas jarak kosong (*dead space*) antara judul & nama artis dengan baris preview lirik sehingga tata letak player lebih proporsional, padat, dan rapi.
+- **Penyempurnaan Visual & Kontras Player Controls (Protective Bottom Scrim & Text Shadow)**:
+  - Menambahkan lapisan *protective dark gradient scrim* halus di separuh bawah layar player agar teks judul, artis, scrubber, dan tombol play/pause selalu memiliki kontras tinggi dan tidak bertabrakan dengan gambar cover album yang terang.
+  - Memperhalus kurva gradien vertikal cover album edge-to-edge agar bertransisi mulus ke dalam backdrop mesh player.
+  - Menambahkan *soft typography drop shadow* pada judul lagu dan artis untuk memastikan teks tetap tajam dan mudah dibaca pada kondisi cover album apapun.
+- **Peningkatan Visual Drag & Reorder Antrean (Fluid Floating Card)**:
+  - Mengubah background baris antrean yang sedang digeser menjadi solid frosted dark surface (`#1E1E22` 96% opacity) dengan border aksen lembut dan soft drop shadow untuk mencegah teks dan cover baris di bawahnya tembus pandang atau bertumpukan saat digeser.
+  - Memperhalus padding vertikal dan sudut melengkung `12.dp` yang menyatu rapi dengan backdrop player.
+
+#### 🌐 Client-Side & Innertube
+- **MWEB & WEB_REMIX Stream Resolution**: Menambahkan client identitas `MWEB` dan `WEB_REMIX` ke daftar resolver `StreamResolver.kt` sehingga URL stream terpecahkan secara instan dengan decipher signature otomatis.
+- **NewPipe Extractor Direct ID Resolution**: Memperbaiki pemanggilan `extractStream` dengan `fromId(videoId)` langsung untuk mencegah kegagalan ekstraksi URLDecoder di Android 8.0–12.
+- **Penyelarasan Tag In-App Update Checker**: Memperbarui parser rilis pada `AppUpdateChecker.kt` agar memprioritaskan tag `native-v*` dan mengabaikan tag rilis versi lawas edisi Flutter (`v1.0.*`).
+
+---
+
 ### [v1.3.2] - 2026-08-22
 
 #### 🐛 Bug Fixes

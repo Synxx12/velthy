@@ -70,10 +70,10 @@ object AppUpdateChecker {
                 val releaseNotes = obj["body"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 val publishedAt = obj["published_at"]?.jsonPrimitive?.contentOrNull.orEmpty()
 
-                // Check for native release tags
+                // Check for native release tags (native-v1.3.x)
                 val versionStr = when {
                     tag.startsWith("native-v") -> tag.removePrefix("native-v")
-                    tag.startsWith("v") && !tag.contains("cloud") -> tag.removePrefix("v")
+                    tag.startsWith("v") && !tag.contains("cloud") && !tag.startsWith("v1.0.") -> tag.removePrefix("v")
                     else -> null
                 } ?: continue
 
@@ -84,14 +84,26 @@ object AppUpdateChecker {
 
                     val assets = obj["assets"]?.jsonArray
                     if (assets != null) {
-                        for (assetEl in assets) {
-                            val assetObj = assetEl.jsonObject
-                            val name = assetObj["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                            if (name.endsWith(".apk", ignoreCase = true)) {
-                                apkUrl = assetObj["browser_download_url"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                apkSize = assetObj["size"]?.jsonPrimitive?.longOrNull ?: 0L
-                                break
-                            }
+                        // 1. Prefer versioned client APK: Musique-vX.X-client.apk
+                        val preferred = assets.firstOrNull { assetEl ->
+                            val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
+                            name.endsWith(".apk", ignoreCase = true) && 
+                                name.contains("client", ignoreCase = true) && 
+                                !name.contains("latest", ignoreCase = true)
+                        } ?: assets.firstOrNull { assetEl ->
+                            // 2. Fallback: any client APK
+                            val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
+                            name.endsWith(".apk", ignoreCase = true) && name.contains("client", ignoreCase = true)
+                        } ?: assets.firstOrNull { assetEl ->
+                            // 3. Fallback: standard APK asset
+                            val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
+                            name.endsWith(".apk", ignoreCase = true) && !name.contains("cloud", ignoreCase = true)
+                        }
+
+                        if (preferred != null) {
+                            val assetObj = preferred.jsonObject
+                            apkUrl = assetObj["browser_download_url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                            apkSize = assetObj["size"]?.jsonPrimitive?.longOrNull ?: 0L
                         }
                     }
 

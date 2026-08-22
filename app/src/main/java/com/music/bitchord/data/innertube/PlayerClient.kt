@@ -204,6 +204,15 @@ data class PlayerClient(
             needsSignatureTimestamp = true,
         )
 
+        val MWEB = PlayerClient(
+            clientName = "MWEB",
+            clientVersion = "2.20240101.00.00",
+            clientId = "2",
+            userAgent = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            origin = "https://m.youtube.com",
+            needsSignatureTimestamp = true,
+        )
+
         private val WEB = PlayerClient(
             clientName = "WEB",
             clientVersion = "2.20260708.00.00",
@@ -247,7 +256,8 @@ data class PlayerClient(
                 name.startsWith("ANDROID") -> ANDROID
                 name.startsWith("TVHTML5") -> TVHTML5
                 name == "WEB_REMIX" -> WEB_REMIX
-                name.startsWith("WEB") || name == "MWEB" -> WEB
+                name == "MWEB" || name.startsWith("MWEB") -> MWEB
+                name.startsWith("WEB") -> WEB
                 else -> IOS
             }
         }
