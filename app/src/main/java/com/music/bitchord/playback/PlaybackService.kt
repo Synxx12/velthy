@@ -608,7 +608,7 @@ class PlaybackService : MediaSessionService() {
             enableFloatOutput: Boolean,
             enableAudioTrackPlaybackParams: Boolean,
         ): AudioSink = DefaultAudioSink.Builder(context)
-            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableFloatOutput(false)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(

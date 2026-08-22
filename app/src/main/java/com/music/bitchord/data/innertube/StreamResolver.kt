@@ -906,12 +906,14 @@ object StreamResolver {
         }
         return try {
             prober.newCall(builder.build()).execute().use { response ->
+                val contentType = response.header("Content-Type").orEmpty().lowercase()
+                val isTextOrHtml = contentType.startsWith("text/") || contentType.contains("html")
                 when {
                     response.code in REFUSAL_CODES -> Probe.REFUSED
                     response.code !in 200..299 && response.code != 416 -> Probe.UNREACHABLE
                     // A refusal dressed as a success: an error page, or the
-                    // consent/captcha interstitial, rather than audio.
-                    response.header("Content-Type")?.startsWith("audio/") != true -> Probe.REFUSED
+                    // consent/captcha interstitial, rather than media stream.
+                    isTextOrHtml -> Probe.REFUSED
                     // Headers can arrive long before a body that never does —
                     // exactly the shaping this whole path exists to sidestep.
                     // Insisting on the bytes is the point: a trickle that
@@ -943,20 +945,17 @@ object StreamResolver {
             .build()
     }
 
-    private const val PROBE_TIMEOUT_SECONDS = 6L
+    private const val PROBE_TIMEOUT_SECONDS = 8L
 
     /**
      * How much the probe asks for, in one range.
-     *
-     * Has to match what the real fetch asks for ([ChunkedDataSource] and
-     * [AudioCache] both fetch two-megabyte ranges), or a URL that grudges real
-     * listening-sized requests — while still serving token ones — sails through
-     * the probe and dies on the playback path instead.
+     * Sized to verify HTTP 206 partial content and valid media container bytes
+     * without blocking slow cellular connections.
      */
-    private const val PROBE_RANGE_BYTES = 2L * 1024 * 1024
+    private const val PROBE_RANGE_BYTES = 128L * 1024
 
     /** How much of the answer must actually arrive, to catch a stalled body. */
-    private const val PROBE_READ_BYTES = 16L * 1024
+    private const val PROBE_READ_BYTES = 8L * 1024
 
     // ---- Clients stood down -------------------------------------------------
 
