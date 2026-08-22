@@ -8,6 +8,10 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ### [Unreleased]
 
+---
+
+### [v1.3.2] - 2026-08-22
+
 #### 🐛 Bug Fixes
 - **Perbaikan Buffering / Loading Tak Berhenti di Android 8–11 (Redmi Note 8 Pro / MediaTek & Older HALs)**:
   - Mematikan output `Float PCM` di `DefaultAudioSink` (`setEnableFloatOutput(false)`) dan mengunci ke standard 16-bit PCM untuk mencegah driver hardware AudioTrack MediaTek / Android 10 membeku (*freeze/hang*) saat menulis buffer audio.
