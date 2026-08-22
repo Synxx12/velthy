@@ -100,8 +100,8 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > app/keystore.jks
-            echo "storeFile=../app/keystore.jks" > keystore.properties
+            echo "$KEYSTORE_BASE64" | base64 -d > app/musique-release.jks
+            echo "storeFile=app/musique-release.jks" > keystore.properties
             echo "storePassword=$KEYSTORE_PASSWORD" >> keystore.properties
             echo "keyAlias=$KEY_ALIAS" >> keystore.properties
             echo "keyPassword=$KEY_PASSWORD" >> keystore.properties
@@ -110,12 +110,9 @@ jobs:
       # ── 6. BUILD PRODUCTION APK RELEASE ──
       - name: Build Android APK
         run: |
-          ./gradlew assembleProdRelease --stacktrace || ./gradlew assembleDevDebug --stacktrace
+          ./gradlew assembleProdRelease --stacktrace
           
-          APK_PROD=$(find app/build/outputs/apk/prod/release/ -name "*.apk" 2>/dev/null | head -n 1)
-          APK_DEV=$(find app/build/outputs/apk/dev/debug/ -name "*.apk" 2>/dev/null | head -n 1)
-          
-          APK_SOURCE="${APK_PROD:-$APK_DEV}"
+          APK_SOURCE=$(find app/build/outputs/apk/prod/release/ -name "*.apk" 2>/dev/null | head -n 1)
           APK_DEST="Musique-v${DISPLAY_VERSION}-client.apk"
           APK_LATEST="Musique-client-latest.apk"
           

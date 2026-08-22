@@ -55,7 +55,9 @@ android {
         val fallbackKeystore = file("musique-release.jks")
         if (signing.isNotEmpty()) {
             create("release") {
-                storeFile = rootProject.file(signing.getProperty("storeFile"))
+                val path = signing.getProperty("storeFile")
+                val resolved = if (file(path).exists()) file(path) else rootProject.file(path)
+                storeFile = resolved
                 storePassword = signing.getProperty("storePassword")
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
