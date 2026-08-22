@@ -251,6 +251,7 @@ class PlaybackService : MediaSessionService() {
                 val durationMs = exoPlayer.duration.takeIf { it > 0 }
                 scrobbleManager?.onSongStart(newSong, durationMs)
                 LiveStatsReporter.report(newSong)
+                com.music.bitchord.data.history.PlaybackHistoryManager.recordPlay(newSong)
 
                 // ListenBrainz: submit finished for old song, playing_now for new song.
                 // The finished listen only counts when the track actually ended —

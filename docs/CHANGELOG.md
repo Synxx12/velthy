@@ -8,6 +8,15 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ### [Unreleased]
 
+#### ✨ Fitur Baru
+- **Halaman Riwayat Mendengarkan (Listening History) Parity Apple Music & YouTube Music**:
+  - Menghadirkan halaman riwayat interaktif (`HistoryScreen.kt`) dengan pengelompokan tanggal otomatis (*Hari Ini*, *Kemarin*, *Minggu Ini*, *Bulan Ini*, *Sebelumnya*).
+  - Dilengkapi kontrol cepat **Play All** (Putar Semua), **Shuffle** (Acak Riwayat), dan tombol hapus riwayat (*Clear History*).
+  - Mendukung gesture geser (*swipe-to-dismiss*) untuk menghapus lagu tertentu dari riwayat, menu 3-titik, dan kartu pintasan di tab **Library**.
+- **Sinkronisasi Otomatis YouTube Watch History & Local Playback Storage**:
+  - `PlaybackHistoryManager.kt` mencatat seluruh pemutaran lokal secara persisten di penyimpanan perangkat dengan deduplikasi cerdas.
+  - Setiap lagu yang berbunyi terhubung langsung dan disinkronkan ke riwayat akun YouTube Music pengguna via `PlaybackTracker` (`videostatsPlaybackUrl` & `videostatsWatchtimeUrl`).
+
 #### 🌐 Client-Side & Innertube
 - **Zero-Rate-Limit In-App Update Resolution**: Mengimplementasikan pengecekan rilis via HTTP 302 `/releases/latest` redirect header pada `AppUpdateChecker.kt` untuk melenyapkan kendala limitasi kuota 60 request/jam GitHub API REST tanpa autentikasi, sehingga pembaruan versi APK terdeteksi 100% realtime di seluruh jaringan/perangkat.
 

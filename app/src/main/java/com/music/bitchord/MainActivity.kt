@@ -589,6 +589,18 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     onAccountScrobbling = { showAccountScrobbling = true },
                     contentPadding = listPadding,
                 )
+            } else if (page != null && (page.browseId == "app:history" || key == "app:history")) {
+                val historyItems by com.music.bitchord.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
+                com.music.bitchord.ui.screens.HistoryScreen(
+                    historyItems = historyItems,
+                    listState = detailListState,
+                    onSongClick = play,
+                    onSongLongPress = { songActions = it },
+                    onRemoveItem = { com.music.bitchord.data.history.PlaybackHistoryManager.removeEntry(it) },
+                    onClearAll = { com.music.bitchord.data.history.PlaybackHistoryManager.clearHistory() },
+                    onBackClick = { viewModel.closeDetail() },
+                    contentPadding = listPadding,
+                )
             } else if (page != null) {
                 DetailScreen(
                     page = page,

@@ -852,6 +852,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         else UiState.Success(songs)
                     }
                 }
+                browseId == "app:history" -> {
+                    val songs = com.music.bitchord.data.history.PlaybackHistoryManager.history.value.map { it.song }
+                    if (songs.isEmpty()) UiState.Error("Belum ada riwayat pemutaran")
+                    else UiState.Success(songs)
+                }
                 resolved == BrowseType.ARTIST -> {
                     YtMusicRepository.artistPage(browseId).fold(
                         onSuccess = { page ->
@@ -919,6 +924,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         if (songs.isEmpty()) UiState.Error("No audio files found on device")
                         else UiState.Success(songs)
                     }
+                }
+                "app:history" -> {
+                    val songs = com.music.bitchord.data.history.PlaybackHistoryManager.history.value.map { it.song }
+                    if (songs.isEmpty()) UiState.Error("Belum ada riwayat pemutaran")
+                    else UiState.Success(songs)
                 }
                 else -> return@launch
             }

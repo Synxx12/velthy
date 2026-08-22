@@ -92,6 +92,13 @@ fun LibraryScreen(
                                 videoId = null,
                                 browseId = "local:all",
                             ),
+                            ShelfItem(
+                                title = "History",
+                                subtitle = "Listening history",
+                                thumbnailUrl = null,
+                                videoId = null,
+                                browseId = "app:history",
+                            ),
                         ),
                     ),
                     onItemClick = onShelfItemClick,

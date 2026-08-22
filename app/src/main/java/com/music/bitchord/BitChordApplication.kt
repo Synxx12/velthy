@@ -35,6 +35,7 @@ class BitChordApplication : Application(), SingletonImageLoader.Factory {
         DolbyAtmos.init(this)
         SearchHistory.init(this)
         LastPlayed.init(this)
+        com.music.bitchord.data.history.PlaybackHistoryManager.init(this)
         // What's already saved to Downloads, so the song menu can say so
         // without a media-store query per row.
         Downloads.init(this)
