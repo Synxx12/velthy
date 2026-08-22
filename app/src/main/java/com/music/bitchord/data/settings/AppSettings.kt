@@ -82,6 +82,9 @@ object AppSettings {
     /** Drops haze blur (status bar, mini player, bottom fade, lyrics focus) for a solid-fill look. */
     val reduceDynamicBlur = MutableStateFlow(false)
 
+    /** Broadcasts anonymous now-playing pings to Musique web live stats ticker. */
+    val shareLiveStats = MutableStateFlow(true)
+
     /** Disk budget for cached audio. [AudioCache][com.music.bitchord.playback.AudioCache] evicts past it. */
     val audioCacheLimitBytes = MutableStateFlow(DEFAULT_CACHE_LIMIT_BYTES)
 
@@ -129,6 +132,7 @@ object AppSettings {
         stopOnTaskRemoved.value = prefs.getBoolean(KEY_STOP_ON_TASK_REMOVED, false)
         reduceAnimation.value = prefs.getBoolean(KEY_REDUCE_ANIMATION, false)
         reduceDynamicBlur.value = prefs.getBoolean(KEY_REDUCE_BLUR, false)
+        shareLiveStats.value = prefs.getBoolean(KEY_SHARE_LIVE_STATS, true)
         audioCacheLimitBytes.value = prefs.getLong(KEY_CACHE_LIMIT, DEFAULT_CACHE_LIMIT_BYTES)
             .coerceIn(DEFAULT_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES)
         lastfmEnabled.value = prefs.getBoolean(KEY_LASTFM_ENABLED, false)
@@ -254,6 +258,11 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_REDUCE_BLUR, value).apply()
     }
 
+    fun setShareLiveStats(value: Boolean) {
+        shareLiveStats.value = value
+        prefs.edit().putBoolean(KEY_SHARE_LIVE_STATS, value).apply()
+    }
+
     /** Clamped to [DEFAULT_CACHE_LIMIT_BYTES]..[MAX_CACHE_LIMIT_BYTES] — the floor is the default, not zero. */
     fun setAudioCacheLimitBytes(value: Long) {
         val clamped = value.coerceIn(DEFAULT_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES)
@@ -343,6 +352,7 @@ object AppSettings {
     private const val KEY_CACHE_LIMIT = "audio_cache_limit_bytes"
     private const val KEY_REDUCE_ANIMATION = "reduce_animation"
     private const val KEY_REDUCE_BLUR = "reduce_dynamic_blur"
+    private const val KEY_SHARE_LIVE_STATS = "share_live_stats"
 
     private const val KEY_LASTFM_ENABLED = "lastfm_enabled"
     private const val KEY_LASTFM_USERNAME = "lastfm_username"

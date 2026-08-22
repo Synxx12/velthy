@@ -33,6 +33,7 @@ import androidx.media3.session.MediaSessionService
 import com.music.bitchord.MainActivity
 import com.music.bitchord.R
 import com.music.bitchord.data.Http
+import com.music.bitchord.data.LiveStatsReporter
 import com.music.bitchord.data.NerdStats
 import com.music.bitchord.data.innertube.PlaybackTracker
 import com.music.bitchord.data.innertube.PlayerClient
@@ -213,6 +214,7 @@ class PlaybackService : MediaSessionService() {
                 // transition — a track started from idle or resumed from pause
                 // otherwise stays silent on the site.
                 if (isPlaying && song != null) {
+                    LiveStatsReporter.report(song)
                     if (listenBrainzSong == null) {
                         listenBrainzSong = song
                         listenBrainzStartMs = System.currentTimeMillis()
@@ -237,6 +239,7 @@ class PlaybackService : MediaSessionService() {
                 val newSong = mediaItem?.toSong()
                 val durationMs = exoPlayer.duration.takeIf { it > 0 }
                 scrobbleManager?.onSongStart(newSong, durationMs)
+                LiveStatsReporter.report(newSong)
 
                 // ListenBrainz: submit finished for old song, playing_now for new song.
                 // The finished listen only counts when the track actually ended —

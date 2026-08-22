@@ -129,6 +129,7 @@ fun SettingsScreen(
     val stopOnTaskRemoved by AppSettings.stopOnTaskRemoved.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val shareLiveStats by AppSettings.shareLiveStats.collectAsStateWithLifecycle()
     val speed by AppSettings.playbackSpeed.collectAsStateWithLifecycle()
     val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
     val sessionId by AppSettings.audioSessionId.collectAsStateWithLifecycle()
@@ -321,6 +322,25 @@ fun SettingsScreen(
                     )
                 },
                 onClick = { AppSettings.setStopOnTaskRemoved(!stopOnTaskRemoved) },
+            )
+        }
+
+        SettingsGroup(header = "Privacy & Community") {
+            SettingsRow(
+                icon = Icons.Rounded.Cloud,
+                title = "Share to Web Live Ticker",
+                subtitle = "Broadcast anonymous song metadata to the live now-playing feed on Musique Web. Zero personal info or ID tracked.",
+                trailing = {
+                    Switch(
+                        checked = shareLiveStats,
+                        onCheckedChange = AppSettings::setShareLiveStats,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setShareLiveStats(!shareLiveStats) },
             )
         }
 
