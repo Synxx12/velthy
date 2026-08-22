@@ -42,12 +42,62 @@ object AppUpdateChecker {
 
     suspend fun check(force: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
         runCatching {
-            val update = fetchLatestNativeRelease(RELEASES_API_URL)
+            // 1. Direct Zero-Rate-Limit Redirect Check (100% realtime, never rate limits)
+            val redirectUpdate = fetchLatestFromRedirect()
+
+            // 2. Try GitHub REST API for detailed release notes & asset metadata
+            val apiUpdate = fetchLatestNativeRelease(RELEASES_API_URL)
                 ?: fetchLatestNativeRelease(FALLBACK_API_URL)
-            if (update != null) {
-                _available.value = update
+
+            val finalUpdate = when {
+                apiUpdate != null -> apiUpdate
+                redirectUpdate != null -> redirectUpdate
+                else -> null
             }
-            update
+
+            if (finalUpdate != null) {
+                _available.value = finalUpdate
+            }
+            finalUpdate
+        }.getOrNull()
+    }
+
+    /**
+     * Resolves the latest release via GitHub's HTTP 302 /releases/latest redirect.
+     * This bypasses GitHub API's 60 req/hour rate limit completely and is 100% realtime.
+     */
+    private fun fetchLatestFromRedirect(): UpdateInfo? {
+        return runCatching {
+            val noRedirectClient = Http.client.newBuilder()
+                .followRedirects(false)
+                .build()
+            val request = Request.Builder()
+                .url("https://github.com/Synxx12/musique-app-releases/releases/latest")
+                .header("User-Agent", "Mozilla/5.0 (Android) MusiqueNative")
+                .build()
+            val response = noRedirectClient.newCall(request).execute()
+            val location = response.header("Location").orEmpty()
+            if (response.code in 300..399 && location.isNotBlank()) {
+                val tag = location.substringAfterLast("/")
+                val versionStr = when {
+                    tag.startsWith("native-v") -> tag.removePrefix("native-v")
+                    tag.startsWith("v") && !tag.contains("cloud") && !tag.startsWith("v1.0.") -> tag.removePrefix("v")
+                    else -> null
+                } ?: return null
+
+                if (isNewer(versionStr, BuildConfig.VERSION_NAME)) {
+                    val apkUrl = "https://github.com/Synxx12/musique-app-releases/releases/download/$tag/Musique-v$versionStr-client.apk"
+                    return UpdateInfo(
+                        version = versionStr,
+                        releaseUrl = location,
+                        apkDownloadUrl = apkUrl,
+                        fileSize = 0L,
+                        releaseNotes = "Versi terbaru Musique Native v$versionStr telah tersedia di GitHub Releases.",
+                        publishedAt = "",
+                    )
+                }
+            }
+            null
         }.getOrNull()
     }
 

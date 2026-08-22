@@ -1,4 +1,4 @@
-# Interactive Dev Runner for Musique (Flutter-like experience)
+# Interactive Dev Runner for Musique (Single-Key Responsive)
 param(
     [string]$TargetDevice = ""
 )
@@ -29,48 +29,26 @@ function Get-ConnectedDevices {
 
 $Global:SelectedDevice = $TargetDevice
 
-function Select-TargetDevice {
+function Select-TargetDevice ([bool]$Interactive = $false) {
     $devices = Get-ConnectedDevices
+    
     if ($devices.Count -eq 0) {
-        Write-Host "[!] Tidak ada perangkat/emulator ADB yang terdeteksi." -ForegroundColor Red
+        Write-Host "`n[!] Tidak ada perangkat/emulator ADB yang aktif." -ForegroundColor Red
+        Write-Host "    Pastikan Emulator atau HP dengan USB/Wireless Debugging sudah menyala.`n" -ForegroundColor Yellow
         $Global:SelectedDevice = $null
         return $null
     }
-    if ($devices.Count -eq 1) {
-        $Global:SelectedDevice = $devices[0].Id
-        $name = if ($devices[0].IsEmulator) { "Emulator ($($devices[0].Id))" } else { "$($devices[0].Model) ($($devices[0].Id))" }
-        Write-Host "[*] Target Device: $name" -ForegroundColor Green
+
+    # Jika hanya ada 1 perangkat dan tidak diminta memilih ulang
+    if ($devices.Count -eq 1 -and -not $Interactive) {
+        $d = $devices[0]
+        $tag = if ($d.IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
+        $Global:SelectedDevice = $d.Id
+        Write-Host "[*] Target Terdeteksi: $tag $($d.Model) ($($d.Id))`n" -ForegroundColor Green
         return $Global:SelectedDevice
     }
 
-    # Jika ada lebih dari 1 perangkat dan belum dipilih
-    if (-not $Global:SelectedDevice) {
-        # Prioritaskan Emulator jika aktif
-        $emu = $devices | Where-Object { $_.IsEmulator } | Select-Object -First 1
-        if ($emu) {
-            $Global:SelectedDevice = $emu.Id
-            Write-Host "[*] Otomatis memilih Emulator: $($emu.Id)" -ForegroundColor Green
-        } else {
-            $Global:SelectedDevice = $devices[0].Id
-            Write-Host "[*] Target Device: $($devices[0].Model) ($($devices[0].Id))" -ForegroundColor Green
-        }
-    } else {
-        # Validasi apakah device yang dipilih masih tersambung
-        $match = $devices | Where-Object { $_.Id -eq $Global:SelectedDevice }
-        if (-not $match) {
-            $Global:SelectedDevice = $devices[0].Id
-            Write-Host "[!] Device sebelumnya terputus. Beralih ke: $($devices[0].Id)" -ForegroundColor Yellow
-        }
-    }
-    return $Global:SelectedDevice
-}
-
-function Show-DeviceMenu {
-    $devices = Get-ConnectedDevices
-    if ($devices.Count -eq 0) {
-        Write-Host "[!] Tidak ada perangkat tersambung." -ForegroundColor Red
-        return
-    }
+    # Jika ada lebih dari 1 perangkat (atau dipanggil interaktif)
     Write-Host "`n--- Pilih Target Perangkat ---" -ForegroundColor Cyan
     for ($i = 0; $i -lt $devices.Count; $i++) {
         $d = $devices[$i]
@@ -78,19 +56,38 @@ function Show-DeviceMenu {
         $current = if ($d.Id -eq $Global:SelectedDevice) { " (AKTIF)" } else { "" }
         Write-Host "  [$($i + 1)] $tag $($d.Model) - $($d.Id)$current" -ForegroundColor $(if ($current) { "Green" } else { "White" })
     }
-    $choice = Read-Host "Pilih nomor perangkat (1-$($devices.Count))"
-    $idx = [int]$choice - 1
-    if ($idx -ge 0 -and $idx -lt $devices.Count) {
-        $Global:SelectedDevice = $devices[$idx].Id
-        Write-Host "[OK] Target dialihkan ke: $($devices[$idx].Model) ($($devices[$idx].Id))`n" -ForegroundColor Green
-    } else {
-        Write-Host "[!] Pilihan tidak valid. Tetap menggunakan: $Global:SelectedDevice" -ForegroundColor Yellow
+    Write-Host "Tekan angka pilihan (1-$($devices.Count)): " -NoNewline -ForegroundColor Yellow
+
+    $key = [System.Console]::ReadKey($true)
+    $char = $key.KeyChar.ToString()
+    if ($char -match "^[1-9]$") {
+        $idx = [int]$char - 1
+        if ($idx -ge 0 -and $idx -lt $devices.Count) {
+            $Global:SelectedDevice = $devices[$idx].Id
+            $tag = if ($devices[$idx].IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
+            Write-Host "$char" -ForegroundColor Green
+            Write-Host "[OK] Target dipilih: $tag $($devices[$idx].Model) ($($devices[$idx].Id))`n" -ForegroundColor Green
+            return $Global:SelectedDevice
+        }
     }
+
+    # Fallback default ke perangkat pertama jika input lain
+    $Global:SelectedDevice = $devices[0].Id
+    Write-Host "1 (Default)`n" -ForegroundColor DarkGray
+    return $Global:SelectedDevice
 }
 
 function Run-BuildAndLaunch {
-    $device = Select-TargetDevice
-    Write-Host "`n[+] Mengompilasi dev build..." -ForegroundColor Green
+    if (-not $Global:SelectedDevice) {
+        $Global:SelectedDevice = Select-TargetDevice
+        if (-not $Global:SelectedDevice) {
+            Write-Host "[X] Build dibatalkan: tidak ada target device." -ForegroundColor Red
+            return
+        }
+    }
+
+    $device = $Global:SelectedDevice
+    Write-Host "[+] Mengompilasi dev build..." -ForegroundColor Green
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     
     .\gradlew.bat assembleDevDebug
@@ -98,15 +95,10 @@ function Run-BuildAndLaunch {
         $apkPath = Get-ChildItem -Path "app\build\outputs\apk\dev\debug\*.apk" | Select-Object -First 1
         
         if ($apkPath -and (Test-Path $apkPath.FullName)) {
-            if ($device) {
-                Write-Host "[+] Memasang APK ($($apkPath.Name)) ke $device..." -ForegroundColor Cyan
-                adb -s $device install -r -d -t $apkPath.FullName
-                adb -s $device shell am start -n com.musique.client.dev/com.music.bitchord.MainActivity | Out-Null
-            } else {
-                Write-Host "[+] Memasang APK ($($apkPath.Name)) via ADB..." -ForegroundColor Cyan
-                adb install -r -d -t $apkPath.FullName
-                adb shell am start -n com.musique.client.dev/com.music.bitchord.MainActivity | Out-Null
-            }
+            Write-Host "[+] Memasang APK ($($apkPath.Name)) ke $device..." -ForegroundColor Cyan
+            adb -s $device install -r -d -t $apkPath.FullName
+            adb -s $device shell am start -n com.musique.client.dev/com.music.bitchord.MainActivity | Out-Null
+            
             $stopwatch.Stop()
             Write-Host "[OK] Berhasil dipasang dan dibuka dalam $($stopwatch.Elapsed.TotalSeconds.ToString("0.0"))s!" -ForegroundColor Green
         } else {
@@ -119,35 +111,55 @@ function Run-BuildAndLaunch {
     }
 }
 
-# Jalankan build pertama kali saat script dibuka
+# 1. Pilih target device di awal jika ada lebih dari 1 perangkat
+$devices = Get-ConnectedDevices
+if ($devices.Count -gt 1) {
+    Select-TargetDevice -Interactive $true | Out-Null
+} else {
+    Select-TargetDevice | Out-Null
+}
+
+# 2. Jalankan build & launch pertama kali
 Run-BuildAndLaunch
 
+# 3. Main interactive loop
 while ($true) {
     Write-Host "`n----------------------------------------" -ForegroundColor DarkGray
-    Write-Host "Target saat ini: $($Global:SelectedDevice)" -ForegroundColor Magenta
-    Write-Host "Ketik 'r' (atau tekan Enter) untuk Reload ke target" -ForegroundColor Cyan
-    Write-Host "Ketik 'd' untuk Ganti Target Device (Emulator / HP)" -ForegroundColor Green
-    Write-Host "Ketik 'l' untuk melihat Logcat terbaru (40 baris)" -ForegroundColor Yellow
-    Write-Host "Ketik 'q' untuk keluar" -ForegroundColor Gray
+    Write-Host "Target: $($Global:SelectedDevice)" -ForegroundColor Magenta
+    Write-Host " [r] Reload  [d] Ganti Device  [l] Logcat  [c] Clear  [q] Keluar" -ForegroundColor Cyan
+    Write-Host " (Tekan hurufnya langsung tanpa perlu Enter)" -ForegroundColor DarkGray
     Write-Host "----------------------------------------" -ForegroundColor DarkGray
-    
-    $key = Read-Host "Pilihan"
-    
-    if ($key -eq "q" -or $key -eq "exit") {
-        Write-Host "Keluar dari dev runner. Sampai jumpa!" -ForegroundColor Yellow
+
+    $keyInfo = [System.Console]::ReadKey($true)
+    $keyChar = $keyInfo.KeyChar.ToString().ToLower()
+    $keyCode = $keyInfo.Key
+
+    if ($keyChar -eq "q" -or $keyCode -eq [System.ConsoleKey]::Escape) {
+        Write-Host "`nKeluar dari dev runner. Sampai jumpa! 👋" -ForegroundColor Yellow
         break
-    } elseif ($key -eq "d" -or $key -eq "device") {
-        Show-DeviceMenu
-    } elseif ($key -eq "l" -or $key -eq "logs") {
-        $device = Select-TargetDevice
-        Write-Host "`n--- Logcat Terbaru (40 Baris) dari $device ---" -ForegroundColor Yellow
-        if ($device) {
-            adb -s $device logcat -d -t 40 -s BitChord:V AndroidRuntime:E
+    } elseif ($keyChar -eq "d" -or $keyCode -eq [System.ConsoleKey]::Tab) {
+        Select-TargetDevice -Interactive $true
+    } elseif ($keyChar -eq "l") {
+        Write-Host "`n--- Logcat Terbaru (40 Baris) dari $Global:SelectedDevice ---" -ForegroundColor Yellow
+        if ($Global:SelectedDevice) {
+            adb -s $Global:SelectedDevice logcat -d -t 40 -s BitChord:V AndroidRuntime:E
         } else {
             adb logcat -d -t 40 -s BitChord:V AndroidRuntime:E
         }
-    } else {
-        # Default (Enter atau 'r') -> Rebuild & Deploy
+    } elseif ($keyChar -eq "c") {
+        Clear-Host
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host "   Musique Dev Runner (Live Dev)        " -ForegroundColor Yellow
+        Write-Host "========================================" -ForegroundColor Cyan
+    } elseif ($keyChar -eq "r" -or $keyCode -eq [System.ConsoleKey]::Enter -or $keyCode -eq [System.ConsoleKey]::Spacebar) {
         Run-BuildAndLaunch
+    } elseif ($keyChar -match "^[1-9]$") {
+        $devs = Get-ConnectedDevices
+        $idx = [int]$keyChar - 1
+        if ($idx -ge 0 -and $idx -lt $devs.Count) {
+            $Global:SelectedDevice = $devs[$idx].Id
+            $tag = if ($devs[$idx].IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
+            Write-Host "`n[OK] ⚡ Beralih langsung ke: $tag $($devs[$idx].Model) ($($devs[$idx].Id))`n" -ForegroundColor Green
+        }
     }
 }
