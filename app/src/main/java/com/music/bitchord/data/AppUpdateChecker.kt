@@ -87,18 +87,60 @@ object AppUpdateChecker {
 
                 if (isNewer(versionStr, BuildConfig.VERSION_NAME)) {
                     val apkUrl = "https://github.com/Synxx12/musique-app-releases/releases/download/$tag/Musique-v$versionStr-client.apk"
+                    val realSize = fetchContentLength(apkUrl)
+                    val realNotes = fetchReleaseNotesFromHtml(location).ifBlank {
+                        "Versi terbaru Musique Native v$versionStr telah dirilis dengan peningkatan performa dan stabilitas audio."
+                    }
+
                     return UpdateInfo(
                         version = versionStr,
                         releaseUrl = location,
                         apkDownloadUrl = apkUrl,
-                        fileSize = 0L,
-                        releaseNotes = "Versi terbaru Musique Native v$versionStr telah tersedia di GitHub Releases.",
+                        fileSize = realSize,
+                        releaseNotes = realNotes,
                         publishedAt = "",
                     )
                 }
             }
             null
         }.getOrNull()
+    }
+
+    /**
+     * Resolves the exact Content-Length in bytes from GitHub CDN via HTTP HEAD.
+     */
+    private fun fetchContentLength(url: String): Long {
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .head()
+                .header("User-Agent", "Mozilla/5.0 (Android) MusiqueNative")
+                .build()
+            Http.client.newCall(request).execute().use { response ->
+                response.header("Content-Length")?.toLongOrNull() ?: 0L
+            }
+        }.getOrDefault(0L)
+    }
+
+    /**
+     * Extracts the real markdown release notes from the GitHub release page HTML.
+     */
+    private fun fetchReleaseNotesFromHtml(releaseUrl: String): String {
+        return runCatching {
+            val request = Request.Builder()
+                .url(releaseUrl)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) MusiqueWeb")
+                .build()
+            Http.client.newCall(request).execute().use { response ->
+                val html = response.body?.string().orEmpty()
+                val match = Regex("""markdown-body[^>]*>([\s\S]*?)</div>""").find(html)
+                if (match != null) {
+                    match.groupValues[1]
+                        .replace(Regex("<[^>]+>"), "")
+                        .trim()
+                } else ""
+            }
+        }.getOrDefault("")
     }
 
     private fun fetchLatestNativeRelease(url: String): UpdateInfo? {
