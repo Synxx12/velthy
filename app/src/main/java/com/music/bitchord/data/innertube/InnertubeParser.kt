@@ -354,15 +354,9 @@ object InnertubeParser {
 
     /** Parses the grouped sections (Today, Yesterday, This week, etc.) off FEmusic_history. */
     fun parseHistorySections(response: JsonElement): List<ParsedHistorySection> {
-        val sections = response.o("contents")
-            ?.o("singleColumnBrowseResultsRenderer")?.a("tabs")?.firstOrNull()
-            ?.o("tabRenderer")?.o("content")?.o("sectionListRenderer")?.a("contents")
-            ?: response.o("contents")?.o("sectionListRenderer")?.a("contents")
-            ?: emptyList()
-
+        val shelves = collectRenderers(response, "musicShelfRenderer")
         val out = mutableListOf<ParsedHistorySection>()
-        for (section in sections) {
-            val shelf = section.o("musicShelfRenderer") ?: continue
+        for (shelf in shelves) {
             val title = shelf.o("title").runs().ifBlank { "Recent" }
             val songs = shelf.a("contents").orEmpty().mapNotNull { item ->
                 parseResponsiveListItem(item.o("musicResponsiveListItemRenderer"))
@@ -431,6 +425,11 @@ object InnertubeParser {
                 .o("musicItemThumbnailOverlayRenderer").o("content")
                 .o("musicPlayButtonRenderer").o("playNavigationEndpoint")
                 .o("watchEndpoint").s("videoId")
+            ?: renderer.o("navigationEndpoint").o("watchEndpoint").s("videoId")
+            ?: renderer.a("flexColumns")?.firstOrNull()
+                ?.o("musicResponsiveListItemFlexColumnRenderer")?.o("text")?.a("runs")?.firstOrNull()
+                ?.o("navigationEndpoint")?.o("watchEndpoint")?.s("videoId")
+            ?: findStringDeep(renderer, "videoId")
             ?: return null
 
         val columns = renderer.a("flexColumns").orEmpty()
@@ -823,4 +822,11 @@ private fun JsonArray?.isNotSquare(): Boolean {
     val height = last.s("height")?.toDoubleOrNull() ?: return false
     if (width <= 0 || height <= 0) return false
     return width / height !in 0.85..1.15
+}
+
+private fun findStringDeep(element: JsonElement?, key: String): String? = when (element) {
+    is JsonObject -> (element[key] as? JsonPrimitive)?.contentOrNull
+        ?: element.values.firstNotNullOfOrNull { findStringDeep(it, key) }
+    is JsonArray -> element.firstNotNullOfOrNull { findStringDeep(it, key) }
+    else -> null
 }

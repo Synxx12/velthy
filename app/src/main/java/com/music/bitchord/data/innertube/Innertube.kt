@@ -335,7 +335,12 @@ object Innertube {
      * it must be the same value used for every [pingWatchtime] that follows.
      */
     suspend fun pingPlayback(baseUrl: String, cpn: String) =
-        pingStats(baseUrl, cpn) { parameter("el", "detailpage") }
+        pingStats(baseUrl, cpn) {
+            parameter("el", "detailpage")
+            parameter("ns", "yt")
+            parameter("fexp", "")
+            parameter("lact", (System.currentTimeMillis() % 100000).toString())
+        }
 
     /**
      * The follow-up ping reporting how much of the track was actually heard.
@@ -348,6 +353,11 @@ object Innertube {
             parameter("st", "0")
             parameter("et", seconds.toString())
             parameter("state", "playing")
+            parameter("el", "detailpage")
+            parameter("ns", "yt")
+            parameter("volume", "100")
+            parameter("muted", "0")
+            parameter("lact", (System.currentTimeMillis() % 100000).toString())
         }
 
     /** Shared shape of the s.youtube.com stats pings, including session auth. */
@@ -355,23 +365,28 @@ object Innertube {
         baseUrl: String,
         cpn: String,
         extras: HttpRequestBuilder.() -> Unit,
-    ): Int = client.get(baseUrl) {
-        parameter("ver", "2")
-        parameter("c", "WEB_REMIX")
-        parameter("cver", WEB_REMIX_VERSION)
-        parameter("cpn", cpn)
-        extras()
-        header("User-Agent", WEB_USER_AGENT)
-        header("X-Origin", MUSIC_ORIGIN)
-        header("Origin", MUSIC_ORIGIN)
-        header("Referer", "$MUSIC_ORIGIN/")
-        visitorData?.let { header("X-Goog-Visitor-Id", it) }
-        cookie?.let { c ->
-            header("Cookie", c)
-            header("X-Goog-AuthUser", "0")
-            sapisidFrom(c)?.let { header("Authorization", sapisidHash(it)) }
-        }
-    }.status.value
+    ): Int = runCatching {
+        client.get(baseUrl) {
+            parameter("ver", "2")
+            parameter("c", "WEB_REMIX")
+            parameter("cver", WEB_REMIX_VERSION)
+            parameter("cpn", cpn)
+            extras()
+            header("User-Agent", WEB_USER_AGENT)
+            header("X-Origin", MUSIC_ORIGIN)
+            header("Origin", MUSIC_ORIGIN)
+            header("Referer", "$MUSIC_ORIGIN/")
+            visitorData?.let { header("X-Goog-Visitor-Id", it) }
+            cookie?.let { c ->
+                header("Cookie", c)
+                header("X-Goog-AuthUser", "0")
+                sapisidFrom(c)?.let { header("Authorization", sapisidHash(it)) }
+            }
+        }.status.value
+    }.getOrElse { e ->
+        Log.w(TAG, "pingStats failed for $baseUrl: ${e.message}")
+        -1
+    }
 
     // ---- Writes -------------------------------------------------------------
     //

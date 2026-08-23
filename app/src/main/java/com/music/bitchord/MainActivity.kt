@@ -590,6 +590,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                         showLogin = true
                     },
                     onSignOut = { viewModel.signOut() },
+                    onSyncNow = { viewModel.syncAccountData(force = true) },
                     onOpenListenBrainzLogin = { showListenBrainzLogin = true },
                     onOpenLastfmLogin = { showLastfmLogin = true },
                     contentPadding = listPadding,
@@ -607,13 +608,14 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     contentPadding = listPadding,
                 )
             } else if (page != null && (page.browseId == "app:history" || key == "app:history")) {
-                val historyItems by com.music.bitchord.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
+                val localHistoryItems by com.music.bitchord.data.history.PlaybackHistoryManager.localHistory.collectAsStateWithLifecycle()
+                val remoteHistoryItems by com.music.bitchord.data.history.PlaybackHistoryManager.remoteHistory.collectAsStateWithLifecycle()
                 var historyRefreshing by remember { mutableStateOf(false) }
                 val historyPull = rememberPullToRefreshState()
                 val syncHistory: () -> Unit = {
                     scope.launch {
                         historyRefreshing = true
-                        com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube()
+                        com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
                         historyRefreshing = false
                     }
                 }
@@ -621,14 +623,23 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     syncHistory()
                 }
                 com.music.bitchord.ui.screens.HistoryScreen(
-                    historyItems = historyItems,
+                    localHistoryItems = localHistoryItems,
+                    remoteHistoryItems = remoteHistoryItems,
+                    currentSong = player.song,
+                    isPlaying = player.isPlaying,
                     listState = detailListState,
                     refreshing = historyRefreshing,
                     onRefresh = syncHistory,
                     pullState = historyPull,
                     onSongClick = play,
                     onSongLongPress = { songActions = it },
-                    onRemoveItem = { com.music.bitchord.data.history.PlaybackHistoryManager.removeEntry(it) },
+                    onShuffle = { songs ->
+                        QueueShuffle.enableForNextQueue()
+                        play(songs, songs.indices.random())
+                    },
+                    onRemoveItem = { item, isRemote ->
+                        com.music.bitchord.data.history.PlaybackHistoryManager.removeEntry(item, isRemote)
+                    },
                     contentPadding = listPadding,
                 )
             } else if (page != null) {

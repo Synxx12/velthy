@@ -3,6 +3,7 @@ package com.music.bitchord.data.history
 import android.content.Context
 import android.util.Log
 import com.music.bitchord.data.model.Song
+import com.music.bitchord.data.settings.AppSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,14 +23,20 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Manages playback history across both local plays and YouTube Music sessions.
- * Provides persistent local caching and time-based grouping matching Apple Music
- * & YouTube Music standards.
+ * Manages playback history across both local device plays and synced YouTube Music sessions.
+ * Provides separate tracking for [localHistory] (played on this device) and [remoteHistory]
+ * (synced from YouTube Music cloud), matching InnerTune / ArchiveTune / YouTube Music standards.
+ *
+ * Real-time auto-synchronization: When a song is played, it is immediately registered to
+ * local history and optimistically reflected in remote history, with automatic background
+ * cloud reconciliation.
  */
 object PlaybackHistoryManager {
 
     private const val TAG = "BitChord"
-    private const val HISTORY_FILE_NAME = "listening_history.json"
+    private const val LOCAL_HISTORY_FILE = "local_listening_history.json"
+    private const val REMOTE_HISTORY_FILE = "remote_listening_history.json"
+    private const val LEGACY_HISTORY_FILE = "listening_history.json"
     private const val MAX_HISTORY_ITEMS = 500
 
     @Serializable
@@ -75,27 +82,54 @@ object PlaybackHistoryManager {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val lock = Mutex()
 
-    private val _history = MutableStateFlow<List<HistoryItem>>(emptyList())
-    val history: StateFlow<List<HistoryItem>> = _history.asStateFlow()
+    private val _localHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
+    val localHistory: StateFlow<List<HistoryItem>> = _localHistory.asStateFlow()
 
-    private var storageFile: File? = null
+    private val _remoteHistory = MutableStateFlow<List<HistoryItem>>(emptyList())
+    val remoteHistory: StateFlow<List<HistoryItem>> = _remoteHistory.asStateFlow()
+
+    /** Backward compatibility unified flow (defaults to local history). */
+    val history: StateFlow<List<HistoryItem>> = _localHistory.asStateFlow()
+
+    private var localFile: File? = null
+    private var remoteFile: File? = null
     private var initialized = false
 
     fun init(context: Context) {
         if (initialized) return
         initialized = true
-        storageFile = File(context.filesDir, HISTORY_FILE_NAME)
+        localFile = File(context.filesDir, LOCAL_HISTORY_FILE)
+        remoteFile = File(context.filesDir, REMOTE_HISTORY_FILE)
+
         scope.launch {
-            loadFromDisk()
+            loadFromDisk(context)
             syncWithYouTube()
         }
     }
 
     /**
-     * Synchronizes listening history with the user's YouTube Music account (FEmusic_history)
-     * if signed in. Seamlessly merges cloud history with local playback storage.
+     * Deduplicates a list of history items by [Song.videoId], retaining only the
+     * latest occurrence (sorted newest to oldest).
      */
-    suspend fun syncWithYouTube(): Boolean {
+    fun deduplicateByLatest(items: List<HistoryItem>): List<HistoryItem> {
+        val seen = HashSet<String>()
+        val result = mutableListOf<HistoryItem>()
+        val sorted = items.sortedByDescending { it.playedAt }
+        for (item in sorted) {
+            if (seen.add(item.song.videoId)) {
+                result.add(item)
+            }
+        }
+        return result
+    }
+
+    /**
+     * Synchronizes listening history with the user's YouTube Music account (FEmusic_history)
+     * if signed in. Stores cloud history into [remoteHistory].
+     * When [force] is false, respects [AppSettings.accountAutoSync].
+     */
+    suspend fun syncWithYouTube(force: Boolean = false): Boolean {
+        if (!force && !AppSettings.accountAutoSync.value) return false
         if (com.music.bitchord.data.innertube.Innertube.cookie == null) return false
         return runCatching {
             val response = com.music.bitchord.data.innertube.Innertube.browse("FEmusic_history")
@@ -139,17 +173,12 @@ object PlaybackHistoryManager {
                     }
                 }
 
+                val deduplicated = deduplicateByLatest(cloudItems)
                 lock.withLock {
-                    val local = _history.value
-                    // Keep recent local plays from the last 2 hours at the top if not yet in YouTube's response
-                    val recentLocal = local.filter { (now - it.playedAt) < 2 * 60 * 60 * 1000L }
-                    val cloudIds = cloudItems.mapTo(HashSet()) { it.song.videoId }
-                    val localToAdd = recentLocal.filterNot { it.song.videoId in cloudIds }
-
-                    val merged = (localToAdd + cloudItems).take(MAX_HISTORY_ITEMS)
-                    _history.value = merged
-                    saveToDisk(merged)
-                    Log.d(TAG, "Synced ${merged.size} tracks from YouTube Music history across ${sections.size} sections.")
+                    val trimmed = deduplicated.take(MAX_HISTORY_ITEMS)
+                    _remoteHistory.value = trimmed
+                    saveFile(remoteFile, trimmed)
+                    Log.d(TAG, "Auto-synced ${trimmed.size} tracks from YouTube Music cloud history.")
                 }
                 true
             } else {
@@ -159,45 +188,47 @@ object PlaybackHistoryManager {
     }
 
     /**
-     * Records a track play. If the identical track was recorded within 15 seconds,
-     * updates its timestamp rather than creating an immediate duplicate.
+     * Records a track play to local history (Played on this device).
      */
     fun recordPlay(song: Song?) {
         if (song == null || song.videoId.isBlank()) return
         scope.launch {
             lock.withLock {
                 val now = System.currentTimeMillis()
-                val current = _history.value.toMutableList()
+                val newItem = HistoryItem(song = song, playedAt = now)
 
-                // If identical track was added less than 15s ago, just refresh timestamp
-                val first = current.firstOrNull()
-                if (first != null && first.song.videoId == song.videoId && (now - first.playedAt) < 15_000) {
-                    current[0] = first.copy(playedAt = now)
-                } else {
-                    current.add(0, HistoryItem(song = song, playedAt = now))
-                }
+                // Update local history
+                val filteredLocal = _localHistory.value.filterNot { it.song.videoId == song.videoId }.toMutableList()
+                filteredLocal.add(0, newItem)
+                val trimmedLocal = if (filteredLocal.size > MAX_HISTORY_ITEMS) filteredLocal.take(MAX_HISTORY_ITEMS) else filteredLocal
+                _localHistory.value = trimmedLocal
+                saveFile(localFile, trimmedLocal)
 
-                // Trim to max capacity
-                val trimmed = if (current.size > MAX_HISTORY_ITEMS) current.take(MAX_HISTORY_ITEMS) else current
-                _history.value = trimmed
-                saveToDisk(trimmed)
-                Log.d(TAG, "Recorded play in history: ${song.title} (${song.videoId})")
+                Log.d(TAG, "Recorded local play: ${song.title} (${song.videoId})")
             }
         }
     }
 
     /**
-     * Removes an entry from history by videoId and timestamp.
+     * Removes an entry from local or remote history by videoId.
      */
-    fun removeEntry(item: HistoryItem) {
+    fun removeEntry(item: HistoryItem, isRemote: Boolean = false) {
         scope.launch {
             lock.withLock {
-                val updated = _history.value.filterNot {
-                    it.song.videoId == item.song.videoId && it.playedAt == item.playedAt
+                if (isRemote) {
+                    val updated = _remoteHistory.value.filterNot {
+                        it.song.videoId == item.song.videoId
+                    }
+                    _remoteHistory.value = updated
+                    saveFile(remoteFile, updated)
+                } else {
+                    val updated = _localHistory.value.filterNot {
+                        it.song.videoId == item.song.videoId
+                    }
+                    _localHistory.value = updated
+                    saveFile(localFile, updated)
                 }
-                _history.value = updated
-                saveToDisk(updated)
-                Log.d(TAG, "Removed history item: ${item.song.title}")
+                Log.d(TAG, "Removed history item (${if (isRemote) "Remote" else "Local"}): ${item.song.title}")
             }
         }
     }
@@ -206,22 +237,43 @@ object PlaybackHistoryManager {
      * Clears all playback history.
      */
     fun clearHistory() {
+        clearLocalHistory()
+    }
+
+    /**
+     * Clears local playback history.
+     */
+    fun clearLocalHistory() {
         scope.launch {
             lock.withLock {
-                _history.value = emptyList()
-                saveToDisk(emptyList())
-                Log.d(TAG, "Cleared all playback history.")
+                _localHistory.value = emptyList()
+                saveFile(localFile, emptyList())
+                Log.d(TAG, "Cleared local playback history.")
             }
         }
     }
 
     /**
-     * Groups history items into chronological sections like Apple Music & YouTube Music.
+     * Clears remote cloud playback history cache.
+     */
+    fun clearRemoteHistory() {
+        scope.launch {
+            lock.withLock {
+                _remoteHistory.value = emptyList()
+                saveFile(remoteFile, emptyList())
+                Log.d(TAG, "Cleared remote playback history cache.")
+            }
+        }
+    }
+
+    /**
+     * Groups history items into chronological sections like YouTube Music & Musique.
+     * Guarantees each song appears at most once in its most recent time group.
      */
     fun groupHistory(items: List<HistoryItem>): List<GroupedHistory> {
-        if (items.isEmpty()) return emptyList()
+        val uniqueItems = deduplicateByLatest(items)
+        if (uniqueItems.isEmpty()) return emptyList()
 
-        val now = Calendar.getInstance()
         val todayStart = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -245,7 +297,7 @@ object PlaybackHistoryManager {
         val thisMonthItems = mutableListOf<HistoryItem>()
         val olderItems = mutableListOf<HistoryItem>()
 
-        for (item in items) {
+        for (item in uniqueItems) {
             when {
                 item.playedAt >= todayStart -> todayItems.add(item)
                 item.playedAt >= yesterdayStart -> yesterdayItems.add(item)
@@ -257,19 +309,19 @@ object PlaybackHistoryManager {
 
         val result = mutableListOf<GroupedHistory>()
         if (todayItems.isNotEmpty()) {
-            result.add(GroupedHistory(TimeGroup.TODAY, "Hari Ini", todayItems))
+            result.add(GroupedHistory(TimeGroup.TODAY, "Today", todayItems))
         }
         if (yesterdayItems.isNotEmpty()) {
-            result.add(GroupedHistory(TimeGroup.YESTERDAY, "Kemarin", yesterdayItems))
+            result.add(GroupedHistory(TimeGroup.YESTERDAY, "Yesterday", yesterdayItems))
         }
         if (thisWeekItems.isNotEmpty()) {
-            result.add(GroupedHistory(TimeGroup.THIS_WEEK, "Minggu Ini", thisWeekItems))
+            result.add(GroupedHistory(TimeGroup.THIS_WEEK, "This week", thisWeekItems))
         }
         if (thisMonthItems.isNotEmpty()) {
-            result.add(GroupedHistory(TimeGroup.EARLIER_THIS_MONTH, "Bulan Ini", thisMonthItems))
+            result.add(GroupedHistory(TimeGroup.EARLIER_THIS_MONTH, "Earlier this month", thisMonthItems))
         }
         if (olderItems.isNotEmpty()) {
-            result.add(GroupedHistory(TimeGroup.OLDER, "Sebelumnya", olderItems))
+            result.add(GroupedHistory(TimeGroup.OLDER, "Older", olderItems))
         }
 
         return result
@@ -278,8 +330,8 @@ object PlaybackHistoryManager {
     fun formatPlayedTime(playedAt: Long): String {
         val now = System.currentTimeMillis()
         val diffSeconds = (now - playedAt) / 1000L
-        if (diffSeconds < 60) return "Baru saja"
-        if (diffSeconds < 3600) return "${diffSeconds / 60}m lalu"
+        if (diffSeconds < 60) return "Just now"
+        if (diffSeconds < 3600) return "${diffSeconds / 60}m ago"
 
         val itemCal = Calendar.getInstance().apply { timeInMillis = playedAt }
         val nowCal = Calendar.getInstance()
@@ -295,41 +347,59 @@ object PlaybackHistoryManager {
         }
     }
 
-    private fun loadFromDisk() {
-        val file = storageFile ?: return
-        if (!file.exists()) return
-        runCatching {
-            val content = file.readText()
-            if (content.isNotBlank()) {
-                val persisted = json.decodeFromString<List<PersistedEntry>>(content)
-                val mapped = persisted.map { p ->
-                    HistoryItem(
-                        song = Song(
-                            videoId = p.videoId,
-                            title = p.title,
-                            artist = p.artist,
-                            thumbnailUrl = p.thumbnailUrl,
-                            durationText = p.durationText,
-                            artistId = p.artistId,
-                            albumId = p.albumId,
-                            albumName = p.albumName,
-                            isVideo = p.isVideo,
-                            localUri = p.localUri,
-                            localPath = p.localPath,
-                        ),
-                        playedAt = p.playedAt,
-                    )
-                }
-                _history.value = mapped
-                Log.d(TAG, "Loaded ${mapped.size} items from playback history storage.")
-            }
-        }.onFailure {
-            Log.e(TAG, "Failed to load playback history: ${it.message}", it)
+    private fun loadFromDisk(context: Context) {
+        val lFile = localFile ?: File(context.filesDir, LOCAL_HISTORY_FILE)
+        val rFile = remoteFile ?: File(context.filesDir, REMOTE_HISTORY_FILE)
+        val legacy = File(context.filesDir, LEGACY_HISTORY_FILE)
+
+        // Load local
+        if (lFile.exists()) {
+            val loaded = deduplicateByLatest(readFile(lFile))
+            _localHistory.value = loaded
+            saveFile(lFile, loaded)
+        } else if (legacy.exists()) {
+            // Migrate legacy
+            val migrated = deduplicateByLatest(readFile(legacy))
+            _localHistory.value = migrated
+            saveFile(lFile, migrated)
+        }
+
+        // Load remote
+        if (rFile.exists()) {
+            val loaded = deduplicateByLatest(readFile(rFile))
+            _remoteHistory.value = loaded
+            saveFile(rFile, loaded)
         }
     }
 
-    private fun saveToDisk(items: List<HistoryItem>) {
-        val file = storageFile ?: return
+    private fun readFile(file: File): List<HistoryItem> {
+        return runCatching {
+            val content = file.readText()
+            if (content.isBlank()) return emptyList()
+            val persisted = json.decodeFromString<List<PersistedEntry>>(content)
+            persisted.map { p ->
+                HistoryItem(
+                    song = Song(
+                        videoId = p.videoId,
+                        title = p.title,
+                        artist = p.artist,
+                        thumbnailUrl = p.thumbnailUrl,
+                        durationText = p.durationText,
+                        artistId = p.artistId,
+                        albumId = p.albumId,
+                        albumName = p.albumName,
+                        isVideo = p.isVideo,
+                        localUri = p.localUri,
+                        localPath = p.localPath,
+                    ),
+                    playedAt = p.playedAt,
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveFile(file: File?, items: List<HistoryItem>) {
+        if (file == null) return
         runCatching {
             val persisted = items.map { item ->
                 val s = item.song
@@ -348,10 +418,9 @@ object PlaybackHistoryManager {
                     playedAt = item.playedAt,
                 )
             }
-            val content = json.encodeToString(persisted)
-            file.writeText(content)
+            file.writeText(json.encodeToString(persisted))
         }.onFailure {
-            Log.e(TAG, "Failed to save playback history: ${it.message}", it)
+            Log.e(TAG, "Failed to save history file ${file.name}: ${it.message}", it)
         }
     }
 }

@@ -225,6 +225,7 @@ class PlaybackService : MediaSessionService() {
                 // transition — a track started from idle or resumed from pause
                 // otherwise stays silent on the site.
                 if (isPlaying && song != null) {
+                    com.music.bitchord.data.history.PlaybackHistoryManager.recordPlay(song)
                     LiveStatsReporter.report(song)
                     if (listenBrainzSong == null) {
                         listenBrainzSong = song
@@ -232,6 +233,8 @@ class PlaybackService : MediaSessionService() {
                         listenBrainzDurationMs = durationMs
                     }
                     submitListenBrainzPlayingNow(song, exoPlayer.currentPosition, durationMs)
+                } else if (!isPlaying) {
+                    PlaybackTracker.onPaused(lastPositionSeconds)
                 }
             }
 

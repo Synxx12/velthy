@@ -261,7 +261,11 @@ fun MediaController.playSongs(songs: List<Song>, startIndex: Int) {
     // leads, so it ends up at the top instead of at [startIndex].
     val shuffled = QueueShuffle.enabled.value
     val queue = if (shuffled) QueueShuffle.startingOrder(songs, startIndex) else songs
-    setMediaItems(queue.map { it.toMediaItem() }, if (shuffled) 0 else startIndex, 0L)
+    val leadingIndex = if (shuffled) 0 else startIndex
+    if (leadingIndex in queue.indices) {
+        com.music.bitchord.data.history.PlaybackHistoryManager.recordPlay(queue[leadingIndex])
+    }
+    setMediaItems(queue.map { it.toMediaItem() }, leadingIndex, 0L)
     prepare()
     play()
 }

@@ -88,6 +88,16 @@ object AppSettings {
     /** Disk budget for cached audio. [AudioCache][com.music.bitchord.playback.AudioCache] evicts past it. */
     val audioCacheLimitBytes = MutableStateFlow(DEFAULT_CACHE_LIMIT_BYTES)
 
+    // ── Account & Sync ──────────────────────────────────────────────────
+    /** Include personalization & account context when querying YouTube Music catalog. */
+    val accountMoreContent = MutableStateFlow(true)
+
+    /** Periodically sync listening history and library with YouTube Music account. */
+    val accountAutoSync = MutableStateFlow(true)
+
+    /** Re-sync all playlists, liked songs, and history immediately on account switch. */
+    val accountForceSyncOnSwitch = MutableStateFlow(true)
+
     // ── Scrobbling ──────────────────────────────────────────────────────
 
     val lastfmEnabled = MutableStateFlow(false)
@@ -135,6 +145,9 @@ object AppSettings {
         shareLiveStats.value = prefs.getBoolean(KEY_SHARE_LIVE_STATS, true)
         audioCacheLimitBytes.value = prefs.getLong(KEY_CACHE_LIMIT, DEFAULT_CACHE_LIMIT_BYTES)
             .coerceIn(DEFAULT_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES)
+        accountMoreContent.value = prefs.getBoolean(KEY_ACCOUNT_MORE_CONTENT, true)
+        accountAutoSync.value = prefs.getBoolean(KEY_ACCOUNT_AUTO_SYNC, true)
+        accountForceSyncOnSwitch.value = prefs.getBoolean(KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH, true)
         lastfmEnabled.value = prefs.getBoolean(KEY_LASTFM_ENABLED, false)
         lastfmUsername.value = prefs.getString(KEY_LASTFM_USERNAME, "").orEmpty()
         lastfmSessionKey.value = prefs.getString(KEY_LASTFM_SESSION_KEY, "").orEmpty()
@@ -270,6 +283,21 @@ object AppSettings {
         prefs.edit().putLong(KEY_CACHE_LIMIT, clamped).apply()
     }
 
+    fun setAccountMoreContent(value: Boolean) {
+        accountMoreContent.value = value
+        prefs.edit().putBoolean(KEY_ACCOUNT_MORE_CONTENT, value).apply()
+    }
+
+    fun setAccountAutoSync(value: Boolean) {
+        accountAutoSync.value = value
+        prefs.edit().putBoolean(KEY_ACCOUNT_AUTO_SYNC, value).apply()
+    }
+
+    fun setAccountForceSyncOnSwitch(value: Boolean) {
+        accountForceSyncOnSwitch.value = value
+        prefs.edit().putBoolean(KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH, value).apply()
+    }
+
     fun setLastfmEnabled(value: Boolean) {
         lastfmEnabled.value = value
         prefs.edit().putBoolean(KEY_LASTFM_ENABLED, value).apply()
@@ -353,6 +381,9 @@ object AppSettings {
     private const val KEY_REDUCE_ANIMATION = "reduce_animation"
     private const val KEY_REDUCE_BLUR = "reduce_dynamic_blur"
     private const val KEY_SHARE_LIVE_STATS = "share_live_stats"
+    private const val KEY_ACCOUNT_MORE_CONTENT = "account_more_content"
+    private const val KEY_ACCOUNT_AUTO_SYNC = "account_auto_sync"
+    private const val KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH = "account_force_sync_on_switch"
 
     private const val KEY_LASTFM_ENABLED = "lastfm_enabled"
     private const val KEY_LASTFM_USERNAME = "lastfm_username"

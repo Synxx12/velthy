@@ -526,7 +526,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             // drop(1): the current value is just the count so far, not a play.
-            PlaybackTracker.registeredPlays.drop(1).collect { homeStale = true }
+            PlaybackTracker.registeredPlays.drop(1).collect {
+                homeStale = true
+                if (com.music.bitchord.data.settings.AppSettings.accountAutoSync.value) {
+                    kotlinx.coroutines.delay(1500L)
+                    com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
+                }
+            }
         }
         viewModelScope.launch { AppUpdateChecker.check() }
     }
@@ -1024,10 +1030,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         authStore.cookie = cookie
         Innertube.cookie = cookie
         _signedIn.value = true
+        if (com.music.bitchord.data.settings.AppSettings.accountForceSyncOnSwitch.value) {
+            _likeOverrides.value = emptyMap()
+            _playlists.value = emptyList()
+        }
         loadHome()
         loadLibrary()
         loadAccount()
         loadPlaylists()
+        viewModelScope.launch {
+            com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
+        }
+    }
+
+    /**
+     * Manually triggers full synchronization of account profile, playlists,
+     * library content, and YouTube listening history.
+     */
+    fun syncAccountData(force: Boolean = true) {
+        viewModelScope.launch {
+            loadAccount()
+            refresh(Feed.HOME)
+            if (_signedIn.value) {
+                refresh(Feed.LIBRARY)
+                loadPlaylists()
+                com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube(force = force)
+            }
+        }
     }
 
     fun signOut() {

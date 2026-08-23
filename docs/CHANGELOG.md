@@ -10,6 +10,47 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ---
 
+### [v1.3.5] - 2026-08-23
+
+#### ✨ Fitur Baru
+- **Sinkronisasi Riwayat Cloud Otomatis (Pure Background Auto-Sync)**:
+  - Memisahkan riwayat lagu yang diputar di perangkat lokal (**Local: Played on this device**) dan riwayat autentik murni yang tersinkronisasi dari YouTube Music cloud (**Remote: Synced from YouTube Music**).
+  - Sinkronisasi dengan server YouTube Music berjalan 100% otomatis di latar belakang saat aplikasi dibuka, saat playback terdaftar (`registeredPlays`), dan saat pengguna membuka/beralih ke tab `[ Remote ]`, tanpa mengharuskan aksi manual dari pengguna.
+  - Menyediakan kartu ringkasan interaktif dengan segmented control `[ Local ]` dan `[ Remote ]` lengkap dengan penghitung total lagu dan status sinkronisasi.
+  - Memperkuat transmisi ping statistik `pingPlayback` dan `pingWatchtime` di `Innertube.kt` (`lact`, `el=detailpage`, `ns=yt`, `docid`, `volume=100`, `state=playing`) serta deteksi cookie `SAPISID` guna memastikan riwayat putar tervalidasi 100% di server YouTube Music.
+- **Pengaturan Sinkronisasi Akun YouTube Music (Account & General Settings Parity)**:
+  - **More content**: Opsi preferensi untuk menyertakan konteks autentikasi akun pada query katalog Innertube guna menampilkan album premium dan konten yang dipersonalisasi.
+  - **Auto sync with account**: Opsi untuk mengaktifkan atau menonaktifkan sinkronisasi otomatis riwayat (*history*), playlist, dan *liked songs* di latar belakang.
+  - **Force Sync on Switch Account**: Opsi untuk melakukan rekonsiliasi ulang (*deep re-sync*) semua data playlist, riwayat putar, artis, dan album saat berganti akun Google.
+  - **Sync with account now**: Tombol aksi manual untuk menarik pembaruan cloud riwayat mendengarkan dan library YouTube Music secara instan kapan saja.
+
+- **Transmisi Watchtime Cepat & Andal (Fast 5s Watchtime Tracking)**:
+  - Mempercepat ping awal watchtime ke Google di `PlaybackTracker.kt` menjadi 5 detik pertama (kemudian setiap 15 detik), serta auto-flush saat player di-pause agar riwayat putar langsung tercatat di server YouTube Music tanpa harus menunggu 30 detik.
+  - Memperkuat parsing `videoId` pada `parseResponsiveListItem` di `InnertubeParser.kt` dengan fallback menyeluruh (`watchEndpoint`, `navigationEndpoint`, flex columns, dan `findStringDeep`) sehingga seluruh entri riwayat cloud terekstrak dengan andal.
+- **Pencatatan Riwayat Putar Menyeluruh (Comprehensive Playback Recording)**:
+  - Memastikan setiap lagu yang diputar langsung tercatat ke riwayat lokal melalui trigger terpadu di `MediaController.playSongs`, `onIsPlayingChanged`, dan `onMediaItemTransition`, sehingga tidak ada lagu yang terlewat meskipun diputar dari klik langsung, shuffle, maupun transisi trek.
+- **Ekstraksi Riwayat Cloud YouTube Music Lengkap & Akurat**:
+  - Memperbarui `parseHistorySections` di `InnertubeParser.kt` dengan pencarian rekursif seluruh `musicShelfRenderer` dari payload `FEmusic_history` YouTube Music sehingga semua grup riwayat (*Today, Yesterday, This week, dll.*) terekstrak 100% tanpa ada yang terlewat.
+- **Deduplikasi Riwayat Putar Otomatis (Move to Top on Replay)**:
+  - Saat lagu yang sudah ada di riwayat diputar kembali, entri lama otomatis dihapus dan posisinya dipindahkan ke urutan paling atas (*newest/recent*) sehingga tidak ada duplikasi lagu yang sama di dalam daftar riwayat.
+- **Optimasi Rendering Zero-Lag 120 FPS pada Layar Riwayat**:
+  - Mengubah struktur LazyColumn agar menggunakan recycling item native (`items(key = ...)`) per baris lagu, menggantikan nested column yang sebelumnya menyebabkan frame drop dan rendering berat.
+  - Menghilangkan swipe box merah berat yang menyebabkan glitch visual saat scrolling.
+
+#### 🎨 UI, Gestures & Animasi
+- **Penyelarasan Desain Modern, Bersih & Minimalis pada History Screen**:
+  - Mengintegrasikan navigasi layar History langsung ke dalam navbar terpadu `FrostedTopBar` (satu tombol kembali dan judul *History* yang elegan di atas, tanpa duplikasi tombol back).
+  - Mengadopsi tata letak baris lagu modern sesuai standar `SongRow` BitChord (`PAGE_GUTTER`, thumbnail 52dp bersih, tipografi `titleMedium` & `bodyMedium`).
+  - Kartu ringkasan atas (*Summary Card*) dengan segmented control `[ Local ]` & `[ Remote ]` yang presisi dan responsif.
+  - Penyorotan lagu yang sedang aktif diputar dengan warna `primary` lembut dan indikator visualizer equalizer soundwave (`ıll`).
+  - Tombol aksi mengambang **Shuffle** (`[ 🔀 Shuffle ]`) Material 3 di sudut kanan bawah untuk mengacak antrean lagu.
+- **Penyelarasan Desain Layar Akun (YouTube Music Account Menu Parity)**:
+  - Kartu profil akun modern dengan avatar besar ber-badge centang biru terverifikasi (*verified badge*), nama tampilan tebal, dan handle `@username`/email.
+  - Tombol aksi terintegrasi di dalam kartu profil: tombol kapsul `[ 👤 Account ▾ ]` untuk *switch account* / login ulang, serta tombol `Log out` berwarna merah/salmon dengan modal dialog konfirmasi.
+  - Pengelompokan baris pengaturan yang bersih ke dalam grup **General** dan **Integration** (ListenBrainz, Last.fm, dan slider timing scrobble).
+
+---
+
 ### [v1.3.4] - 2026-08-22
 
 #### ✨ Fitur Baru

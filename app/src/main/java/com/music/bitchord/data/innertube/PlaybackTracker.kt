@@ -33,7 +33,8 @@ object PlaybackTracker {
     private const val TAG = "BitChord"
 
     /** Report watched time once this much new audio has gone by. */
-    private const val REPORT_INTERVAL_SECONDS = 30L
+    private const val INITIAL_REPORT_SECONDS = 5L
+    private const val REPORT_INTERVAL_SECONDS = 15L
 
     private class Session(
         val videoId: String,
@@ -81,6 +82,17 @@ object PlaybackTracker {
     }
 
     /**
+     * Call when playback is paused. Flushes current watchtime immediately.
+     */
+    fun onPaused(positionSeconds: Long) {
+        val current = session ?: return
+        scope.launch {
+            runCatching { flush(current, positionSeconds) }
+                .onFailure { Log.w(TAG, "paused watchtime ping failed: ${it.message}") }
+        }
+    }
+
+    /**
      * Call when the queue moves to a different track. The previous session's
      * watched time is flushed before it is dropped, so a track skipped at the
      * two-minute mark is reported as two minutes rather than lost.
@@ -96,13 +108,14 @@ object PlaybackTracker {
 
     /**
      * Periodic progress report for the current track, in seconds played.
-     * Cheap to call often — it only hits the network every
-     * [REPORT_INTERVAL_SECONDS] of new audio.
+     * Cheap to call often — it hits the network after [INITIAL_REPORT_SECONDS]
+     * and then every [REPORT_INTERVAL_SECONDS] of new audio.
      */
     fun onProgress(videoId: String, positionSeconds: Long) {
         val current = session ?: return
         if (current.videoId != videoId) return
-        if (positionSeconds - current.reportedSeconds < REPORT_INTERVAL_SECONDS) return
+        val interval = if (current.reportedSeconds == 0L) INITIAL_REPORT_SECONDS else REPORT_INTERVAL_SECONDS
+        if (positionSeconds - current.reportedSeconds < interval) return
         scope.launch {
             runCatching { flush(current, positionSeconds) }
                 .onFailure { Log.w(TAG, "watchtime ping failed for $videoId: ${it.message}") }
