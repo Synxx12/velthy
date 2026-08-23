@@ -40,6 +40,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "MODULE_INDEX_URL", "\"${moduleIndexUrl}\"")
+
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
     }
 
     // applicationId can only be overridden per flavor, not per build type, so a
