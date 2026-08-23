@@ -13,6 +13,12 @@ plugins {
  * the release build still runs and simply comes out unsigned rather than
  * failing — only whoever holds the key can produce a shippable APK.
  */
+val localProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val moduleIndexUrl: String = localProps.getProperty("MODULE_INDEX_URL", "")
+
 val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
     if (file.exists()) file.inputStream().use { load(it) }
@@ -28,10 +34,12 @@ android {
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.3.5"
+        versionCode = 11
+        versionName = "1.3.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "MODULE_INDEX_URL", "\"${moduleIndexUrl}\"")
     }
 
     // applicationId can only be overridden per flavor, not per build type, so a
@@ -105,12 +113,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -165,6 +176,16 @@ dependencies {
 
     // ---- Auth/session storage ----
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // Audio is progressive, but Apple serves its motion artwork as HLS — this
+    // is what lets the animated sleeve play it. See CanvasArtworkPlayer.
+    implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
+
+    // ---- JS module execution: QuickJS VM for Convx-style source plugins ----
+    implementation("io.github.dokar3:quickjs-kt-android:1.0.5")
+
+    // ---- Smart Fade: on-device beat/downbeat model (Beat This!, MIT-licensed) ----
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.28.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

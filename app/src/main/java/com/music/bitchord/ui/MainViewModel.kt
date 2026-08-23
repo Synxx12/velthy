@@ -112,34 +112,80 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _lyrics = MutableStateFlow<List<LyricLine>?>(null)
     val lyrics: StateFlow<List<LyricLine>?> = _lyrics.asStateFlow()
 
-    /**
-     * Whether the lookup for the current track has finished. [lyrics] alone
-     * can't tell "still looking" apart from "looked, found nothing" — both
-     * are null — and the player needs that distinction to show "Lyrics not
-     * available" only once it actually means that.
-     */
+    private val _lyricsSource = MutableStateFlow<com.music.bitchord.data.lyrics.LyricsSource?>(null)
+    val lyricsSource: StateFlow<com.music.bitchord.data.lyrics.LyricsSource?> = _lyricsSource.asStateFlow()
+
     private val _lyricsChecked = MutableStateFlow(false)
     val lyricsChecked: StateFlow<Boolean> = _lyricsChecked.asStateFlow()
 
     private var lyricsJob: Job? = null
-    private var lyricsFor: String? = null
+    private var lyricsFor: Pair<String, Set<com.music.bitchord.data.lyrics.LyricsSource>>? = null
 
     /** Called as the playing track changes; cheap no-op when already loaded. */
-    fun loadLyrics(videoId: String, title: String, artist: String, durationMs: Long) {
-        if (lyricsFor == videoId) return
-        lyricsFor = videoId
-        _lyrics.value = null
-        _lyricsChecked.value = false
+    fun loadLyrics(
+        videoId: String,
+        title: String,
+        artist: String,
+        durationMs: Long,
+        album: String? = null,
+    ) {
+        val sources: Set<com.music.bitchord.data.lyrics.LyricsSource> =
+            if (com.music.bitchord.data.settings.AppSettings.syncedLyrics.value) {
+                com.music.bitchord.data.settings.AppSettings.lyricsSources.value
+            } else {
+                emptySet()
+            }
+        val key = videoId to sources
+
+        // Already loaded for this song
+        if (lyricsFor == key && _lyrics.value != null) return
+
+        // Already actively loading for this song
+        if (lyricsFor == key && lyricsJob?.isActive == true) return
+
+        lyricsFor = key
         lyricsJob?.cancel()
-        if (durationMs <= 0L) {
-            // Duration arrives a beat after the track does; wait for it.
-            lyricsFor = null
+
+        if (sources.isEmpty() || (title.isBlank() && videoId.isBlank())) {
+            _lyrics.value = null
+            _lyricsSource.value = null
+            _lyricsChecked.value = true
             return
         }
+
+        _lyrics.value = null
+        _lyricsSource.value = null
+        _lyricsChecked.value = false
+
         lyricsJob = viewModelScope.launch {
-            _lyrics.value = LrcLib.lyrics(title, artist, durationMs)
-            _lyricsChecked.value = true
+            val found = runCatching {
+                com.music.bitchord.data.lyrics.LyricsRepository.lyrics(
+                    videoId = videoId,
+                    title = title,
+                    artist = artist,
+                    durationMs = durationMs,
+                    album = album,
+                    sources = sources,
+                )
+            }.getOrNull()
+
+            if (lyricsFor == key) {
+                _lyrics.value = found?.lines
+                _lyricsSource.value = found?.source
+                _lyricsChecked.value = true
+            }
         }
+    }
+
+    fun retryLyrics(
+        videoId: String,
+        title: String,
+        artist: String,
+        durationMs: Long,
+        album: String? = null,
+    ) {
+        lyricsFor = null
+        loadLyrics(videoId, title, artist, durationMs, album)
     }
 
     private val _account = MutableStateFlow<Account?>(null)
@@ -557,7 +603,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadAccount() {
         viewModelScope.launch {
-            _account.value = YtMusicRepository.account().getOrNull()
+            val acc = YtMusicRepository.account().getOrNull()
+            _account.value = acc
+            val currentCookie = authStore.cookie
+            if (acc != null && currentCookie != null) {
+                authStore.saveAccount(
+                    com.music.bitchord.auth.SavedAccount(
+                        name = acc.name,
+                        handle = acc.email.takeIf { it.isNotBlank() },
+                        thumbnailUrl = acc.thumbnailUrl,
+                        cookie = currentCookie,
+                    )
+                )
+            }
         }
     }
 
@@ -612,21 +670,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadHome() {
-        _home.value = UiState.Loading
+        if (_home.value !is UiState.Success) {
+            val cached = cachedHomeShelves
+            if (cached != null && cached.isNotEmpty()) {
+                _home.value = UiState.Success(cached)
+            } else {
+                _home.value = UiState.Loading
+            }
+        }
         viewModelScope.launch { fetchHome() }
     }
 
     private suspend fun fetchHome() {
         homeContinuation = null
         homeSeenTitles.clear()
-        _home.value = YtMusicRepository.home().fold(
+        YtMusicRepository.home().fold(
             onSuccess = { feed ->
                 homeContinuation = feed.continuation
                 val shelves = feed.shelves.filter { homeSeenTitles.add(it.title.lowercase()) }
-                if (shelves.isEmpty()) UiState.Error("No results from YouTube Music")
-                else UiState.Success(shelves)
+                if (shelves.isEmpty()) {
+                    val fallback = cachedHomeShelves
+                    _home.value = if (fallback != null && fallback.isNotEmpty()) UiState.Success(fallback)
+                    else UiState.Error("No results from YouTube Music")
+                } else {
+                    cachedHomeShelves = shelves
+                    _home.value = UiState.Success(shelves)
+                }
             },
-            onFailure = { UiState.Error(it.friendly()) },
+            onFailure = { error ->
+                val fallback = cachedHomeShelves
+                _home.value = if (fallback != null && fallback.isNotEmpty()) UiState.Success(fallback)
+                else UiState.Error(error.friendly())
+            },
         )
     }
 
@@ -686,6 +761,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * prefixes typed on the way to the real query.
      */
     fun recordSearch() = SearchHistory.record(_query.value)
+
+    fun submitSearch() {
+        recordSearch()
+        runSearch()
+    }
 
     /** Re-runs a term picked out of the history, and floats it back to the top. */
     fun searchFor(term: String) {
@@ -804,6 +884,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
+        var cachedHomeShelves: List<HomeShelf>? = null
+
         /**
          * Short enough that it reads as instant, long enough that a word typed
          * at speed is one request rather than one per letter.
@@ -1055,6 +1137,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 refresh(Feed.LIBRARY)
                 loadPlaylists()
                 com.music.bitchord.data.history.PlaybackHistoryManager.syncWithYouTube(force = force)
+            }
+        }
+    }
+
+    val savedAccounts: StateFlow<List<com.music.bitchord.auth.SavedAccount>> = authStore.savedAccounts
+
+    fun saveCurrentAccount() {
+        val current = _account.value ?: return
+        val currentCookie = authStore.cookie ?: return
+        val saved = com.music.bitchord.auth.SavedAccount(
+            name = current.name,
+            handle = current.email.takeIf { it.isNotBlank() },
+            thumbnailUrl = current.thumbnailUrl,
+            cookie = currentCookie,
+        )
+        authStore.saveAccount(saved)
+    }
+
+    fun switchAccount(saved: com.music.bitchord.auth.SavedAccount) {
+        onSignedIn(saved.cookie)
+        _account.value = Account(
+            name = saved.name,
+            email = saved.handle.orEmpty(),
+            thumbnailUrl = saved.thumbnailUrl,
+        )
+    }
+
+    fun removeSavedAccount(id: String) {
+        val target = savedAccounts.value.firstOrNull { it.id == id }
+        authStore.removeAccount(id)
+        if (target != null && target.cookie == authStore.cookie) {
+            val remaining = savedAccounts.value.filterNot { it.id == id }
+            if (remaining.isNotEmpty()) {
+                switchAccount(remaining.first())
+            } else {
+                signOut()
             }
         }
     }

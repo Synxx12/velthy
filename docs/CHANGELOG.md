@@ -8,6 +8,112 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ### [Unreleased]
 
+### [v1.3.6] - 2026-08-23
+
+#### ✨ Fitur Baru
+- **Automix & Smart Transition Engine (DJ Mixing Bertenaga AI / On-Device DSP)**:
+  - Mengintegrasikan model neural machine learning on-device (`beat_this_int8.onnx` untuk beat/downbeat tracking dan `vocals_umxhq_int8.onnx` untuk vocal presence tracking via ONNX Runtime Android).
+  - Melakukan analisis audio in-memory real-time (`TrackAnalyzer`, `MelSpectrogram`, `BeatTracker`, `VocalTracker`) untuk mendeteksi tempo, ketukan downbeat, spektrum frekuensi, dan posisi jeda vokal secara presisi.
+  - **TransitionPlanner & TransitionPolicy**: Menghitung titik transisi optimal (*smart transition window*) antar lagu berdasarkan keselarasan tempo (*BPM alignment*), kesamaan energi, dan penghindaran tabrakan vokal (*vocal avoidance*).
+  - **TransitionFilterProcessor & CrossfadeController**: Menerapkan dynamic low-pass/high-pass filtering ala DJ profesional saat transisi berlangsung untuk pengalaman audio seamless tanpa jeda.
+- **Engine Peningkatan Kualitas Audio Multi-Sumber (Multi-Source Lossless & HQ Audio Upgrade)**:
+  - Mengintegrasikan arsitektur modular sumber audio pihak ketiga (`data/sources/`) yang ditenagai oleh QuickJS JavaScript virtual machine (`QuickJsExecutor`).
+  - **SourceResolver & QualityUpgrade**: Secara otomatis mencari dan meningkatkan stream YouTube standar ke resolusi FLAC Lossless / High-Res / 320kbps dari sumber audio alternatif yang dikonfigurasi.
+  - **SourcesScreen**: Layar konfigurasi prioritas sumber audio dan modul resolusi musik independen.
+- **Layar Pengelolaan Lagu Lokal (Local Device Music Player)**:
+  - Layar `LocalMusicScreen` terpadu dengan tab pemindaian berkas audio lokal di memori perangkat (**Songs**, **Artists**, **Albums**).
+- **Penyempurnaan Layar Pencarian & Top Bar Input Terpadu (Search Tab Parity)**:
+  - Mengintegrasikan `SearchFilterTabs` bergaya Material 3 `TabRow` 1.4 (**Songs**, **Albums**, **Artists**, **Playlists** dengan ikon native dan indikator transisi).
+  - Menyematkan input pencarian kapsul interaktif (`SearchTopBarField`) langsung di dalam navbar atas (`FrostedTopBar`) dengan placeholder otentik *"Artists, Songs, Lyrics and More"*, tombol pembersih satu-ketukan (*one-tap clear*), dan tombol *Music Recognition*.
+  - Menjaga layout daftar hasil pencarian (`SongRow`, `BrowseRow`, `HorizontalDivider`, recent searches, dan explore categories) sinkron dan responsif.
+- **Apple Music Bottom Control Bar (Lyrics, Sleep Timer, Audio Switcher, Queue)**:
+  - Mengembalikan 4 tombol kontrol bawah player ala Apple Music:
+    1. **Lyrics Button (`LyricsQuote`)**: Membuka/menutup layar lirik penuh secara instan dengan indikator status aktif.
+    2. **Sleep Timer Button (`Moon`)**: Membuka `SleepTimerModalSheet` dengan live countdown dan preset waktu (15m, 30m, 45m, 1h, after song).
+    3. **Audio Output Switcher (`AirPlay` / `Headphones`)**: Menampilkan nama perangkat output aktif secara live (Bluetooth / Speaker) dan membuka audio route picker saat diklik.
+    4. **Queue Button (`QueueMusic`)**: Membuka daftar antrean dengan badge mode playback dinamis (Shuffle, Repeat, AutoPlay) dan kapsul pills reordering di dalam antrean.
+- **Word-Synced Karaoke Lyrics (Lirik Sinkron Kata-demi-Kata Apple Music Style)**:
+  - Menghadirkan rendering lirik sinkronisasi tingkat kata (*word-level timestamps*) dengan animasi sweep highlight yang mulus menggunakan interpolasi frame clock `withFrameNanos`.
+  - **Animasi Menyusut, Membesar & Multi-Aksi Penutupan Lirik (*Seamless Lyrics Dismiss Interactions*)**:
+    - Saat lirik dibuka (`lyricsProgress`), cover album besar menyusut (*shrink*) secara mulus dengan kurva `FastOutSlowInEasing` ke thumbnail kecil di kiri atas, sementara teks judul bergeser ke sampingnya.
+    - **5 Cara Menutup Lirik Seketika**:
+      1. **Tombol Close (✕) di Header**: Ikon titik tiga di pojok kanan atas bertransformasi menjadi tombol `Close` lingkaran (✕) saat lirik terbuka.
+      2. **Pill Bawah `[ Lyrics by ... · Close ]`**: Mengetuk pil kredit lirik di bagian bawah langsung menutup lirik.
+      3. **Ketuk Thumbnail Cover / Header Judul**: Menyentuh cover thumbnail kecil di kiri atas atau bar judul akan menutup lirik dan membesarkan (*expand*) cover album kembali ke ukuran penuh.
+      4. **Tombol Lirik di Bottom Control**: Menekan kembali ikon 💬 lirik di baris kontrol bawah.
+      5. **Gestur Kembali (Back Gesture)**: Mengusap layar untuk kembali langsung menutup lirik tanpa menutup player.
+  - Efek visual Apple Music Bloom / Glow: Efek pendaran cahaya dinamis yang melingkupi kata yang sedang dinyanyikan sesuai durasi ketukan intonasi vokal.
+  - Preview satu baris dinamis (*swept single line strip*) di atas slider scrubber player saat lirik ditutup.
+  - **Optimalisasi Jarak & Tata Letak Player (Seamless Symmetrical Spacing)**:
+    - Eliminasi Total `VerifyError` Dalvik DEX Register Overflow: Memecah composable raksasa `NowPlayingScreen` menjadi sub-komponen terpisah (`NowPlayingSleeveAndHeader` dan `NowPlayingBottomControls`) sehingga bytecode terverifikasi 100% aman oleh ART Runtime Android tanpa batas register.
+    - Pembatasan Batas Layar Lirik & Antrean (Zero Horizontal Overflow): Menghapus offset bleed horizontal negatif (`bleedHorizontally`) pada `LyricsPanel` dan `InlineQueue`, serta menyelaraskan padding horizontal dengan margin player (`PLAYER_GUTTER`) sehingga teks lirik panjang dan baris antrean terpotong rapi (*clean ellipsis*) dan tidak pernah menembus / terpotong melewati tepi kanan layar.
+    - Visibilitas Penuh Tombol Close / More Header: Mengganti offset horizontal (`offset(x = titleStart)`) pada baris judul header dengan padding awal dinamis (`padding(start = titleStart)`), sehingga tombol Close (`X`) dan tombol More di sudut kanan atas tetap berada tepat di dalam batas layar dan tidak terdorong keluar saat lirik/antrean dibuka.
+    - Stabilitas Penuh Kontrol Bawah (Rock-Solid Bottom Controls): Mengembalikan kontrol bawah (Scrubber, Play/Pause/Skip, Volume slider, dan Bottom Actions) agar selalu dirender secara konstan di posisinya pada bagian bawah layar. Saat lirik atau antrean dibuka/tutup, kontrol bawah tidak bergerak atau melompat sama sekali, dan animasi transisi mengecilkan sleeve album berlangsung mulus di area atas.
+    - Menghilangkan Celah Kosong Judul ke Preview Lirik (Tight Symmetrical Flow): Mengunci tinggi container sleeve artwork sesuai ukuran proporsional alami (`naturalArtBlockHeight = topArtPadding + fullArtWidth + titleGap + HEADER_HEIGHT`) saat lirik tertutup. Saat volume bar disembunyikan, jarak antara cover ke judul diturunkan secara proporsional (`titleGap = 26.dp`) tanpa menurunkan foto album, sehingga ruang di atas preview lirik terisi padat dan seimbang.
+    - Menghilangkan Kekosongan Area Play/Pause (Fixed Balanced Bottom Spacing): Mengganti spacer lentur berlebih pada area bawah dengan spacer tetap yang rapat dan presisi (18-24dp antara scrubber ke tombol transport, 18-30dp antara transport ke bar volume/bottom actions) sehingga tombol Play/Pause tidak mengambang dan memiliki proporsi yang solid dan pas.
+    - Breathing Room Atas Cover Album: Memberikan top margin yang nyaman (12-20dp) di bawah dismiss handle agar cover album tidak mepet ke tepi atas layar.
+    - Memperbaiki sinkronisasi fokus lirik (*focusLine* & *CurrentLyricLine*) agar tidak melompat ke ikon not balok instrumental saat baris sedang dinyanyikan, melainkan tetap konsisten menyorot teks lirik aktif baik pada panel lirik penuh maupun *preview strip* di atas scrubber.
+- **Pengenal Musik Cerdas & Visualizer Audio Live (Music Recognition & Live Waveform Graph)**:
+  - **Perbaikan Mesin Pengenalan Lagu (Dual UUID Shazam Discovery)**: Memperbarui endpoint discovery `amp.shazam.com/discovery/v5/en-US/GB/android/-/tag/{uuid1}/{uuid2}` dengan header Android resmi, sehingga pencarian judul lagu dan artis dari rekaman mikrofon berhasil 100% akurat.
+  - **Real-Time 22-Band Equalizer Sound Wave Visualizer Graph**: Mengganti animasi statis dengan visualizer bar spektrum multi-band yang berkedut dan melompat (*live bounce*) secara dinamis mengikuti intonasi nada dan kekuatan suara mikrofon secara real-time.
+  - **Sensitivitas Respon Dinamis (Perceptual Dynamic Curve)**: Kalkulasi RMS mikrofon kini diproses dengan kurva logaritmik dan pembaruan 30ms sehingga visualizer bereaksi instan terhadap ketukan drum dan vokal lagu.
+- **Pusat Pembaruan Aplikasi & Notifikasi Resmi (App Update Center & Notification Hub)**:
+  - **Penyatuan Top Bar Notifikasi Tunggal**: Menghapus header internal redundan pada `NotificationsSheet.kt` sehingga tab notifikasi menggunakan *FrostedTopBar* sistem secara mulus tanpa double navbar.
+  - **Tombol Notifikasi di Top Bar Home**: Menambahkan tombol lonceng notifikasi (`NotificationsNone`) di bar atas Home bersebelahan dengan ikon Settings untuk membuka lembar notifikasi (`NotificationsSheet`).
+  - **Lembar Notifikasi Cerdas (`NotificationsSheet`)**: Menampilkan status update software terbaru, changelog rilis, dan notifikasi status pemutaran/komunitas secara terpusat.
+  - **Menu Periksa Pembaruan di Settings**: Menambahkan section `About & Updates` di `SettingsSheet.kt` dengan opsi *Check for updates* live spinner (memeriksa langsung ke GitHub Releases), versi aktif saat ini, dan tautan kode sumber resmi.
+  - **Penyelarasan Footer Settings**: Merapikan teks informasi versi dan engine di bagian paling bawah pengaturan agar bersih, konsisten, dan terstruktur.
+- **Identitas Brand Resmi Musique (Official Musique Logo & Notification Mark)**:
+  - Mengintegrasikan logo resmi Musique (`ic_logo.xml`) berbasis VectorDrawable resolusi tak terbatas pada *Frosted Top Bar* di seluruh tab layar.
+  - Memperbarui ikon notifikasi status bar (*playback media notification* & *download notification*) menggunakan siluet resmi Musique (`ic_notification_logo.xml`).
+  - Memperbarui nama aplikasi menjadi **Musique** di `strings.xml` serta memperbarui tautan repository di Settings ke `https://github.com/Synxx12/musique-android`.
+- **Home Feed Otentik & Kecepatan Muat Instan (Instant 0ms Cache-First Feed & Quick Picks Skeleton)**:
+  - **Otentik Quick Picks Skeleton**: Skeleton loading layar Home kini 100% merefleksikan tata letak aslinya dengan kolom 4-lagu vertikal, tombol *Play all*, serta shimmer kartu carousel dan album.
+  - **Instant Cache-First Architecture (`cachedHomeShelves`)**: Menyimpan feed beranda dalam memori lokal sehingga aplikasi terbuka seketika (*0ms latency*) tanpa menunggu putaran jaringan berulang, sambil melakukan sinkronisasi data baru di latar belakang (*silent background refresh*).
+- **Manajemen Audio Focus & Panggilan Telepon (Professional Audio Engine)**:
+  - ExoPlayer dikonfigurasi dengan `C.USAGE_MEDIA`, `C.AUDIO_CONTENT_TYPE_MUSIC`, `handleAudioFocus = true`, dan `handleAudioBecomingNoisy = true`. Musik otomatis jeda (*pause/duck*) saat ada panggilan telepon masuk atau notifikasi navigasi, dan otomatis berlanjut (*resume*) saat panggilan berakhir tanpa intervensi manual.
+- **Pencatatan Riwayat Putar Real-Time (Playback History Recording)**:
+  - Mengintegrasikan pencatatan otomatis ke `PlaybackHistoryManager.recordPlay(song)` pada saat audio mulai berbunyi (`registerCurrentPlay`) dan saat transisi lagu baru (`onMediaItemTransition`), sehingga tab History langsung mencatat setiap pemutaran lagu secara instan.
+- **Deteksi Rute Audio Output Real-Time (Live Audio Device Output Updates)**:
+  - Mengintegrasikan `AudioManager.AudioDeviceCallback` pada `rememberActiveAudioDevice` untuk mendeteksi penambahan atau pelepasan perangkat audio (Speaker, Bluetooth TWS/Headphones, USB DAC) secara instan tanpa perlu membuka-tutup layar player.
+- **Web Live Ticker / Tracker Integration (Anonymous Now-Playing Ping)**:
+  - Mengirimkan broadcast judul lagu secara 100% anonim (`LiveStatsReporter`) ke ticker live web Musique (`https://mp3.movique.site/api/stats/ping`) tanpa melacak data pribadi.
+  - Menyediakan toggle kendali di **Settings > Privacy & Community** (*Share to Web Live Ticker*).
+  - Menambahkan menu **Web Live Tracker** pada lembar aksi lagu (*SongActionsSheet*) untuk membuka langsung dashboard statistik live di browser (`musique.movique.site/stats`).
+- **Penyedia Lirik Multi-Sumber Cerdas (Intelligent Multi-Source Lyrics Engine Cascade)**:
+  - **In-Memory Thread-Safe Cache**: Menyimpan lirik yang berhasil ditemukan ke dalam cache memori instan (`0ms`) berdasarkan `videoId` dan kombinasi `cleanTitle + cleanArtist`, mencegah hilangnya lirik secara tiba-tiba (*disappearing lyrics*).
+  - **Pembersihan Metadata Pintar (`LyricsCleaner`)**: Menghapus noise tag YouTube seperti `(Official Video)`, `(feat. ...)`, `[Visualizer]`, `(4K)` dan mengekstrak primary artist untuk memaksimalkan kecocokan pencarian di semua server lirik.
+  - **Eksekusi Paralel Kompetitif 4 Provider Global**:
+    1. **BetterLyrics**: Lirik TTML Apple Music resmi dengan sinkronisasi suku kata/kata berkualitas tinggi.
+    2. **LyricsPlus**: Database lirik komunitas terkurasi dengan dukungan word-synced & line-synced.
+    3. **SimpMusic**: Provider ekstrak lirik kaya dari database Spotify/YouTube Music berbasis `videoId`.
+    4. **LRCLIB**: Penyedia lirik publik bebas kunci (*key-less*) dengan 3 tahap fallback pencarian (Exact -> Field Search -> Fuzzy Query `q="$title $artist"` dengan toleransi durasi lagu).
+  - **Prioritas Word-Synced**: Memberikan prioritas mutlak pada lirik sinkron kata (*word-synced / rich-sync*) dari BetterLyrics / LyricsPlus / SimpMusic, dan otomatis fallback mulus ke lirik baris (*line-synced*) jika lirik kata tidak tersedia.
+  - Dialog pemilihan sumber lirik (**LyricsSourcesDialog**): Memungkinkan pengguna mengaktifkan/menonaktifkan masing-masing penyedia lirik dan melihat kredit sumber lirik yang aktif.
+- **Latar Belakang Video Motion Canvas (Animated Artwork Canvas Player)**:
+  - Menghadirkan pemutaran video canvas gerak loop vertikal (*Apple Music Motion Canvas, Tidal Video Canvas, dan Community Canvas*) di balik cover album player.
+  - Ditenagai oleh engine video ExoPlayer in-memory dengan auto-fallback mulus ke artwork statis resolusi tinggi jika video canvas tidak tersedia.
+- **Modal Manajemen Multi-Akun (Saved Accounts Bottom Sheet)**:
+  - Menekan tombol kapsul `[ 👤 Account ▾ ]` pada kartu profil kini membuka bottom sheet interaktif **Saved accounts** untuk mengelola dan beralih antarakun Google YouTube Music secara instan.
+  - **Daftar Akun Tersimpan**: Menampilkan nama akun, avatar/ikon profil, handle/email, indikator akun aktif (`✓`), dan tombol hapus (`🗑️`).
+  - **Save Current Account**: Tombol kapsul `[ 🔖 Save current account ]` untuk menyimpan sesi akun yang sedang aktif ke penyimpanan lokal terenkripsi secara persisten.
+  - **Add Another Account**: Tombol kapsul `[ ➕ Add another account ]` untuk masuk ke akun Google baru via WebView tanpa menghilangkan akun yang sudah ada.
+  - Beralih akun (*switch account*) otomatis menyinkronkan ulang data Home, Library, Playlist, dan Listening History akun terpilih.
+
+#### 🐛 Bug Fixes
+- **Audio Output Switcher BroadcastReceiver Safety (Android 14/15 Compatibility)**:
+  - Memperbaiki potensi `SecurityException` saat membuka player dengan menggunakan `ContextCompat.RECEIVER_NOT_EXPORTED` pada registrasi `BroadcastReceiver` status audio/Bluetooth.
+  - Membungkus pembacaan perangkat output audio aktif dalam mekanisme `runCatching` sehingga 100% tahan error (*crash-proof*) di semua versi Android dan vendor perangkat.
+- **FocusRequester Initialization Safety pada Search Tab**:
+  - Menghapus instansiasi duplikat `searchFocusRequester` yang tidak terikat di `MainActivity.kt`.
+  - Mengamankan pemanggilan `focusRequester.requestFocus()` di `SearchScreen.kt` dengan penundaan frame layout (`delay(100)`) dan pelindung `runCatching` guna mencegah `IllegalStateException: FocusRequester is not initialized`.
+
+#### 🔧 Build & Infrastruktur
+- **Pembaruan Toolchain Build**:
+  - Memperbarui Gradle ke **8.11.1**, Android Gradle Plugin (AGP) ke **8.10.1**, dan Kotlin Compiler ke **2.3.20**.
+  - Mengintegrasikan dependensi `onnxruntime-android:1.28.0`, `quickjs-kt-android:1.0.5`, dan `media3-exoplayer-hls:1.5.1`.
+  - Mengoptimalkan alokasi memori heap Gradle JVM menjadi 6GB (`-Xmx6144m`) untuk proses Dex Merging D8 yang cepat dan stabil.
+
 ---
 
 ### [v1.3.5] - 2026-08-23

@@ -38,6 +38,7 @@ data class Song(
      * that need it — see [com.music.bitchord.playback.toMediaItem].
      */
     val localPath: String? = null,
+    val sourceQuality: String? = null,
 )
 
 /**

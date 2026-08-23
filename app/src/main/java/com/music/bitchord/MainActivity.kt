@@ -40,10 +40,12 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.SystemUpdate
+import com.music.bitchord.ui.screens.NotificationsSheet
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -58,6 +60,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -110,6 +113,7 @@ import com.music.bitchord.ui.components.ListenBrainzTokenAlert
 import com.music.bitchord.ui.components.MiniPlayer
 import com.music.bitchord.ui.components.MusicRecognitionSheet
 import com.music.bitchord.ui.components.TopFadeBlur
+import com.music.bitchord.ui.components.LyricsSourcesDialog
 import com.music.bitchord.ui.components.UpdateAvailableDialog
 import com.music.bitchord.ui.icons.BitChordIcons
 import androidx.media3.common.Player
@@ -157,7 +161,9 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     var showNowPlaying by remember { mutableStateOf(false) }
     var showLogin by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showNotifications by remember { mutableStateOf(false) }
     var showAccountScrobbling by remember { mutableStateOf(false) }
+    var showLyricsSources by remember { mutableStateOf(false) }
     var showListenBrainzLogin by remember { mutableStateOf(false) }
     var showLastfmLogin by remember { mutableStateOf(false) }
     var songActions by remember { mutableStateOf<Song?>(null) }
@@ -221,24 +227,36 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     val lyrics by viewModel.lyrics.collectAsStateWithLifecycle()
+    val lyricsSource by viewModel.lyricsSource.collectAsStateWithLifecycle()
     val lyricsChecked by viewModel.lyricsChecked.collectAsStateWithLifecycle()
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val detailStack by viewModel.detailStack.collectAsStateWithLifecycle()
     val detail = detailStack.lastOrNull()
+    val isLocalDetail = detail?.browseId == "local:all"
     val likeStatuses by viewModel.likeStatuses.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
+    val savedAccounts by viewModel.savedAccounts.collectAsStateWithLifecycle()
+    val historyItems by com.music.bitchord.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showRecognitionSheet by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(searchFocusTrigger) {
-        if (searchFocusTrigger > 0) searchFocusRequester.requestFocus()
+        if (searchFocusTrigger > 0) {
+            delay(100)
+            runCatching { searchFocusRequester.requestFocus() }
+        }
     }
 
     // Settings has no tab of its own — it sits on top of whatever tab was
     // selected. A pushed album/artist page (from the player, search, etc.)
     // should surface above it rather than being hidden behind it.
-    LaunchedEffect(detail) { if (detail != null) showSettings = false }
+    LaunchedEffect(detail) {
+        if (detail != null) {
+            showSettings = false
+            showNotifications = false
+        }
+    }
     LaunchedEffect(showSettings) { if (!showSettings) showAccountScrobbling = false }
 
     val controller = rememberMediaController()
@@ -281,8 +299,16 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     }
 
     // Lyrics follow whatever is playing; duration lands a beat after the track.
-    LaunchedEffect(player.song?.videoId, player.durationMs) {
-        player.song?.let { viewModel.loadLyrics(it.videoId, it.title, it.artist, player.durationMs) }
+    LaunchedEffect(player.song?.videoId, player.song?.albumName, player.durationMs) {
+        player.song?.let {
+            viewModel.loadLyrics(
+                videoId = it.videoId,
+                title = it.title,
+                artist = it.artist,
+                durationMs = player.durationMs,
+                album = it.albumName,
+            )
+        }
     }
 
     val homeListState = rememberLazyListState()
@@ -550,9 +576,12 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
     ) {
         // A pushed album/artist/playlist page replaces the tab content but
         // leaves the tab bar and mini player in place.
-        BackHandler(enabled = detail != null && !showSettings && !showAccountScrobbling) { viewModel.closeDetail() }
+        BackHandler(enabled = detail != null && !showSettings && !showAccountScrobbling && !showNotifications) { viewModel.closeDetail() }
         BackHandler(enabled = showAccountScrobbling) {
             showAccountScrobbling = false
+        }
+        BackHandler(enabled = showNotifications && !showSettings && !showAccountScrobbling) {
+            showNotifications = false
         }
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
@@ -561,7 +590,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             showSettings = false
             if (detail == null) selectedTab = TAB_HOME
         }
-        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && selectedTab != TAB_HOME) {
+        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showNotifications && selectedTab != TAB_HOME) {
             selectedTab = TAB_HOME
         }
         BackHandler(enabled = showUpdateDialog) { showUpdateDialog = false }
@@ -572,6 +601,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             targetState = when {
                 showAccountScrobbling -> "account_scrobbling"
                 showSettings -> "settings"
+                showNotifications -> "notifications"
                 detail != null -> detail.browseId
                 else -> "tab:$selectedTab"
             },
@@ -579,11 +609,13 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             modifier = Modifier.hazeSource(hazeState),
             label = "content",
         ) { key ->
-            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" }
+            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "notifications" }
             if (key == "account_scrobbling") {
                 AccountAndScrobblingScreen(
                     signedIn = signedIn,
                     account = account,
+                    savedAccounts = savedAccounts,
+                    currentCookie = com.music.bitchord.data.innertube.Innertube.cookie,
                     onSignIn = {
                         showAccountScrobbling = false
                         showSettings = false
@@ -591,6 +623,12 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     },
                     onSignOut = { viewModel.signOut() },
                     onSyncNow = { viewModel.syncAccountData(force = true) },
+                    onSaveCurrentAccount = { viewModel.saveCurrentAccount() },
+                    onSwitchAccount = { saved -> viewModel.switchAccount(saved) },
+                    onRemoveSavedAccount = { id -> viewModel.removeSavedAccount(id) },
+                    onAddAnotherAccount = {
+                        showLogin = true
+                    },
                     onOpenListenBrainzLogin = { showListenBrainzLogin = true },
                     onOpenLastfmLogin = { showLastfmLogin = true },
                     contentPadding = listPadding,
@@ -605,6 +643,13 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     },
                     onSignOut = { viewModel.signOut() },
                     onAccountScrobbling = { showAccountScrobbling = true },
+                    onLyricsSources = { showLyricsSources = true },
+                    contentPadding = listPadding,
+                )
+            } else if (key == "notifications") {
+                NotificationsSheet(
+                    onDismiss = { showNotifications = false },
+                    updateInfo = updateNotice,
                     contentPadding = listPadding,
                 )
             } else if (page != null && (page.browseId == "app:history" || key == "app:history")) {
@@ -734,53 +779,50 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     pullState = explorePull,
                     contentPadding = listPadding,
                 )
-                TAB_SEARCH -> {
-                    val historyItems by com.music.bitchord.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
-                    SearchScreen(
-                        filter = filter,
-                        onFilterChange = viewModel::onFilterChange,
-                        results = results,
-                        listState = searchListState,
-                        recentSongs = historyItems.map { it.song }.distinctBy { it.videoId },
-                        // Search hits are alternatives to each other, not a running
-                        // order — play the one tapped and build a station from it.
-                        onSongClick = { songs, index ->
-                            songs.getOrNull(index)?.let {
-                                viewModel.recordSearch()
-                                playRadio(it)
-                            }
-                        },
-                        onSongLongPress = { songActions = it },
-                        onSongSwipe = addToQueue,
-                        onBrowseClick = { item ->
+                TAB_SEARCH -> SearchScreen(
+                    filter = filter,
+                    onFilterChange = viewModel::onFilterChange,
+                    results = results,
+                    listState = searchListState,
+                    recentSongs = historyItems.map { it.song }.distinctBy { it.videoId },
+                    // Search hits are alternatives to each other, not a running
+                    // order — play the one tapped and build a station from it.
+                    onSongClick = { songs, index ->
+                        songs.getOrNull(index)?.let {
                             viewModel.recordSearch()
-                            viewModel.openDetail(
-                                browseId = item.browseId,
-                                title = item.title,
-                                subtitle = item.subtitle,
-                                thumbnailUrl = item.thumbnailUrl,
-                                type = item.type,
-                            )
-                        },
-                        history = searchHistory,
-                        onHistoryClick = { term ->
-                            viewModel.onQueryChange(term)
-                            viewModel.recordSearch()
-                        },
-                        onHistoryRemove = viewModel::removeSearch,
-                        onHistoryClear = viewModel::clearSearchHistory,
-                        onCategoryClick = { browseId, title ->
-                            viewModel.openDetail(
-                                browseId = browseId,
-                                title = title,
-                                subtitle = "Explore",
-                                thumbnailUrl = null,
-                                type = BrowseType.PLAYLIST,
-                            )
-                        },
-                        contentPadding = listPadding,
-                    )
-                }
+                            playRadio(it)
+                        }
+                    },
+                    onSongLongPress = { songActions = it },
+                    onSongSwipe = addToQueue,
+                    onBrowseClick = { item ->
+                        viewModel.recordSearch()
+                        viewModel.openDetail(
+                            browseId = item.browseId,
+                            title = item.title,
+                            subtitle = item.subtitle,
+                            thumbnailUrl = item.thumbnailUrl,
+                            type = item.type,
+                        )
+                    },
+                    history = searchHistory,
+                    onHistoryClick = { term ->
+                        viewModel.onQueryChange(term)
+                        viewModel.recordSearch()
+                    },
+                    onHistoryRemove = viewModel::removeSearch,
+                    onHistoryClear = viewModel::clearSearchHistory,
+                    onCategoryClick = { browseId, title ->
+                        viewModel.openDetail(
+                            browseId = browseId,
+                            title = title,
+                            subtitle = "Explore",
+                            thumbnailUrl = null,
+                            type = BrowseType.PLAYLIST,
+                        )
+                    },
+                    contentPadding = listPadding,
+                )
                 else -> LibraryScreen(
                     signedIn = signedIn,
                     state = libraryState,
@@ -822,7 +864,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
         // A detail page's artwork runs up under the status bar, so the bar
         // there is a fade rather than a pane — see [TopFadeBlur]. Drawn before
         // the bar so the bar's own content sits on top of it.
-        val isDetailVisible = detail != null && !showSettings && !showAccountScrobbling
+        val isDetailVisible = detail != null && !showSettings && !showAccountScrobbling && !showNotifications
         if (isDetailVisible) {
             TopFadeBlur(
                 hazeState = hazeState,
@@ -835,21 +877,22 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             title = when {
                 showAccountScrobbling -> "Account & scrobbling"
                 showSettings -> "Settings"
+                showNotifications -> "Notifications"
                 detail != null -> detail.title
                 else -> tabs[selectedTab].let {
                     if (it.label == "Play") "Listen Now" else it.label
                 }
             },
             hazeState = hazeState,
-            ownBackdrop = detail == null,
+            ownBackdrop = detail == null || isLocalDetail,
             scrolled = when {
-                showSettings || showAccountScrobbling -> true
+                showSettings || showAccountScrobbling || showNotifications -> true
                 detail != null -> detailScrolled
                 else -> scrolled
             },
             refreshing = currentFeed != null && currentFeed in refreshing,
             pullFraction = { currentPull?.distanceFraction ?: 0f },
-            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling) {
+            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showNotifications) {
                 {
                     SearchTopBarField(
                         query = query,
@@ -863,6 +906,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             onBack = when {
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSettings -> ({ showSettings = false })
+                showNotifications -> ({ showNotifications = false })
                 detail != null -> ({ viewModel.closeDetail(); Unit })
                 selectedTab == TAB_SEARCH && (query.isNotEmpty() || results != null) -> ({
                     viewModel.onQueryChange("")
@@ -871,7 +915,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
             },
             modifier = Modifier.align(Alignment.TopCenter),
             actions = {
-                if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling) {
+                if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showNotifications) {
                     // Recognition icon is embedded cleanly inside the search pill
                 } else if (detail?.browseId == "app:history") {
                     IconButton(onClick = {
@@ -892,7 +936,7 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
-                } else if (!showSettings && !showAccountScrobbling && detail == null) {
+                } else if (!showSettings && !showAccountScrobbling && !showNotifications && detail == null) {
                     if (selectedTab == TAB_HOME) {
                         updateNotice?.let { update ->
                             IconButton(onClick = {
@@ -904,6 +948,13 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                             }
+                        }
+                        IconButton(onClick = { showNotifications = true }) {
+                            Icon(
+                                Icons.Rounded.NotificationsNone,
+                                contentDescription = "Notifications",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
                         }
                     }
                     if (selectedTab == TAB_LIBRARY) {
@@ -1029,7 +1080,29 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     },
                     onNext = { controller?.seekToNextMediaItem() },
                     onPrevious = { controller?.seekToPrevious() },
-                    onSeek = { controller?.seekTo(it) },
+                    onSeekFraction = { fraction ->
+                        controller?.let { player ->
+                            val duration = player.duration
+                            if (duration > 0) {
+                                player.seekTo(
+                                    (fraction * duration).toLong()
+                                        .coerceIn(0L, (duration - SEEK_END_GUARD_MS).coerceAtLeast(0L)),
+                                )
+                            }
+                        }
+                    },
+                    onSeek = { target ->
+                        controller?.let { player ->
+                            val duration = player.duration
+                            player.seekTo(
+                                if (duration > 0) {
+                                    target.coerceIn(0L, (duration - SEEK_END_GUARD_MS).coerceAtLeast(0L))
+                                } else {
+                                    target.coerceAtLeast(0L)
+                                },
+                            )
+                        }
+                    },
                     queue = player.queue,
                     queueIndex = player.queueIndex,
                     hasPrevious = player.hasPrevious,
@@ -1061,22 +1134,20 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                         val on = !autoplay
                         AppSettings.setAutoplay(on)
                         if (on) {
-                            // Let the effect above seed a mix for the track
-                            // playing now, instead of passing over it as one it
-                            // has already extended.
                             autoplaySeed = null
                         } else {
-                            // Switching it off takes the mix back out of the
-                            // queue — what's left is what was actually asked for.
                             controller?.dropAutoplayTracks()
                         }
                     },
                     onJumpTo = { controller?.seekToDefaultPosition(it) },
                     onRemoveFromQueue = { controller?.removeMediaItem(it) },
                     onMoveInQueue = { from, to -> controller?.moveMediaItem(from, to) },
-                    // The enriched copy, not player.song — otherwise the menu
-                    // hides the album and artist rows even once their browse
-                    // ids have been resolved.
+                    onClearQueue = {
+                        controller?.let {
+                            it.dropAutoplayTracks()
+                            it.clearMediaItems()
+                        }
+                    },
                     onOpenMenu = { songActions = song },
                     onOpenAlbum = { id ->
                         showNowPlaying = false
@@ -1090,20 +1161,11 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
                     },
                     onOpenArtist = { id ->
                         showNowPlaying = false
-                        // No artwork: this track's cover isn't the artist's
-                        // picture, and the page fills its own in once loaded.
                         viewModel.openDetail(id, song.artist, "Artist", null, BrowseType.ARTIST)
                     },
                     lyrics = lyrics,
+                    lyricsSource = lyricsSource,
                     lyricsUnavailable = lyricsChecked && lyrics.isNullOrEmpty(),
-                    onClearQueue = {
-                        // Keep what's playing; drop everything queued after it.
-                        controller?.let { c ->
-                            if (c.mediaItemCount > c.currentMediaItemIndex + 1) {
-                                c.removeMediaItems(c.currentMediaItemIndex + 1, c.mediaItemCount)
-                            }
-                        }
-                    },
                 )
             }
         }
@@ -1328,11 +1390,22 @@ private fun BitChordApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel
         if (showUpdateDialog) {
             updateNotice?.let { update ->
                 UpdateAvailableDialog(
-                    updateInfo = update,
+                    version = update.version,
                     hazeState = hazeState,
                     onDismiss = { showUpdateDialog = false },
+                    onUpdate = {
+                        showUpdateDialog = false
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
+                    },
                 )
             }
+        }
+
+        if (showLyricsSources) {
+            LyricsSourcesDialog(
+                hazeState = hazeState,
+                onDismiss = { showLyricsSources = false },
+            )
         }
 
         if (showListenBrainzLogin) {
@@ -1414,3 +1487,5 @@ private const val TAB_HOME = 0
 private const val TAB_EXPLORE = 1
 private const val TAB_LIBRARY = 2
 private const val TAB_SEARCH = 3
+
+private const val SEEK_END_GUARD_MS = 1_000L

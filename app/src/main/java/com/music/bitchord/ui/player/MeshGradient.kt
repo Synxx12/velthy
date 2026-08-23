@@ -35,6 +35,8 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
 import com.music.bitchord.data.settings.AppSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -50,10 +52,7 @@ private val FallbackColors = listOf(
 
 /** The four mesh colours, wrapped so the backdrop can skip recomposition. */
 @Immutable
-data class MeshPalette(
-    val colors: List<Color>,
-    val isTopLight: Boolean = false,
-)
+data class MeshPalette(val colors: List<Color>)
 
 /**
  * The Apple Music "Now Playing" backdrop: four luminous colour blobs sampled
@@ -156,12 +155,17 @@ fun MeshGradientBackground(
 
 /**
  * Loads the artwork with Coil (software bitmap, thumbnail-sized) and pulls a
- * 4-colour palette out of it. Recomputes only when [imageUrl] changes.
+ * 4-colour palette out of it. Recomputes when [imageUrl] changes.
+ *
+ * A track's motion artwork is frequently lit nothing like its still sleeve —
+ * a different shot, a different grade. [canvasFrame], a frame captured off
+ * the playing clip once one is available, is quantised the same way and
+ * takes over from there, crossfading in exactly like a track skip.
  */
 @Composable
-fun rememberArtworkColors(imageUrl: String?): MeshPalette {
+fun rememberArtworkColors(imageUrl: String?, canvasFrame: Bitmap? = null): MeshPalette {
     val context = LocalContext.current
-    var palette by remember { mutableStateOf(MeshPalette(FallbackColors, isTopLight = false)) }
+    var palette by remember(imageUrl) { mutableStateOf(MeshPalette(FallbackColors)) }
 
     LaunchedEffect(imageUrl) {
         if (imageUrl == null) return@LaunchedEffect
@@ -172,36 +176,15 @@ fun rememberArtworkColors(imageUrl: String?): MeshPalette {
             .build()
         val result = SingletonImageLoader.get(context).execute(request)
         val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return@LaunchedEffect
-        val topLight = isBitmapTopLight(bitmap)
-        palette = MeshPalette(paletteOf(bitmap), isTopLight = topLight)
+        palette = MeshPalette(paletteOf(bitmap))
+    }
+
+    LaunchedEffect(canvasFrame) {
+        val frame = canvasFrame ?: return@LaunchedEffect
+        val colors = withContext(Dispatchers.Default) { paletteOf(frame) }
+        palette = MeshPalette(colors)
     }
     return palette
-}
-
-private fun isBitmapTopLight(bitmap: Bitmap): Boolean {
-    val width = bitmap.width
-    val height = bitmap.height
-    if (width <= 0 || height <= 0) return false
-
-    val topRows = (height * 0.18f).toInt().coerceAtLeast(1)
-    var totalLuminance = 0.0
-    var count = 0
-    val step = (width / 16).coerceAtLeast(1)
-
-    for (y in 0 until topRows) {
-        for (x in 0 until width step step) {
-            val pixel = bitmap.getPixel(x, y)
-            val r = (pixel shr 16) and 0xFF
-            val g = (pixel shr 8) and 0xFF
-            val b = pixel and 0xFF
-            val lum = 0.2126 * (r / 255.0) + 0.7152 * (g / 255.0) + 0.0722 * (b / 255.0)
-            totalLuminance += lum
-            count++
-        }
-    }
-
-    val avgLuminance = if (count > 0) totalLuminance / count else 0.0
-    return avgLuminance > 0.55
 }
 
 /**

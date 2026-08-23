@@ -3,7 +3,6 @@ package com.music.bitchord.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -25,7 +24,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -242,54 +240,4 @@ private fun AlertTextField(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-}
-
-internal val ALERT_WIDTH = 270.dp
-internal val ALERT_CORNER = 14.dp
-internal val ACTION_HEIGHT = 44.dp
-internal val SCRIM_COLOR = Color.Black.copy(alpha = 0.28f)
-
-@Composable
-internal fun AlertAction(
-    label: String,
-    emphasised: Boolean,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(ACTION_HEIGHT)
-            .background(
-                if (pressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.09f) else Color.Transparent,
-            )
-            .clickable(
-                enabled = enabled,
-                indication = null,
-                interactionSource = interactionSource,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge.copy(
-                fontSize = 17.sp,
-                fontWeight = if (emphasised) FontWeight.W600 else FontWeight.W400,
-            ),
-            color = MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.4f),
-        )
-    }
-}
-
-@Composable
-internal fun AlertRule() {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(0.5.dp)
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f)),
-    )
 }

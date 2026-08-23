@@ -91,16 +91,18 @@ object MusicRecognitionEngine {
                     for (i in 0 until read step 2) {
                         if (i + 1 < read) {
                             val sample = (tempBuffer[i + 1].toInt() shl 8) or (tempBuffer[i].toInt() and 0xFF)
-                            sum += sample * sample
+                            sum += sample.toLong() * sample.toLong()
                         }
                     }
                     val rms = Math.sqrt(sum / (read / 2))
-                    val normalizedAmp = (rms / 32768.0).toFloat().coerceIn(0f, 1f)
+                    // Perceptual dynamic curve for responsive visualizer bouncing
+                    val rawAmp = (rms / 6000.0).coerceIn(0.0, 1.0)
+                    val normalizedAmp = Math.pow(rawAmp, 0.75).toFloat().coerceIn(0f, 1f)
 
                     val elapsed = System.currentTimeMillis() - startTime
                     val progress = (elapsed.toFloat() / RECORD_DURATION_MS).coerceIn(0f, 1f)
 
-                    if (System.currentTimeMillis() - lastProgressEmit > 50) {
+                    if (System.currentTimeMillis() - lastProgressEmit > 30) {
                         lastProgressEmit = System.currentTimeMillis()
                         emit(RecognitionState.Listening(normalizedAmp, progress))
                     }
@@ -171,8 +173,9 @@ object MusicRecognitionEngine {
     private suspend fun queryShazamRecognition(rawPcm: ByteArray): RecognitionResult? = withContext(Dispatchers.IO) {
         runCatching {
             val signature = ShazamFingerprinter.createSignature(rawPcm, SAMPLE_RATE) ?: return@withContext null
-            val uuid = UUID.randomUUID().toString().uppercase()
-            val url = "https://amp.shazam.com/discovery/v5/en/US/android/-/tag/$uuid?sync=true"
+            val uuid1 = UUID.randomUUID().toString().uppercase()
+            val uuid2 = UUID.randomUUID().toString().uppercase()
+            val url = "https://amp.shazam.com/discovery/v5/en-US/GB/android/-/tag/$uuid1/$uuid2?sync=true&webv3=true&sampling=true&connected=&shazamapiversion=v3&sharehub=true&hubv5minorversion=v5.1&hidelb=true&video=v3"
 
             val jsonBody = """
                 {
@@ -180,6 +183,7 @@ object MusicRecognitionEngine {
                     "signatures": [
                         {
                             "samplems": 4500,
+                            "timestamp": 0,
                             "uri": "data:audio/vnd.shazam.sig;base64,$signature"
                         }
                     ]
@@ -188,8 +192,10 @@ object MusicRecognitionEngine {
 
             val request = Request.Builder()
                 .url(url)
-                .addHeader("User-Agent", "Shazam/14.2.0 (Android; Google Pixel 6; Build/TP1A.220624.014)")
+                .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
                 .addHeader("Content-Type", "application/json")
+                .addHeader("X-Shazam-Platform", "ANDROID")
+                .addHeader("X-Shazam-AppVersion", "14.1.0")
                 .post(jsonBody.toRequestBody("application/json".toMediaType()))
                 .build()
 
@@ -204,7 +210,8 @@ object MusicRecognitionEngine {
             val title = track["title"]?.jsonPrimitive?.content ?: return@withContext null
             val subtitle = track["subtitle"]?.jsonPrimitive?.content ?: "Unknown Artist"
             val images = track["images"]?.jsonObject
-            val coverArt = images?.get("coverart")?.jsonPrimitive?.content
+            val coverArt = images?.get("coverarthq")?.jsonPrimitive?.content
+                ?: images?.get("coverart")?.jsonPrimitive?.content
 
             RecognitionResult(
                 title = title,

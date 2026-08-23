@@ -1,6 +1,8 @@
 package com.music.bitchord.ui.components
 
+import android.content.Intent
 import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Downloading
@@ -213,6 +216,19 @@ fun SongActionsSheet(
             ) { pickingSleepTimer = true }
         }
         if (!isOffline) {
+            val context = LocalContext.current
+            ActionRow(
+                icon = Icons.Rounded.Cloud,
+                label = "Web Live Tracker",
+                value = "musique.movique.site",
+                accent = palette.accent,
+                onClick = {
+                    runCatching {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://musique.movique.site/stats"))
+                        context.startActivity(intent)
+                    }
+                },
+            )
             onShare?.let {
                 ActionRow(Icons.Rounded.Share, "Share", accent = palette.accent, onClick = it)
             }

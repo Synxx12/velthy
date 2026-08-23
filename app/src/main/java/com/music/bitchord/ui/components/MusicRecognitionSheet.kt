@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -60,8 +61,10 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -236,51 +239,56 @@ fun MusicRecognitionSheet(
 @Composable
 private fun ListeningView(amplitude: Float, progress: Float) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.22f,
+    val pulsePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * Math.PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
         ),
-        label = "pulseScale",
+        label = "pulsePhase",
     )
 
     val dynamicScale by animateFloatAsState(
-        targetValue = 1f + (amplitude * 0.45f),
+        targetValue = 1f + (amplitude * 0.35f),
         label = "dynamicScale",
     )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 20.dp),
+            .padding(vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        // Glowing Orb with Microphone
         Box(
-            modifier = Modifier.size(160.dp),
+            modifier = Modifier.size(136.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // Ripple layer 2
+            // Ambient ripple layer 2
             Box(
                 modifier = Modifier
-                    .size(150.dp)
-                    .scale(pulseScale)
+                    .size(130.dp)
+                    .graphicsLayer {
+                        scaleX = 1f + (amplitude * 0.40f)
+                        scaleY = 1f + (amplitude * 0.40f)
+                        alpha = (0.08f + amplitude * 0.22f).coerceIn(0f, 0.4f)
+                    }
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)),
+                    .background(MaterialTheme.colorScheme.primary),
             )
             // Ripple layer 1
             Box(
                 modifier = Modifier
-                    .size(120.dp)
+                    .size(104.dp)
                     .scale(dynamicScale)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
             )
-            // Center pulsing icon with waveform
+            // Center icon orb
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(74.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.linearGradient(
@@ -296,12 +304,56 @@ private fun ListeningView(amplitude: Float, progress: Float) {
                     imageVector = Icons.Rounded.Mic,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier.size(34.dp),
                 )
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // Real-Time 22-Band Equalizer Sound Wave Visualizer Graph (Kedut-kedut Live Sesuai Suara)
+        val barCount = 22
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .height(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (i in 0 until barCount) {
+                // Bell-shaped harmonic weight (center bars react stronger to bass/voice)
+                val distFromCenter = Math.abs(i - (barCount / 2f)) / (barCount / 2f)
+                val harmonicWeight = (1.0f - distFromCenter * 0.55f).coerceIn(0.35f, 1.0f)
+                val waveOffset = Math.sin(pulsePhase.toDouble() + i * 0.45).toFloat() * 0.16f
+                val barFactor = ((amplitude * harmonicWeight + waveOffset).coerceIn(0.08f, 1.0f))
+
+                val animatedHeight by animateFloatAsState(
+                    targetValue = lerp(4f, 32f, barFactor),
+                    animationSpec = tween(durationMillis = 60),
+                    label = "bar_$i",
+                )
+
+                Box(
+                    modifier = Modifier
+                        .width(3.5.dp)
+                        .height(animatedHeight.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.tertiary,
+                                ),
+                            ),
+                        ),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
 
         Text(
             text = "Mendengarkan musik di sekitarmu...",
@@ -309,15 +361,15 @@ private fun ListeningView(amplitude: Float, progress: Float) {
             color = MaterialTheme.colorScheme.onSurface,
         )
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
 
         Text(
-            text = "Pastikan lagu terdengar jelas oleh mikrofon",
+            text = if (amplitude > 0.12f) "🎶 Menangkap frekuensi musik..." else "Dekatkan perangkat ke sumber suara",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (amplitude > 0.12f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
 
         LinearProgressIndicator(
             progress = { progress },

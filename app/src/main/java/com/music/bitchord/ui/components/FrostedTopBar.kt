@@ -171,7 +171,7 @@ fun FrostedTopBar(
                             painter = painterResource(R.drawable.ic_logo),
                             contentDescription = null,
                             colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
-                            modifier = Modifier.height(18.dp),
+                            modifier = Modifier.height(20.dp),
                         )
                         if (BuildConfig.FLAVOR == "dev") {
                             Text(

@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Musique Native</string>
+    <string name="app_name">Musique</string>
     <string name="playback_channel_name">Now playing</string>
 </resources>

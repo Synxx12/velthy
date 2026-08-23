@@ -90,8 +90,7 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
         if (frameCount == 0) return
         val outputBuffer = replaceOutputBuffer(frameCount * BYTES_PER_FRAME)
 
-        val delaySize = delayLeft.size
-        if (!enabled || delaySize == 0 || delayRight.size != delaySize) {
+        if (!enabled) {
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
             return
@@ -99,6 +98,8 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
 
         inputBuffer.order(ByteOrder.nativeOrder())
         outputBuffer.order(ByteOrder.nativeOrder())
+
+        val delaySize = delayLeft.size
         repeat(frameCount) {
             val left = inputBuffer.short.toInt()
             val right = inputBuffer.short.toInt()

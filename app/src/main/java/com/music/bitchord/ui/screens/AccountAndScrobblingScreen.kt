@@ -58,13 +58,26 @@ import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.ui.components.thumbnailBorder
 import kotlin.math.roundToInt
 
+import androidx.compose.material.icons.rounded.BookmarkBorder
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import com.music.bitchord.auth.SavedAccount
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccountAndScrobblingScreen(
     signedIn: Boolean,
     account: Account?,
+    savedAccounts: List<SavedAccount> = emptyList(),
+    currentCookie: String? = null,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onSyncNow: () -> Unit,
+    onSaveCurrentAccount: () -> Unit = {},
+    onSwitchAccount: (SavedAccount) -> Unit = {},
+    onRemoveSavedAccount: (String) -> Unit = {},
+    onAddAnotherAccount: () -> Unit = {},
     onOpenListenBrainzLogin: () -> Unit,
     onOpenLastfmLogin: () -> Unit,
     contentPadding: PaddingValues,
@@ -90,6 +103,31 @@ fun AccountAndScrobblingScreen(
     val listenBrainzToken by AppSettings.listenBrainzToken.collectAsStateWithLifecycle()
 
     var showSignOutConfirm by remember { mutableStateOf(false) }
+    var showSavedAccountsSheet by remember { mutableStateOf(false) }
+
+    if (showSavedAccountsSheet) {
+        SavedAccountsBottomSheet(
+            currentAccount = account,
+            currentCookie = currentCookie,
+            savedAccounts = savedAccounts,
+            onDismiss = { showSavedAccountsSheet = false },
+            onSaveCurrent = {
+                onSaveCurrentAccount()
+                Toast.makeText(context, "Account saved", Toast.LENGTH_SHORT).show()
+            },
+            onSelect = { saved ->
+                showSavedAccountsSheet = false
+                onSwitchAccount(saved)
+            },
+            onDelete = { id ->
+                onRemoveSavedAccount(id)
+            },
+            onAddAnother = {
+                showSavedAccountsSheet = false
+                onAddAnotherAccount()
+            },
+        )
+    }
 
     if (showSignOutConfirm) {
         AlertDialog(
@@ -134,6 +172,13 @@ fun AccountAndScrobblingScreen(
             signedIn = signedIn,
             account = account,
             onSignIn = onSignIn,
+            onAccountClick = {
+                if (signedIn) {
+                    showSavedAccountsSheet = true
+                } else {
+                    onSignIn()
+                }
+            },
             onSignOutClick = { showSignOutConfirm = true },
         )
 
@@ -339,6 +384,7 @@ private fun ProfileAccountCard(
     signedIn: Boolean,
     account: Account?,
     onSignIn: () -> Unit,
+    onAccountClick: () -> Unit,
     onSignOutClick: () -> Unit,
 ) {
     Column(
@@ -439,7 +485,7 @@ private fun ProfileAccountCard(
                 color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.75f),
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
-                    .clickable(onClick = onSignIn),
+                    .clickable(onClick = onAccountClick),
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
@@ -480,6 +526,242 @@ private fun ProfileAccountCard(
                         .clickable(onClick = onSignOutClick)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Saved accounts bottom sheet with options to switch, save current, or add another account.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SavedAccountsBottomSheet(
+    currentAccount: Account?,
+    currentCookie: String?,
+    savedAccounts: List<SavedAccount>,
+    onDismiss: () -> Unit,
+    onSaveCurrent: () -> Unit,
+    onSelect: (SavedAccount) -> Unit,
+    onDelete: (String) -> Unit,
+    onAddAnother: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        dragHandle = {
+            Surface(
+                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(2.dp),
+            ) {
+                Box(Modifier.size(width = 36.dp, height = 4.dp))
+            }
+        },
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+        ) {
+            Text(
+                text = "Saved accounts",
+                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(top = 4.dp, bottom = 18.dp),
+            )
+
+            Text(
+                text = "Saved accounts",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 10.dp),
+            )
+
+            // List of saved accounts
+            if (savedAccounts.isEmpty() && currentAccount != null) {
+                SavedAccountRow(
+                    name = currentAccount.name,
+                    handle = currentAccount.email.takeIf { it.isNotBlank() },
+                    thumbnailUrl = currentAccount.thumbnailUrl,
+                    isActive = true,
+                    onSelect = {},
+                    onDelete = null,
+                )
+                Spacer(Modifier.height(14.dp))
+            } else {
+                savedAccounts.forEach { saved ->
+                    val isActive = (currentCookie != null && saved.cookie == currentCookie) ||
+                        (currentAccount != null && saved.name == currentAccount.name)
+                    SavedAccountRow(
+                        name = saved.name,
+                        handle = saved.handle,
+                        thumbnailUrl = saved.thumbnailUrl,
+                        isActive = isActive,
+                        onSelect = { onSelect(saved) },
+                        onDelete = { onDelete(saved.id) },
+                    )
+                    Spacer(Modifier.height(14.dp))
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            // Button 1: Save current account
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable(onClick = onSaveCurrent),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 13.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BookmarkBorder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = "Save current account",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // Button 2: Add another account
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(18.dp))
+                    .clickable(onClick = onAddAnother),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 13.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AddCircleOutline,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = "Add another account",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedAccountRow(
+    name: String,
+    handle: String?,
+    thumbnailUrl: String?,
+    isActive: Boolean,
+    onSelect: () -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onSelect),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        ) {
+            // Profile icon or avatar
+            if (thumbnailUrl != null) {
+                AsyncImage(
+                    model = thumbnailUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(16.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!handle.isNullOrBlank()) {
+                    Text(
+                        text = if (handle.startsWith("@")) handle else "@$handle",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            if (isActive) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = "Active account",
+                    tint = Color(0xFFA5B4FC),
+                    modifier = Modifier.size(22.dp),
+                )
+                Spacer(Modifier.width(16.dp))
+            }
+
+            if (onDelete != null) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onDelete),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.DeleteOutline,
+                        contentDescription = "Delete account",
+                        tint = Color(0xFFFCA5A5),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
         }
     }

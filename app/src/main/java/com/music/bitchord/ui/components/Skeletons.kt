@@ -195,8 +195,68 @@ fun ShelfSkeleton(index: Int = 0, cardWidth: Dp = SHELF_CARD_WIDTH, cardCorner: 
     }
 }
 
+/** The Quick Picks 4-song columns skeleton matching YouTube Music / BitChord home feed. */
+@Composable
+private fun QuickPicksShelfSkeleton() {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = PAGE_GUTTER, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                SkeletonLine(fraction = 0.45f, height = 20.dp)
+                Spacer(Modifier.height(6.dp))
+                SkeletonLine(fraction = 0.25f, height = 13.dp)
+            }
+            ShimmerBox(
+                modifier = Modifier
+                    .width(76.dp)
+                    .height(32.dp),
+                shape = RoundedCornerShape(16.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            userScrollEnabled = false,
+        ) {
+            items(2) {
+                Column(
+                    modifier = Modifier.fillParentMaxWidth(0.92f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    repeat(4) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ShimmerBox(
+                                modifier = Modifier.size(52.dp),
+                                shape = RoundedCornerShape(6.dp),
+                            )
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                SkeletonLine(fraction = 0.7f, height = 14.dp)
+                                Spacer(Modifier.height(6.dp))
+                                SkeletonLine(fraction = 0.45f, height = 12.dp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Home and Explore while the first page of shelves is still loading. */
 fun LazyListScope.feedSkeleton(shelves: Int = 3) {
+    item(key = "skeleton:quick_picks") { QuickPicksShelfSkeleton() }
     item(key = "skeleton:hero") { HeroShelfSkeleton() }
     items(shelves - 1, key = { "skeleton:shelf:$it" }) { index ->
         ShelfSkeleton(index = index + 1)
