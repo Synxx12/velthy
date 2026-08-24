@@ -103,9 +103,7 @@ object SourceRegistry {
         // one stored — add the module source if missing, or silently update its
         // URL if it changed. The toggle’s enabled state is always preserved so
         // the user’s on/off choice survives an app update.
-        val envUrl = BuildConfig.MODULE_INDEX_URL.trim().ifEmpty {
-            "https://monochrome.rickyaddons.dpdns.org/8spine-source.json"
-        }
+        val envUrl = BuildConfig.MODULE_INDEX_URL.trim()
         val after = if (envUrl.isNotEmpty()) {
             val existingModule = seeded.firstOrNull { it.kind == SourceKind.MODULE }
             if (existingModule == null) {
@@ -171,9 +169,7 @@ object SourceRegistry {
     fun setModuleEnabled(enabled: Boolean) {
         val module = configs.value.firstOrNull { it.kind == SourceKind.MODULE }
         if (module == null) {
-            val envUrl = BuildConfig.MODULE_INDEX_URL.trim().ifEmpty {
-                "https://monochrome.rickyaddons.dpdns.org/8spine-source.json"
-            }
+            val envUrl = BuildConfig.MODULE_INDEX_URL.trim()
             add(SourceConfig(kind = SourceKind.MODULE, baseUrl = envUrl, enabled = enabled))
         } else {
             setEnabled(module.id, enabled)

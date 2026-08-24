@@ -241,7 +241,10 @@ private fun QuickPicksShelf(
             contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            items(columns) { columnItems ->
+            items(
+                items = columns,
+                key = { column -> column.firstOrNull()?.let { it.videoId ?: it.browseId } ?: column.hashCode() },
+            ) { columnItems ->
                 Column(
                     modifier = Modifier.fillParentMaxWidth(0.88f),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -312,7 +315,10 @@ private fun HeroShelf(shelf: HomeShelf, onItemClick: (ShelfItem) -> Unit) {
             contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            items(shelf.items) { item ->
+            items(
+                items = shelf.items,
+                key = { it.videoId ?: it.browseId ?: it.title },
+            ) { item ->
                 HeroCard(
                     item = item,
                     onClick = { onItemClick(item) },
@@ -393,7 +399,10 @@ internal fun Shelf(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             leadingCard?.let { card -> item(key = "leading") { card() } }
-            items(shelf.items) { item ->
+            items(
+                items = shelf.items,
+                key = { it.videoId ?: it.browseId ?: it.title },
+            ) { item ->
                 ShelfCard(
                     item = item,
                     onClick = { onItemClick(item) },

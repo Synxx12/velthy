@@ -600,6 +600,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        viewModelScope.launch {
+            com.music.musique.data.settings.AppSettings.accountMoreContent.drop(1).collect {
+                refresh(Feed.HOME)
+                refresh(Feed.EXPLORE)
+                if (_signedIn.value) {
+                    refresh(Feed.LIBRARY)
+                }
+            }
+        }
         viewModelScope.launch { AppUpdateChecker.check() }
     }
 

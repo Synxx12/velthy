@@ -2296,7 +2296,10 @@ private fun LyricsPanel(
         ),
         verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        itemsIndexed(lines) { index, line ->
+        itemsIndexed(
+            items = lines,
+            key = { index, line -> "${line.timeMs}_$index" },
+        ) { index, line ->
             val distance = if (activeLine < 0) 0 else abs(index - activeLine)
             val isActive = index == activeLine
             // Unbounded, and ahead of the clip: the default edge treatment cuts
@@ -2329,7 +2332,7 @@ private fun LyricsPanel(
                     contentDescription = "Instrumental",
                     tint = Color.White.copy(alpha = lineAlpha),
                     modifier = Modifier
-                        .blur(blur, BlurredEdgeTreatment.Unbounded)
+                        .then(if (blur > 0.dp && !reduceDynamicBlur) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { onSeekToLine(line.timeMs) }
                         // Matches the inset every sung line carries, so the
@@ -2365,7 +2368,7 @@ private fun LyricsPanel(
                         transformOrigin = TransformOrigin(0f, 0.5f)
                         alpha = lineAlpha
                     }
-                    .blur(blur, BlurredEdgeTreatment.Unbounded)
+                    .then(if (blur > 0.dp && !reduceDynamicBlur) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { onSeekToLine(line.timeMs) }
                 if (line.isWordSynced && !browsing) {

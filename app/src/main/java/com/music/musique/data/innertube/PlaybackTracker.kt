@@ -1,4 +1,4 @@
-﻿package com.music.musique.data.innertube
+package com.music.musique.data.innertube
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -130,17 +130,17 @@ object PlaybackTracker {
             return@withLock
         }
         val fresh = Session(videoId, cpn, tracking)
-        val status = Innertube.pingPlayback(tracking.playbackUrl, fresh.cpn)
+        val status = Innertube.pingPlayback(tracking.playbackUrl, fresh.cpn, tracking.client)
         session = fresh
         _registeredPlays.value++
-        Log.d(TAG, "history entry created for $videoId with cpn=$cpn (HTTP $status)")
+        Log.d(TAG, "history entry created for $videoId via ${tracking.client.clientName} with cpn=$cpn (HTTP $status)")
     }
 
     private suspend fun flush(target: Session, positionSeconds: Long) = lock.withLock {
         val url = target.tracking.watchtimeUrl ?: return@withLock
         if (positionSeconds <= target.reportedSeconds) return@withLock
-        val status = Innertube.pingWatchtime(url, target.cpn, positionSeconds)
+        val status = Innertube.pingWatchtime(url, target.cpn, positionSeconds, target.tracking.client)
         target.reportedSeconds = positionSeconds
-        Log.d(TAG, "watchtime ${positionSeconds}s reported for ${target.videoId} (HTTP $status)")
+        Log.d(TAG, "watchtime ${positionSeconds}s reported for ${target.videoId} via ${target.tracking.client.clientName} (HTTP $status)")
     }
 }

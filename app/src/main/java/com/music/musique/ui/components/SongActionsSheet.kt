@@ -226,6 +226,17 @@ fun SongActionsSheet(
                 val racingSet by com.music.musique.data.NerdStats.racingLossless.collectAsStateWithLifecycle()
                 val isSearchingLossless = song.videoId in racingSet
                 val isLossless = nerd?.isLossless == true
+                val isHiRes = nerd?.isHiRes == true
+                val isHiQuality = nerd?.isHiQuality == true
+                val declared = com.music.musique.data.NerdStats.declaredFormat(song.videoId)
+                val isFromModule = declared != null || isLossless
+
+                val activeQuality = when {
+                    isHiRes -> "Hi-Res FLAC"
+                    isLossless -> "Lossless FLAC"
+                    isHiQuality -> "Hi-Quality (${nerd.bitrateKbps ?: declared?.kbps ?: 320}k)"
+                    else -> "YouTube"
+                }
 
                 if (isSearchingLossless) {
                     ActionRow(
@@ -243,10 +254,10 @@ fun SongActionsSheet(
                         },
                         onClick = {},
                     )
-                } else if (isLossless) {
+                } else if (isFromModule) {
                     ActionRow(
                         icon = Icons.Rounded.GraphicEq,
-                        label = "Audio Source",
+                        label = "Audio Source ($activeQuality)",
                         value = "Switch to YouTube",
                         accent = palette.accent,
                         onClick = {
@@ -256,7 +267,7 @@ fun SongActionsSheet(
                 } else if (com.music.musique.data.settings.AppSettings.isLosslessAllowedNow) {
                     ActionRow(
                         icon = Icons.Rounded.GraphicEq,
-                        label = "Audio Source",
+                        label = "Audio Source ($activeQuality)",
                         value = "Switch to Lossless FLAC",
                         accent = palette.accent,
                         onClick = {

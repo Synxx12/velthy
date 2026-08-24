@@ -1,4 +1,4 @@
-﻿package com.music.musique.data.sources
+package com.music.musique.data.sources
 
 import android.util.Log
 import com.music.musique.data.TrackLog
@@ -9,8 +9,10 @@ import com.music.musique.data.sources.module.SpineModule
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -67,29 +69,6 @@ class ModuleSource(
     /**
      * Every module in the index, asked at once, answers interleaved, and
      * nobody waited on past the point of usefulness.
-     *
-     * Three things, all of which the obvious implementation gets wrong:
-     *
-     *  - **At once.** A module is a network fetch, a JS load and a search;
-     *    done one after another, a three-module index spent three times as
-     *    long answering as it had to, against a lookup that has to finish
-     *    before audio can start.
-     *  - **Interleaved.** Filling the result list module by module and
-     *    stopping at [limit] means the first module's tail crowds out every
-     *    other module's best hit — with a limit of eight and a chatty first
-     *    module, the rest of the index was never asked at all. Round-robin
-     *    puts each module's top result ahead of any module's second, so a
-     *    track only one of them holds survives the cut.
-     *  - **Not to the last straggler.** Asked at once but awaited together,
-     *    the slowest module becomes the price of every track — 7.5s against
-     *    1.5s for the fastest, measured on the same query. So the fan-out
-     *    closes a short grace period after the first useful answer, and
-     *    whoever hasn't spoken by then sits this track out.
-     *
-     * What comes back is a candidate list, not a ranking:
-     * [TrackMatcher][com.music.musique.data.sources.TrackMatcher] decides
-     * which rows are the recording and [SourceResolver] decides which of those
-     * to open. This only has to be complete enough to contain the right one.
      */
     override suspend fun search(query: String, limit: Int, waitForAll: Boolean): List<Song> =
         withContext(Dispatchers.IO) {
@@ -102,26 +81,34 @@ class ModuleSource(
                 return@withContext emptyList()
             }
 
+            val sortedModules = modules.sortedByDescending { it.isLossless }
             val perModule = coroutineScope {
-                val answers = arrayOfNulls<List<Song>>(modules.size)
+                val answers = arrayOfNulls<List<Song>>(sortedModules.size)
                 val first = CompletableDeferred<Unit>()
-                val jobs = modules.mapIndexed { at, module ->
+                val losslessFound = CompletableDeferred<Unit>()
+                val jobs = sortedModules.mapIndexed { at, module ->
                     launch {
                         val songs = searchOne(module, query, limit, baseUrl)
                         answers[at] = songs
-                        if (songs.isNotEmpty()) first.complete(Unit)
+                        if (songs.isNotEmpty()) {
+                            first.complete(Unit)
+                            if (songs.any { it.sourceQuality == LOSSLESS }) {
+                                losslessFound.complete(Unit)
+                            }
+                        }
                     }
                 }
-                // Everyone gets until someone useful answers, and a short
-                // grace period after that. Waiting for all of them made the
-                // slowest module the cost of every track — measured at 7.5s
-                // against 1.5s for the fastest, on a lookup that has to finish
-                // before audio can start. Waiting for only the first is the
-                // opposite mistake: the fast module is not reliably the one
-                // holding the best copy, and the grace period is what buys the
-                // chance to compare them.
                 if (waitForAll) {
-                    withTimeoutOrNull(SEARCH_PATIENT_MS) { jobs.joinAll() }
+                    val waitJob = launch {
+                        losslessFound.await()
+                        delay(SEARCH_GRACE_MS)
+                    }
+                    withTimeoutOrNull(SEARCH_PATIENT_MS) {
+                        select {
+                            waitJob.onJoin { }
+                            launch { jobs.joinAll() }.onJoin { }
+                        }
+                    }
                 } else {
                     withTimeoutOrNull(SEARCH_BUDGET_MS) { first.await() }
                     withTimeoutOrNull(SEARCH_GRACE_MS) { jobs.joinAll() }
@@ -229,10 +216,11 @@ class ModuleSource(
                 TrackLog.w(TAG, "${config.displayName}: getStreamUrl failed for $upstreamId — ${e.message}")
                 return@withContext null
             }
-            val url = streamResponse.streamUrl.ifBlank { null } ?: run {
+            val rawUrl = streamResponse.streamUrl.ifBlank { null } ?: run {
                 TrackLog.w(TAG, "${config.displayName}: empty stream URL for $upstreamId")
                 return@withContext null
             }
+            val url = sanitizeStreamUrl(rawUrl)
 
             val trackMeta = streamResponse.track
             SourceStream(
@@ -245,6 +233,22 @@ class ModuleSource(
                 ),
             )
         }
+
+    /**
+     * Cleans up stream URLs. Some upstream module resolvers return duplicated scheme
+     * or host prefixes (e.g. `https://host/path/https://host/path/0.mp4?token=...`).
+     * Stripping to the last scheme produces the valid direct CDN URL.
+     */
+    private fun sanitizeStreamUrl(rawUrl: String): String {
+        var url = rawUrl.trim()
+        val lastHttps = url.lastIndexOf("https://")
+        val lastHttp = url.lastIndexOf("http://")
+        val lastScheme = maxOf(lastHttps, lastHttp)
+        if (lastScheme > 0) {
+            url = url.substring(lastScheme)
+        }
+        return url
+    }
 
     /**
      * What is really on the other end of [url], as far as anything says it.
@@ -369,16 +373,9 @@ class ModuleSource(
          * longer the rest then get. Both are latency the listener spends
          * staring at a paused player, so neither is generous.
          */
-        const val SEARCH_BUDGET_MS = 8_000L
-        const val SEARCH_GRACE_MS = 2_500L
-
-        /**
-         * The budget for the background pass, which runs while a track is
-         * already playing and is therefore allowed to be slow. This is where
-         * the module dropped at [SEARCH_GRACE_MS] gets its hearing — and it is
-         * routinely the one holding the lossless copy.
-         */
-        const val SEARCH_PATIENT_MS = 25_000L
+        const val SEARCH_BUDGET_MS = 3_500L
+        const val SEARCH_GRACE_MS = 600L
+        const val SEARCH_PATIENT_MS = 4_000L
 
         /**
          * Delimiter between the module id and the upstream track id inside

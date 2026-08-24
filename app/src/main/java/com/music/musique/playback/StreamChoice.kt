@@ -70,10 +70,6 @@ object StreamChoice {
 
     /** Records [stream] as the one copy of [videoId] this play is reading. */
     fun remember(videoId: String, stream: SourceStream) {
-        if (AppSettings.isLosslessAllowedNow && stream.format.isLossless != true) {
-            // Do not lock down lossy stream choice when user prefers Lossless
-            return
-        }
         if (chosen.size >= MAX_REMEMBERED) chosen.clear()
         chosen[videoId] = Choice(stream, SystemClock.elapsedRealtime())
     }

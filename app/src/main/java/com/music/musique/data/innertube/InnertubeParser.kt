@@ -1,4 +1,4 @@
-﻿package com.music.musique.data.innertube
+package com.music.musique.data.innertube
 
 import com.music.musique.data.model.Account
 import com.music.musique.data.model.ArtistPage
@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import com.music.musique.data.settings.AppSettings
 
 /**
  * Innertube responses are deeply nested and their shape drifts between
@@ -79,14 +80,22 @@ object InnertubeParser {
         return out
     }
 
-    private fun parseBrowseItem(renderer: JsonObject): BrowseItem? {
-        val endpoint = renderer.o("navigationEndpoint").o("browseEndpoint") ?: return null
-        val browseId = endpoint.s("browseId") ?: return null
-        val pageType = endpoint.o("browseEndpointContextSupportedConfigs")
-            .o("browseEndpointContextMusicConfig").s("pageType").orEmpty()
+    // ---- Library / Browse ---------------------------------------------------
+
+    /**
+     * One item on a grid or in a list — an album, playlist, artist, or song.
+     */
+    fun parseBrowseItem(renderer: JsonObject): BrowseItem? {
+        val pageType = renderer.o("navigationEndpoint").o("browseEndpoint")
+            .o("browseEndpointContextSupportedConfigs")
+            .o("browseEndpointContextMusicConfig").s("pageType")
+            ?: return null
+
+        val browseId = renderer.o("navigationEndpoint").o("browseEndpoint").s("browseId")
+            ?: return null
 
         val columns = renderer.a("flexColumns").orEmpty()
-        val title = columns.getOrNull(0)
+        val title = columns.firstOrNull()
             .o("musicResponsiveListItemFlexColumnRenderer").o("text").runs()
         if (title.isBlank()) return null
 
@@ -95,9 +104,9 @@ object InnertubeParser {
         // A playlist/album billed as a video chart/compilation — "N videos"
         // in the subtitle, or "video" right in the title, e.g. "Daily Top
         // Music Videos" — would have every row dropped by
-        // parseResponsiveListItem anyway, so skip the dead-end card rather
-        // than link to an empty page.
-        if (VIDEO_WORD.containsMatchIn(title) || VIDEO_WORD.containsMatchIn(subtitle)) return null
+        // parseResponsiveListItem anyway, so skip the dead-end card unless
+        // more content is enabled.
+        if (!AppSettings.accountMoreContent.value && (VIDEO_WORD.containsMatchIn(title) || VIDEO_WORD.containsMatchIn(subtitle))) return null
 
         return BrowseItem(
             browseId = browseId,
@@ -160,14 +169,11 @@ object InnertubeParser {
         val header = carousel.o("header").o("musicCarouselShelfBasicHeaderRenderer")
         val title = header.o("title").runs()
         val strapline = header.o("strapline").runs()
-        // Whole shelves like "Video charts" carry nothing but video
-        // compilations — each card would fail its own video check on the
-        // way to a dead-end page, so the shelf is dropped outright.
-        if (VIDEO_WORD.containsMatchIn(title)) return null
+        if (!AppSettings.accountMoreContent.value && VIDEO_WORD.containsMatchIn(title)) return null
         val items = carousel.a("contents").orEmpty().mapNotNull { item ->
             parseTwoRowItem(item.o("musicTwoRowItemRenderer"))
                 ?: parseResponsiveListItem(item.o("musicResponsiveListItemRenderer"))
-                    ?.takeUnless { it.isVideo }
+                    ?.takeUnless { !AppSettings.accountMoreContent.value && it.isVideo }
                     ?.let { song ->
                         ShelfItem(song.title, song.artist, song.thumbnailUrl, song.videoId, null)
                     }
@@ -177,10 +183,10 @@ object InnertubeParser {
 
     private fun plainShelf(shelf: JsonObject): HomeShelf? {
         val title = shelf.o("title").runs()
-        if (VIDEO_WORD.containsMatchIn(title)) return null
+        if (!AppSettings.accountMoreContent.value && VIDEO_WORD.containsMatchIn(title)) return null
         val items = shelf.a("contents").orEmpty().mapNotNull {
             parseResponsiveListItem(it.o("musicResponsiveListItemRenderer"))
-        }.filterNot { it.isVideo }
+        }.let { list -> if (AppSettings.accountMoreContent.value) list else list.filterNot { it.isVideo } }
             .map { ShelfItem(it.title, it.artist, it.thumbnailUrl, it.videoId, null) }
         return if (items.isEmpty()) null else HomeShelf(title.ifBlank { "For you" }, items)
     }
@@ -218,7 +224,7 @@ object InnertubeParser {
             section.o("musicCarouselShelfRenderer")?.let { carousel ->
                 val header = carousel.o("header").o("musicCarouselShelfBasicHeaderRenderer")
                 val title = header.o("title").runs()
-                if (VIDEO_WORD.containsMatchIn(title)) return@let
+                if (!AppSettings.accountMoreContent.value && VIDEO_WORD.containsMatchIn(title)) return@let
                 val items = carousel.a("contents").orEmpty().mapNotNull {
                     parseTwoRowItem(it.o("musicTwoRowItemRenderer"))
                 }.filter { it.browseId != null }
@@ -719,15 +725,12 @@ object InnertubeParser {
         val subtitle = renderer.o("subtitle").runs()
         // A card with no browse target is a playable track, not an album,
         // playlist or artist; widescreen art on one of those means it's a
-        // music-video upload rather than the catalogue track — drop it, same
-        // as the equivalent check in parseResponsiveListItem.
-        if (resolvedBrowseId == null && videoId != null && thumbnails.isNotSquare()) return null
+        // music-video upload rather than the catalogue track.
+        if (!AppSettings.accountMoreContent.value && resolvedBrowseId == null && videoId != null && thumbnails.isNotSquare()) return null
         // An album/playlist billed as a video chart/compilation — "N videos"
         // in the subtitle, or "video" in the card's own title (e.g. "Daily
-        // Top Music Videos") — is the same dead-end as in parseBrowseItem.
-        // A plain track card is exempt: a song can legitimately be titled
-        // "Video Games" without being a music-video upload.
-        if (resolvedBrowseId != null &&
+        // Top Music Videos") — is skipped unless more content is enabled.
+        if (!AppSettings.accountMoreContent.value && resolvedBrowseId != null &&
             (VIDEO_WORD.containsMatchIn(title) || VIDEO_WORD.containsMatchIn(subtitle))
         ) {
             return null

@@ -91,7 +91,7 @@ jobs:
           echo "DISPLAY_VERSION=${DISPLAY_VER}" >> $GITHUB_ENV
           echo "✅ Release Tag: ${TAG} (Display: v${DISPLAY_VER})"
 
-      # ── 5. RESTORE RELEASE KEYSTORE (IF PROVIDED) ──
+      # ── 5. RESTORE RELEASE KEYSTORE & CONFIGURATION ──
       - name: Setup Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -107,8 +107,20 @@ jobs:
             echo "keyPassword=$KEY_PASSWORD" >> keystore.properties
           fi
 
+      - name: Setup Local Properties & Module Index
+        env:
+          MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
+        run: |
+          if [ -n "$MODULE_INDEX_URL" ]; then
+            echo "MODULE_INDEX_URL=${MODULE_INDEX_URL}" > local.properties
+            echo "MODULE_INDEX_URL=${MODULE_INDEX_URL}" >> $GITHUB_ENV
+            echo "✅ MODULE_INDEX_URL securely injected from repository secrets"
+          fi
+
       # ── 6. BUILD PRODUCTION APK RELEASE ──
       - name: Build Android APK
+        env:
+          MODULE_INDEX_URL: ${{ env.MODULE_INDEX_URL }}
         run: |
           ./gradlew assembleProdRelease --stacktrace
           

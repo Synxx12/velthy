@@ -1,4 +1,4 @@
-﻿package com.music.musique.data.history
+package com.music.musique.data.history
 
 import android.content.Context
 import android.util.Log
@@ -204,7 +204,16 @@ object PlaybackHistoryManager {
                 _localHistory.value = trimmedLocal
                 saveFile(localFile, trimmedLocal)
 
-                Log.d(TAG, "Recorded local play: ${song.title} (${song.videoId})")
+                // Optimistically update remote history if signed in & account auto-sync is enabled
+                if (AppSettings.accountAutoSync.value && com.music.musique.data.innertube.Innertube.cookie != null) {
+                    val filteredRemote = _remoteHistory.value.filterNot { it.song.videoId == song.videoId }.toMutableList()
+                    filteredRemote.add(0, newItem)
+                    val trimmedRemote = if (filteredRemote.size > MAX_HISTORY_ITEMS) filteredRemote.take(MAX_HISTORY_ITEMS) else filteredRemote
+                    _remoteHistory.value = trimmedRemote
+                    saveFile(remoteFile, trimmedRemote)
+                }
+
+                Log.d(TAG, "Recorded play: ${song.title} (${song.videoId})")
             }
         }
     }

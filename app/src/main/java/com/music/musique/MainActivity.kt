@@ -123,6 +123,7 @@ import com.music.musique.ui.icons.MusiqueIcons
 import androidx.media3.common.Player
 import com.music.musique.data.YtMusicRepository
 import com.music.musique.ui.player.NowPlayingScreen
+import com.music.musique.ui.screens.AppUpdateSheet
 import com.music.musique.ui.screens.DetailScreen
 import com.music.musique.ui.screens.HomeScreen
 import com.music.musique.ui.screens.LibraryScreen
@@ -245,6 +246,7 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
     // stopped moving either way, and the news is still worth delivering.
     var updateDialogShown by rememberSaveable { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var showAppUpdateSheet by remember { mutableStateOf(false) }
     val updateAvailable by viewModel.updateAvailable.collectAsStateWithLifecycle()
 
     /**
@@ -999,7 +1001,7 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                     if (selectedTab == TAB_HOME) {
                         updateNotice?.let { update ->
                             IconButton(onClick = {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
+                                showAppUpdateSheet = true
                             }) {
                                 Icon(
                                     Icons.Rounded.SystemUpdate,
@@ -1487,10 +1489,17 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                     onDismiss = { showUpdateDialog = false },
                     onUpdate = {
                         showUpdateDialog = false
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.releaseUrl)))
+                        showAppUpdateSheet = true
                     },
                 )
             }
+        }
+
+        if (showAppUpdateSheet && (updateAvailable ?: updateNotice) != null) {
+            AppUpdateSheet(
+                updateInfo = updateAvailable ?: updateNotice,
+                onDismiss = { showAppUpdateSheet = false },
+            )
         }
 
         if (showLyricsSources) {

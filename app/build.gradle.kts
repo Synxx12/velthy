@@ -17,10 +17,9 @@ val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
-val moduleIndexUrl: String = localProps.getProperty(
-    "MODULE_INDEX_URL",
-    "https://monochrome.rickyaddons.dpdns.org/8spine-source.json",
-)
+val moduleIndexUrl: String = System.getenv("MODULE_INDEX_URL")
+    ?: localProps.getProperty("MODULE_INDEX_URL")
+    ?: ""
 
 val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
@@ -37,8 +36,8 @@ android {
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.3.7"
+        versionCode = 13
+        versionName = "1.3.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

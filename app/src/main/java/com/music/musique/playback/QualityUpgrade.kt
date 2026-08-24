@@ -421,12 +421,16 @@ object QualityUpgrade {
     /** Abandons the second look for [mediaId] — the queue has moved on. */
     fun forget(mediaId: String) {
         pending.remove(mediaId)?.inFlight?.cancel()
-        forced.remove(mediaId)
         shelved.remove(mediaId)
         auditioning -= mediaId
         asked -= mediaId
         refused -= mediaId
         NerdStats.onLosslessRaceEnd(mediaId)
+    }
+
+    /** Explicitly removes the forced stream entry for [mediaId] when discarded or failed. */
+    fun removeForced(mediaId: String) {
+        forced.remove(mediaId)
     }
 
     // ── Handing the stream to the player ────────────────────────────────────

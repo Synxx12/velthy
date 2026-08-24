@@ -8,6 +8,47 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ### [Unreleased]
 
+### [v1.3.8] - 2026-08-24
+
+#### ⚡ Performa & Stabilitas
+- **GPU 60/120 FPS Lyrics & LazyList Optimization**:
+  - Mengoptimalkan rendering baris lirik di `NowPlayingScreen.kt` dengan meniadakan alokasi shader `Modifier.blur()` saat nilai blur `0.dp` atau saat opsi `reduceDynamicBlur` aktif, mengeliminasi puluhan offscreen buffer Skia per frame.
+  - Menambahkan parameter `key` unik dan stabil pada `itemsIndexed` (Lirik) serta seluruh `LazyRow` di `HomeScreen.kt` (`HeroShelf`, `QuickPicksShelf`, dan `Shelf`) untuk mencegah recomposition berlebihan saat scrolling feed.
+
+#### 🎵 Player, Audio & Lirik
+- **Background Lossless Transition & Mid-Song Swap Stabilization**:
+  - Memperbaiki `StreamChoice.kt` agar selalu mengingat stream aktif yang sedang diputar (termasuk YouTube Opus), sehingga permintaan pembacaan chunk 2MB berikutnya di background tidak lagi memicu *resolveWithModulePriority* ulang secara *runBlocking* pada thread loader ExoPlayer.
+  - Menyinkronkan fungsi `smoothMicroFadeUp` di `swapIn` agar menunggu status `STATE_READY` ExoPlayer sebelum menaikkan volume, mencegah lonjakan audio menghentak atau kegagalan saat decoder FLAC hardware sedang diinisialisasi.
+  - Memperbaiki `recoverFrom` saat pemulihan stream gagal agar membersihkan marker `q=hifi` dan beralih ke fallback MediaItem yang bersih tanpa terjebak dalam error loop.
+  - Menjaga persistensi entri stream di `QualityUpgrade.kt` selama pemutaran lagu berlangsung sehingga seeking dan buffer range requests tidak kehilangan URL stream.
+  - **Module Stream URL Sanitization (Fix 404 on Tidal CDN)**: Menambahkan `sanitizeStreamUrl` pada `ModuleSource.kt` untuk membersihkan duplikasi prefix skema/host yang dikembalikan oleh server modul API, sehingga file stream FLAC langsung dapat diakses dengan respons HTTP 200 OK oleh ExoPlayer.
+  - **Fast Lossless Fan-Out & Early Completion**:
+    - Mengoptimalkan pencarian multi-modul di `ModuleSource.kt` dengan memprioritaskan modul lossless dan mengimplementasikan *early exit* begitu modul FLAC/Hi-Res (seperti Tidal/Qobuz) mengembalikan hasil, memotong waktu tunggu dari 25 detik menjadi < 1 detik tanpa menunggu modul radio/audiobook lambat.
+    - Mempercepat inisiasi upgrade transisi audio (`UPGRADE_PREBUFFER_MS` dari 12s ke 5s, `UPGRADE_NOT_BEFORE_MS` ke 1.5s) agar lagu dapat segera berpindah ke kualitas lossless secara instan dan mulus.
+
+#### 🌐 Client-Side & Innertube
+- **YouTube Music Playback History & Watchtime Scrobbling Parity (ArchiveTune/InnerTune Standard)**:
+  - Memperbaiki `Innertube.playbackTracking` agar menggunakan client `ANDROID_MUSIC` (klien resmi YouTube Music Android) sebagai sumber utama tracking player response, dengan fallback ke `WEB_REMIX` dan `IOS`, menghilangkan error `UNPLAYABLE: Video unavailable` yang sebelumnya memblokir pendaftaran riwayat.
+  - Memperbarui versi `WEB_REMIX_VERSION` ke `1.20260707.12.00` agar selaras dengan standar Innertube terkini dan didukung penuh oleh Google API.
+  - Memperbaiki `pingStats`, `pingPlayback`, dan `pingWatchtime` agar menyertakan identitas client yang sesuai (`c=ANDROID_MUSIC` / `c=WEB_REMIX`) beserta token `SAPISIDHASH` dan cookie autentikasi akun Google pengguna.
+  - Memperbarui `PlaybackTracker.kt` dan `PlaybackHistoryManager.kt` agar otomatis mengirimkan sinyal watchtime berkala dan merefleksikan riwayat putar cloud (`remoteHistory`) secara real-time saat pengguna login.
+- **Account Settings Integration & "More Content" Feature Parity**:
+  - Mengintegrasikan toggle *More content* (`AppSettings.accountMoreContent`) ke dalam `InnertubeParser.kt` dan `Innertube.kt`, sehingga saat diaktifkan, aplikasi tidak lagi memfilter video/live carousels, album versi alternatif/eksplisit, dan rilis komunitas.
+  - Menghubungkan observer `accountMoreContent` di `MainViewModel.kt` untuk langsung menyegarkan (*auto-refresh*) feed Home, Explore, dan Library seketika saat pengaturan diubah tanpa perlu me-restart aplikasi.
+  - Memastikan tombol *Sync with account now*, *Auto sync with account*, dan *Force Sync on Switch Account* berjalan mulus untuk memperbarui profil akun, playlist, library, dan cloud history.
+
+#### 🎨 UI, Gestures & Animasi
+- **Informative Audio Source Quality Label in Song Actions Sheet**:
+  - Memperbaiki baris opsi *Audio Source* pada `SongActionsSheet.kt` agar menampilkan status kualitas aktif secara presisi (contoh: `Audio Source (Hi-Quality 320k)`, `Audio Source (Lossless FLAC)`, `Audio Source (Hi-Res FLAC)`, atau `Audio Source (YouTube)`).
+  - Menyediakan opsi pengalihan aksi yang akurat (`Switch to YouTube` jika lagu sedang diputar via modul, dan `Switch to Lossless FLAC` jika lagu diputar via YouTube standar).
+- **Unified In-App Update Flow (Modal & Navbar)**:
+  - Memperbarui tombol "Download Now" pada dialog `UpdateAvailableDialog.kt` dan tombol ikon update pada top app bar `MainActivity.kt` agar langsung membuka sheet pembaruan in-app (`AppUpdateSheet.kt`) yang dilengkapi progres download real-time dan instalasi otomatis APK, alih-alih melempar pengguna ke browser web GitHub Releases.
+
+#### 🔧 Build & CI/CD
+- **GitHub Actions Auto `local.properties` & `MODULE_INDEX_URL` Injection**:
+  - Menambahkan step konfigurasi otomatis pada `.github/workflows/build_release_apk.yml` untuk menghasilkan `local.properties` dan menyuntikkan `MODULE_INDEX_URL` secara aman dari repository secrets `secrets.MODULE_INDEX_URL` selama proses build APK release di runner GitHub Actions.
+  - Memperbarui `app/build.gradle.kts` agar mendukung pembacaan `MODULE_INDEX_URL` dari environment variable sistem `System.getenv("MODULE_INDEX_URL")`.
+
 ### [v1.3.7] - 2026-08-24
 
 #### ✨ Fitur Baru
@@ -21,7 +62,7 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
   - Menghubungkan resolusi audio lossless multi-sumber (`SourceResolver.forDownload`) ke dalam alur pengunduhan (`Downloads.kt` & `Downloader.kt`).
   - Mengimplementasikan `FlacTagger.kt` untuk menyematkan metadata Vorbis Comment (Title, Artist, Album) dan Picture block cover art JPEG/PNG langsung ke dalam file FLAC byte-by-byte tanpa dependensi library eksternal berat.
   - Memperbarui `DownloadStore.kt` dengan pemetaan codec `storable` untuk format FLAC, WAV, dan ALAC.
-  - **Open Hi-Res FLAC / Qobuz / Tidal Lossless Integration**: Mengganti index modul ke sumber terbuka terverifikasi (`monochrome.rickyaddons.dpdns.org`) yang menyediakan modul JavaScript murni (**Claudo**, **Qobuz**, **Improved-All-In-One**) tanpa proteksi enkripsi `8SM1`, sehingga resolusi stream audio 16-bit / 24-bit Hi-Res FLAC langsung aktif dan berjalan otomatis di engine QuickJS.
+  - **Open Hi-Res FLAC / Qobuz / Tidal Lossless Integration**: Mengintegrasikan index modul sumber terverifikasi yang menyediakan modul JavaScript murni (**Claudo**, **Qobuz**, **Improved-All-In-One**) tanpa enkripsi `8SM1`, sehingga resolusi stream audio 16-bit / 24-bit Hi-Res FLAC langsung aktif dan berjalan otomatis di engine QuickJS.
   - **SourceRegistry Persistent Initialization Fix**: Menambahkan pemanggilan `SourceRegistry.init(this)` pada `MusiqueApplication.onCreate()` sehingga konfigurasi modul FLAC dan status toggle lossless tersimpan permanen dan tidak mati kembali saat aplikasi dibuka ulang.
 
 #### ✨ Fitur Baru

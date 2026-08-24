@@ -216,16 +216,11 @@ class PlaybackService : MediaSessionService() {
             // track — including the continuation fetch when playback runs off
             // the end of the cached bytes. Deciding afresh each time is how
             // the middle of an MP4 ended up appended to a WebM. See
-            // [StreamChoice].
             StreamChoice.of(videoId)?.let { serving ->
-                val wantsLossless = AppSettings.isLosslessAllowedNow
-                val isServingLossless = serving.format.isLossless == true || (serving.format.kbps ?: 0) >= 800
-                if (!wantsLossless || isServingLossless) {
-                    return@Factory dataSpec.buildUpon()
-                        .setUri(Uri.parse(serving.url))
-                        .setHttpRequestHeaders(serving.headers)
-                        .build()
-                }
+                return@Factory dataSpec.buildUpon()
+                    .setUri(Uri.parse(serving.url))
+                    .setHttpRequestHeaders(serving.headers)
+                    .build()
             }
             // A track queued from YouTube may be held by a source the user
             // ranked above it — see [SourceResolver.substituteForYouTube] and
@@ -400,7 +395,8 @@ class PlaybackService : MediaSessionService() {
                 // entry, resubmitted it to ListenBrainz and closed out its
                 // play count mid-play — all of which happened, and all of which
                 // are invisible until someone reads their listening history.
-                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED &&
+                if ((reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED ||
+                     reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) &&
                     mediaItem?.mediaId != null &&
                     mediaItem.mediaId == swappingMediaId
                 ) {
@@ -797,14 +793,10 @@ class PlaybackService : MediaSessionService() {
         // The upgraded rendition goes with the cache entry it lived in, so the
         // marker on the URI would otherwise point at nothing.
         QualityUpgrade.forget(mediaId)
-        // A track that died on an upgraded URI died on the *upgrade*, and it
-        // must not be offered that same swap again the moment it recovers.
-        // Left unrecorded, the second look starts over on the retry, finds the
-        // same FLAC at the same dead URL, cuts the audio for it again, and
-        // fails again — twice more before [MAX_RECOVERIES] stops it. Observed
-        // on a Tidal URL answering ERROR_CODE_IO_BAD_HTTP_STATUS.
-        if (uri?.let(QualityUpgrade::cacheTag) != null) {
+        val isUpgradedUri = uri?.let(QualityUpgrade::cacheTag) != null
+        if (isUpgradedUri) {
             QualityUpgrade.refuseUpgrades(mediaId)
+            QualityUpgrade.removeForced(mediaId)
         }
         // Whatever failed took its claimed format with it. The stream that
         // recovers is a different one and has not promised anything yet, so
@@ -821,6 +813,13 @@ class PlaybackService : MediaSessionService() {
                 val player = this@PlaybackService.player ?: return@withContext
                 if (player.currentMediaItem?.mediaId != mediaId) return@withContext
                 TrackLog.d("Musique", "retrying $mediaId from ${position}ms")
+                if (isUpgradedUri) {
+                    val cleanUriString = uri.toString()
+                        .replace("&${QualityUpgrade.MARKER}=hifi", "")
+                        .replace("?${QualityUpgrade.MARKER}=hifi", "")
+                    val fallbackItem = item.buildUpon().setUri(Uri.parse(cleanUriString)).build()
+                    player.replaceMediaItem(player.currentMediaItemIndex, fallbackItem)
+                }
                 player.seekTo(player.currentMediaItemIndex, position)
                 player.prepare()
             }
@@ -1161,12 +1160,19 @@ class PlaybackService : MediaSessionService() {
             player.seekTo(player.currentMediaItemIndex, exactPosition + 35L)
             player.prepare()
 
-            // Smooth micro-fade up as the new lossless stream renders
+            // Smooth micro-fade up once the new lossless stream renders (or after short wait)
             launch(Dispatchers.Main) {
-                delay(20)
+                val startWait = SystemClock.elapsedRealtime()
+                while (player.playbackState != Player.STATE_READY &&
+                    player.playbackState != Player.STATE_ENDED &&
+                    SystemClock.elapsedRealtime() - startWait < 1200L
+                ) {
+                    delay(15)
+                }
                 smoothMicroFadeUp(player)
             }
 
+            StreamChoice.remember(mediaId, stream)
             QualityUpgrade.unshelve(mediaId)
             TrackLog.d("Musique", "upgraded to ${stream.format.summary} at ${now.position}ms")
             watchUpgrade(mediaId, now.uri, now.position, now.duration, previousFormat)
@@ -1494,6 +1500,8 @@ class PlaybackService : MediaSessionService() {
                     "${previousDuration}ms (state=${player.playbackState}, " +
                     "buffered=${player.bufferedPosition}ms)",
             )
+            QualityUpgrade.refuseUpgrades(mediaId)
+            QualityUpgrade.removeForced(mediaId)
             QualityUpgrade.forget(mediaId)
             // The FLAC/whatever claim recorded when the swap went out is no
             // longer what's playing — restore what was declared before it
@@ -2389,7 +2397,7 @@ class PlaybackService : MediaSessionService() {
          * How far into a track a swap may happen at the earliest, so an
          * upgrade that arrives with the first note doesn't cut it immediately.
          */
-        const val UPGRADE_NOT_BEFORE_MS = 5_000L
+        const val UPGRADE_NOT_BEFORE_MS = 1_500L
 
         /** How often to recheck [CrossfadeController.isTransitioning] while an upgrade waits on one. */
         const val UPGRADE_CROSSFADE_POLL_MS = 250L
@@ -2407,71 +2415,27 @@ class PlaybackService : MediaSessionService() {
         /**
          * How long a replacement gets to report a length before it is
          * disbelieved.
-         *
-         * This is silence, not patience: the swap has already cut the audio,
-         * and the track sits in `STATE_BUFFERING` for the whole of it before
-         * the old stream comes back. It was cut from eight seconds to two and
-         * a half on the strength of "a replacement that works reports its
-         * length in well under a tenth of this" — which was true of what the
-         * swap landed on at the time, and is not true of a FLAC. Measured
-         * here, an upgrade to a 16-bit Qobuz stream was still buffering its
-         * first chunk when the window closed:
-         *
-         * ```
-         *   upgrade reverted: replacement reports -9223372036854775807ms
-         *     against 259141ms (state=2, buffered=5002ms)
-         * ```
-         *
-         * — a working FLAC thrown away for being slower to open than a lossy
-         * MP4, which is the one thing this feature exists to fetch. The
-         * failure the short window was protecting against is caught by state
-         * now rather than by the clock (see [watchUpgrade]), so the ceiling
-         * only bounds the genuinely stuck case, and can afford to be long
-         * enough for a large file over a phone connection.
          */
         const val UPGRADE_PROVE_MS = 10_000L
         const val UPGRADE_PROVE_STEP_MS = 200L
 
         /**
          * How long an upgrade gets to prove itself before the swap is dropped.
-         *
-         * Nothing like [UPGRADE_PROVE_MS], and for one reason: that window is
-         * silence and this one is music. The audition runs on a player nobody
-         * is listening to while the old stream plays through the whole of it,
-         * so the only thing a longer ceiling costs is a decoder held open a
-         * few seconds more. Generous enough for a cold hi-res FLAC over a
-         * phone connection, since a stream slow to open is exactly the one
-         * this feature exists to fetch and exactly the one the old
-         * cut-then-wait order threw away.
          */
         const val UPGRADE_AUDITION_MS = 25_000L
 
         /**
          * How far past the listener an upgrade has to be buffered before it is
          * allowed to take over.
-         *
-         * This is the number that makes the swap inaudible. Everything inside
-         * this window is on disk by the time the real player asks for it, so
-         * the seam is a decoder init rather than a round trip to a CDN. It has
-         * to cover the drift as well: the track keeps playing while the
-         * audition buffers, so the swap lands some seconds past where the
-         * audition started, and a window shorter than the audition takes would
-         * put the swap point back on the network. Twelve seconds is comfortably
-         * more than either.
          */
-        const val UPGRADE_PREBUFFER_MS = 12_000L
+        const val UPGRADE_PREBUFFER_MS = 5_000L
 
         /**
          * How much of the upgraded file's opening is fetched before the
          * audition starts — see [AudioCache.warmRange] for why the audition
          * cannot be relied on to leave it behind.
-         *
-         * A megabyte because a FLAC header is not a header: STREAMINFO is 34
-         * bytes, but the seek table, the tags and an embedded cover in front of
-         * the first audio frame routinely run to hundreds of kilobytes, and a
-         * range that stops short of the first frame buys nothing at all.
          */
-        const val UPGRADE_HEADER_BYTES = 1L * 1024 * 1024
+        const val UPGRADE_HEADER_BYTES = 512L * 1024
 
         /**
          * Opening fetched after an upgrade so the track stays analysable. Four

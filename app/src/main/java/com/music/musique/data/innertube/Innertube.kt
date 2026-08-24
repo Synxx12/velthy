@@ -1,4 +1,4 @@
-﻿package com.music.musique.data.innertube
+package com.music.musique.data.innertube
 
 import android.util.Log
 import io.ktor.client.HttpClient
@@ -62,7 +62,7 @@ object Innertube {
     private const val YT_BASE = "https://www.youtube.com/youtubei/v1"
     private const val MUSIC_ORIGIN = "https://music.youtube.com"
 
-    private const val WEB_REMIX_VERSION = "1.20250101.01.00"
+    private const val WEB_REMIX_VERSION = "1.20260707.12.00"
     private const val WEB_REMIX_CLIENT_ID = "67"
 
     private const val TAG = "Musique"
@@ -108,7 +108,7 @@ object Innertube {
      * The service worker bootstrap the web player loads before anything else,
      * which is where a fresh visitor id comes from without needing a page.
      * It answers with an anti-hijacking prefix and then plain nested arrays,
-     * so the id is found by shape rather than by a path that would rot.
+     * the second string in the top array being the id.
      */
     private suspend fun fetchVisitorData(): String? {
         val body = client.get("https://www.youtube.com/sw.js_data") {
@@ -286,43 +286,83 @@ object Innertube {
     }
 
     /** The stats endpoints a player response nominates for one playback. */
-    data class PlaybackTracking(val playbackUrl: String, val watchtimeUrl: String?)
+    data class PlaybackTracking(
+        val playbackUrl: String,
+        val watchtimeUrl: String?,
+        val client: PlayerClient = PlayerClient.ANDROID_MUSIC,
+    )
 
     /**
      * Player response fetched *with* the session cookie, purely to read back
      * `playbackTracking` — [player] deliberately skips auth so its device
      * clients are answered at all, so it never sees this block. Null for
      * guests: there's no account history to update.
+     *
+     * Matches InnerTune / ArchiveTune standards: queries ANDROID_MUSIC (unciphered
+     * YouTube Music Android client) first, falling back to WEB_REMIX or IOS if needed.
      */
     suspend fun playbackTracking(videoId: String, cpn: String): PlaybackTracking? {
         if (cookie == null) return null
-        val response = postMusic("player") {
-            put("videoId", videoId)
-            put("cpn", cpn)
-            put("contentCheckOk", true)
-            put("racyCheckOk", true)
-            // Real clients always describe where playback is happening; the
-            // response's tracking block is scoped to it.
-            putJsonObject("playbackContext") {
-                putJsonObject("contentPlaybackContext") {
-                    put("html5Preference", "HTML5_PREF_WANTS")
-                    put("referer", "$MUSIC_ORIGIN/watch?v=$videoId")
-                }
+
+        // 1. Primary: ANDROID_MUSIC (native YouTube Music client; unciphered & reliable)
+        val androidMusicResponse = runCatching {
+            postPlayer(videoId, PlayerClient.ANDROID_MUSIC, signatureTimestamp = null, authenticated = true)
+        }.getOrNull()
+
+        val androidTracking = androidMusicResponse?.get("playbackTracking")?.jsonObject
+        if (androidTracking != null) {
+            val playbackUrl = androidTracking.trackingUrl("videostatsPlaybackUrl")
+            if (playbackUrl != null) {
+                return PlaybackTracking(
+                    playbackUrl = playbackUrl,
+                    watchtimeUrl = androidTracking.trackingUrl("videostatsWatchtimeUrl"),
+                    client = PlayerClient.ANDROID_MUSIC,
+                )
             }
         }
-        val tracking = response["playbackTracking"]?.jsonObject
-        if (tracking == null) {
-            val playability = response["playabilityStatus"]?.jsonObject
-            Log.w(
-                TAG,
-                "player response has no playbackTracking for $videoId " +
-                    "(status=${playability?.get("status")?.jsonPrimitive?.content}, " +
-                    "reason=${playability?.get("reason")?.jsonPrimitive?.content})",
-            )
-            return null
+
+        // 2. Secondary: WEB_REMIX (web client)
+        val webRemixResponse = runCatching {
+            postPlayer(videoId, PlayerClient.WEB_REMIX, signatureTimestamp = null, authenticated = true)
+        }.getOrNull()
+
+        val webTracking = webRemixResponse?.get("playbackTracking")?.jsonObject
+        if (webTracking != null) {
+            val playbackUrl = webTracking.trackingUrl("videostatsPlaybackUrl")
+            if (playbackUrl != null) {
+                return PlaybackTracking(
+                    playbackUrl = playbackUrl,
+                    watchtimeUrl = webTracking.trackingUrl("videostatsWatchtimeUrl"),
+                    client = PlayerClient.WEB_REMIX,
+                )
+            }
         }
-        val playbackUrl = tracking.trackingUrl("videostatsPlaybackUrl") ?: return null
-        return PlaybackTracking(playbackUrl, tracking.trackingUrl("videostatsWatchtimeUrl"))
+
+        // 3. Tertiary fallback: IOS
+        val iosResponse = runCatching {
+            postPlayer(videoId, PlayerClient.IOS, signatureTimestamp = null, authenticated = true)
+        }.getOrNull()
+        val iosTracking = iosResponse?.get("playbackTracking")?.jsonObject
+        if (iosTracking != null) {
+            val playbackUrl = iosTracking.trackingUrl("videostatsPlaybackUrl")
+            if (playbackUrl != null) {
+                return PlaybackTracking(
+                    playbackUrl = playbackUrl,
+                    watchtimeUrl = iosTracking.trackingUrl("videostatsWatchtimeUrl"),
+                    client = PlayerClient.IOS,
+                )
+            }
+        }
+
+        val playability = androidMusicResponse?.get("playabilityStatus")?.jsonObject
+            ?: webRemixResponse?.get("playabilityStatus")?.jsonObject
+        Log.w(
+            TAG,
+            "player response has no playbackTracking for $videoId " +
+                "(status=${playability?.get("status")?.jsonPrimitive?.content}, " +
+                "reason=${playability?.get("reason")?.jsonPrimitive?.content})",
+        )
+        return null
     }
 
     private fun JsonObject.trackingUrl(key: String): String? =
@@ -334,13 +374,16 @@ object Innertube {
      * feeds off. [cpn] is the client-playback-nonce identifying this one play:
      * it must be the same value used for every [pingWatchtime] that follows.
      */
-    suspend fun pingPlayback(baseUrl: String, cpn: String) =
-        pingStats(baseUrl, cpn) {
-            parameter("el", "detailpage")
-            parameter("ns", "yt")
-            parameter("fexp", "")
-            parameter("lact", (System.currentTimeMillis() % 100000).toString())
-        }
+    suspend fun pingPlayback(
+        baseUrl: String,
+        cpn: String,
+        playerClient: PlayerClient = PlayerClient.ANDROID_MUSIC,
+    ) = pingStats(baseUrl, cpn, playerClient) {
+        parameter("el", "detailpage")
+        parameter("ns", "yt")
+        parameter("fexp", "")
+        parameter("lact", (System.currentTimeMillis() % 100000).toString())
+    }
 
     /**
      * The follow-up ping reporting how much of the track was actually heard.
@@ -348,39 +391,47 @@ object Innertube {
      * carries little weight in recommendations — [seconds] is what makes the
      * play count. `st`/`et` are the watched segment's bounds, in seconds.
      */
-    suspend fun pingWatchtime(baseUrl: String, cpn: String, seconds: Long) =
-        pingStats(baseUrl, cpn) {
-            parameter("st", "0")
-            parameter("et", seconds.toString())
-            parameter("state", "playing")
-            parameter("el", "detailpage")
-            parameter("ns", "yt")
-            parameter("volume", "100")
-            parameter("muted", "0")
-            parameter("lact", (System.currentTimeMillis() % 100000).toString())
-        }
+    suspend fun pingWatchtime(
+        baseUrl: String,
+        cpn: String,
+        seconds: Long,
+        playerClient: PlayerClient = PlayerClient.ANDROID_MUSIC,
+    ) = pingStats(baseUrl, cpn, playerClient) {
+        parameter("st", "0")
+        parameter("et", seconds.toString())
+        parameter("state", "playing")
+        parameter("el", "detailpage")
+        parameter("ns", "yt")
+        parameter("volume", "100")
+        parameter("muted", "0")
+        parameter("lact", (System.currentTimeMillis() % 100000).toString())
+    }
 
     /** Shared shape of the s.youtube.com stats pings, including session auth. */
     private suspend fun pingStats(
         baseUrl: String,
         cpn: String,
+        playerClient: PlayerClient,
         extras: HttpRequestBuilder.() -> Unit,
     ): Int = runCatching {
+        val origin = playerClient.origin ?: MUSIC_ORIGIN
         client.get(baseUrl) {
             parameter("ver", "2")
-            parameter("c", "WEB_REMIX")
-            parameter("cver", WEB_REMIX_VERSION)
+            parameter("c", playerClient.clientName)
+            parameter("cver", playerClient.clientVersion)
             parameter("cpn", cpn)
             extras()
-            header("User-Agent", WEB_USER_AGENT)
-            header("X-Origin", MUSIC_ORIGIN)
-            header("Origin", MUSIC_ORIGIN)
-            header("Referer", "$MUSIC_ORIGIN/")
+            header("User-Agent", playerClient.userAgent)
+            playerClient.origin?.let {
+                header("X-Origin", it)
+                header("Origin", it)
+                header("Referer", "$it/")
+            }
             visitorData?.let { header("X-Goog-Visitor-Id", it) }
             cookie?.let { c ->
                 header("Cookie", c)
                 header("X-Goog-AuthUser", "0")
-                sapisidFrom(c)?.let { header("Authorization", sapisidHash(it)) }
+                sapisidFrom(c)?.let { header("Authorization", sapisidHash(it, origin)) }
             }
         }.status.value
     }.getOrElse { e ->
@@ -576,8 +627,17 @@ object Innertube {
                                 put("gl", "US")
                                 visitorData?.let { put("visitorData", it) }
                             }
-                            putJsonObject("user") { put("lockedSafetyMode", false) }
+                            putJsonObject("user") {
+                                put("lockedSafetyMode", false)
+                                if (com.music.musique.data.settings.AppSettings.accountMoreContent.value) {
+                                    put("enableSafetyMode", false)
+                                }
+                            }
                             putJsonObject("request") { put("useSsl", true) }
+                        }
+                        if (com.music.musique.data.settings.AppSettings.accountMoreContent.value) {
+                            put("contentCheckOk", true)
+                            put("racyCheckOk", true)
                         }
                         bodyExtras()
                     },
