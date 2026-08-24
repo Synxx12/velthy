@@ -46,7 +46,7 @@
     </queries>
 
     <application
-        android:name=".BitChordApplication"
+        android:name=".MusiqueApplication"
         android:allowBackup="true"
         android:usesCleartextTraffic="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -55,7 +55,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.BitChord"
+        android:theme="@style/Theme.Musique"
         tools:targetApi="34">
 
         <!--
@@ -78,10 +78,32 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.BitChord">
+            android:theme="@style/Theme.Musique">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Discord OAuth2 deep link redirect -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="discord-1541308554173227080"
+                    android:host="authorize"
+                    android:path="/callback" />
+                <data
+                    android:scheme="discord-1541308554173227080"
+                    android:path="/authorize/callback" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="musique"
+                    android:host="discord"
+                    android:path="/callback" />
             </intent-filter>
         </activity>
 

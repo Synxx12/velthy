@@ -8,6 +8,135 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 
 ### [Unreleased]
 
+### [v1.3.7] - 2026-08-24
+
+#### ✨ Fitur Baru
+- **Discord Rich Presence & Kizzy RPC Gateway Integration**:
+  - Mengintegrasikan Discord Gateway WebSocket client (`com/my/kizzy/gateway`) dan Kizzy RPC engine (`DiscordRPC.kt`) untuk mempublikasikan status musik yang sedang diputar secara real-time ke profil Discord pengguna.
+  - Mendukung penyesuaian status (*Online*, *Idle*, *Do Not Disturb*), activity verb (*Listening*, *Playing*, *Watching*, *Competing*), custom activity title, dan dua tombol interaktif (*Listen on Musique* / *GitHub*).
+  - **Discord OAuth2 Web Login (PKCE)**: Login Discord kini meluncurkan aplikasi Chrome / browser default eksternal secara langsung dengan parameter otorisasi standar PKCE (`code_challenge_method=S256`, `scope=openid identify sdk.social_layer_presence`) dan kembali secara otomatis ke Musique melalui deep link callback (`discord-1165706613961789445:/authorize/callback`) untuk pertukaran token instan tanpa perlu mengetik kredensial di dalam aplikasi.
+  - Tetap menyediakan dialog manual token input (`DiscordDialogHost`) bagi pengguna yang ingin menyematkan token secara langsung.
+  - Menghadirkan layar konfigurasi Discord (`DiscordScreen.kt`) dengan live visual card preview yang merefleksikan tampilan profil Discord secara persis.
+- **Lossless FLAC Downloader & Binary FLAC Tagging Engine**:
+  - Menghubungkan resolusi audio lossless multi-sumber (`SourceResolver.forDownload`) ke dalam alur pengunduhan (`Downloads.kt` & `Downloader.kt`).
+  - Mengimplementasikan `FlacTagger.kt` untuk menyematkan metadata Vorbis Comment (Title, Artist, Album) dan Picture block cover art JPEG/PNG langsung ke dalam file FLAC byte-by-byte tanpa dependensi library eksternal berat.
+  - Memperbarui `DownloadStore.kt` dengan pemetaan codec `storable` untuk format FLAC, WAV, dan ALAC.
+  - **Open Hi-Res FLAC / Qobuz / Tidal Lossless Integration**: Mengganti index modul ke sumber terbuka terverifikasi (`monochrome.rickyaddons.dpdns.org`) yang menyediakan modul JavaScript murni (**Claudo**, **Qobuz**, **Improved-All-In-One**) tanpa proteksi enkripsi `8SM1`, sehingga resolusi stream audio 16-bit / 24-bit Hi-Res FLAC langsung aktif dan berjalan otomatis di engine QuickJS.
+  - **SourceRegistry Persistent Initialization Fix**: Menambahkan pemanggilan `SourceRegistry.init(this)` pada `MusiqueApplication.onCreate()` sehingga konfigurasi modul FLAC dan status toggle lossless tersimpan permanen dan tidak mati kembali saat aplikasi dibuka ulang.
+
+#### ✨ Fitur Baru
+- **App Update Modal Sheet (`AppUpdateSheet`)**:
+  - Menghadirkan modal bottom sheet pembaruan aplikasi baru yang diselaraskan dengan tema desain Sleep Timer dan Audio Output (dark aesthetic, header badge versi, card detail rilis, dan scrollable changelog).
+  - Mengintegrasikan tombol aksi unduhan langsung (*Download & Install*) dengan visual progres live (`bytesDownloaded`, `totalBytes`, `speed MB/s`) serta opsi instalasi instan saat unduhan selesai.
+  - Menampilkan tampilan status cerdas *"You're all up to date"* jika pengguna telah menggunakan versi terbaru.
+  - Memperbaiki alur di `SettingsSheet.kt` dan `NotificationsSheet.kt` agar modal update tidak pernah terbuka ganda (*single-source-of-truth state*).
+- **Status Bar Download Notification & Live Progress**:
+  - Mengintegrasikan notifikasi Android pada `AppUpdater.kt` dengan channel `app_updates`.
+  - Menampilkan progress bar live, ukuran data yang terunduh, dan kecepatan download (`MB/s`) langsung di status bar / notification shade Android saat mengunduh APK pembaruan.
+  - Saat unduhan selesai, notifikasi otomatis menampilkan status *"Siap Diinstal"* lengkap dengan `PendingIntent` untuk membuka installer APK secara instan ketika disentuh.
+
+#### 🐛 Bug Fixes
+- **YouTube Music Playback History Auto-Advance Registration Fix**:
+  - Memperbaiki pencatatan riwayat pemutaran ke akun YouTube Music saat lagu berganti secara alami (*auto-advance* / habis sendiri) dengan memanggil `registerCurrentPlay()` dan membuka sesi `PlaybackTracker.onPlaying` pada event `onMediaItemTransition` di `PlaybackService.kt`.
+  - Sebelumnya hanya lagu yang diputar secara manual yang terkirim ke YouTube Music history, sedangkan lagu berikutnya yang diputar otomatis tidak tercatat.
+- **Playlist Instant UI Sync (Add & Remove Song without Reload)**:
+  - Memperbaiki sinkronisasi state halaman detail playlist (`_detailStack`) saat menambahkan atau menghapus lagu ke playlist di `MainViewModel.kt`.
+  - Lagu yang baru ditambahkan kini langsung muncul di daftar lagu playlist secara instan (*real-time reactive UI*) tanpa harus menutup/membuka ulang halaman playlist atau merestart aplikasi.
+- **Audio Output Switcher Crash Fix & Safe Fallback**:
+  - Menangani `ActivityNotFoundException` dan `SecurityException` pada beberapa vendor Android (Xiaomi HyperOS, Samsung OneUI) saat memicu intent `MEDIA_OUTPUT` sistem dengan memeriksa `resolveActivity` terlebih dahulu dan fallback aman ke Bluetooth / Sound Settings.
+- **Kompilasi Jetpack Compose & State Scope**:
+  - Memperbaiki import `Arrangement` pada `SongActionsSheet.kt`.
+  - Mengangkat state `sleepRemaining` ke level root `NowPlayingScreen` sehingga badge countdown Sleep Timer dan modal sheet dapat mengakses state waktu tersisa secara sinkron tanpa error deklarasi.
+
+#### 🎵 Player, Audio & Lirik
+- **Sleep Timer Smart Countdown & Stable Non-Jitter Badge**:
+  - Memperbaiki badge Sleep Timer agar beralih otomatis ke format detik (`59s`, `30s`, dst.) saat sisa waktu berada di bawah 1 menit.
+  - Memperbaiki opsi *"After this song"* yang sebelumnya hardcoded menampilkan teks `1s`; kini secara dinamis menghitung sisa durasi lagu aktif (`durationMs - positionMs`) dalam format menit/detik atau `End` jika durasi habis.
+  - Menetapkan batas lebar minimum (`widthIn(min = 18.dp)`) pada badge agar angka countdown yang berubah setiap detik tidak menggeser icon tombol atau menyebabkan efek bergetar/jitter pada layout.
+- **ExoPlayer Direct Audio Output Routing (`setPreferredAudioDevice`)**:
+  - Mengintegrasikan `AudioDeviceHelper.preferredDevice` langsung ke instance ExoPlayer di `PlaybackService.kt` via `ExoPlayer.setPreferredAudioDevice(AudioDeviceInfo)`.
+  - Memilih **Phone Speaker** di dalam menu Audio Output kini menggunakan *multi-layer hardware routing* (`setCommunicationDevice`, `TYPE_BUILTIN_SPEAKER_SAFE`, `isSpeakerphoneOn`, dan `ExoPlayer.setPreferredAudioDevice`) sehingga aliran audio seketika dialihkan ke speaker internal ponsel tanpa nyangkut di Bluetooth TWS.
+- **Bluetooth Audio Device Deduplication & Multi-Profile Unification**:
+  - Memperbaiki duplikasi perangkat TWS (seperti Redmi Buds, Galaxy Buds, AirPods) di dalam bottom sheet Audio Output dengan mengelompokkan perangkat berdasarkan nama produk unik dan memprioritaskan profil media audio terbaik (`TYPE_BLUETOOTH_A2DP` / `TYPE_BLE_HEADSET`) dibanding profil panggilan suara (`SCO`).
+  - Memperbaiki tombol aksi **System Media Output Panel** agar mendeteksi perangkat Xiaomi / Redmi / POCO HyperOS dan secara otomatis mengarahkan ke menu Suara & Getaran sistem tanpa memicu error crash internal `com.android.settingslib.androidx.Fragment` bawaan ROM Xiaomi.
+- **On-The-Fly Audio Source Switching (Lossless FLAC $\leftrightarrow$ YouTube Audio)**:
+  - Menambahkan tombol aksi **"Audio Source"** langsung di dalam menu opsi lagu (`SongActionsSheet.kt`) saat lagu sedang diputar.
+  - Jika lagu mendapatkan stream FLAC yang tidak sesuai (misalnya versi instrumental atau potongan yang berbeda dari YouTube), pengguna dapat **mengalihkan sumber audio ke "Switch to YouTube" secara instan dengan 1 tap**.
+  - Begitu pula sebaliknya, jika lagu sedang memutar YouTube audio, pengguna dapat memilih **"Switch to Lossless FLAC"**. Menu akan menampilkan status **"Searching Lossless..." dengan spinner berputar aktif** dan menonaktifkan klik ganda/spam hingga file FLAC berhasil ditemukan dan diputar.
+- **Lossless Cellular Data Saver & Dynamic Live Switching (No Restart Needed)**:
+  - Menambahkan pengaturan baru **"Lossless on mobile data"** pada menu Audio Quality di `SettingsSheet.kt` dan `SourcesScreen.kt`. Saat dimatikan, streaming FLAC otomatis dinonaktifkan saat menggunakan kuota seluler (menggunakan format standar hemat kuota) dan kembali aktif secara otomatis saat tersambung ke Wi-Fi.
+  - Memperbaiki sistem pengalihan Lossless agar berjalan **100% *live on-the-fly* secara dinamis tanpa perlu me-restart aplikasi**, serta menghapus teks usang *"Restart required on change"* dan pembersihan cache paksa saat switch diaktifkan.
+- **Lossless Stream Evaluation, Duration Slack & State Reset**:
+  - Memperluas toleransi durasi lagu FLAC (`UPGRADE_LENGTH_SLACK_MS`) dari 3 detik menjadi 12 detik pada `watchUpgrade` di `PlaybackService.kt`. Hal ini mencegah pembatalan/revert sepihak ke YouTube Opus ketika versi master studio FLAC memiliki perbedaan durasi wajar (seperti intro/outro hening) dibanding versi video musik YouTube.
+  - Memperbaiki `QualityUpgrade.forget(mediaId)` agar membersihkan `asked` dan `refused` cache saat lagu berganti atau dimainkan ulang (`onMediaItemTransition`), sehingga saat pengguna berpindah lagu bolak-balik, aplikasi selalu mengevaluasi dan mencari kualitas Lossless secara konsisten.
+  - Mengimplementasikan `QualityUpgrade.markAsked(videoId)` saat lagu aktif sedang diputar agar proses seeking/scrubbing tidak memicu spam query background berulang-ulang.
+- **In-App Direct Audio Output Switching (Speaker vs Bluetooth/USB DAC)**:
+  - Menambahkan daftar perangkat output aktif langsung di dalam bottom sheet (*Phone Speaker*, *Connected Bluetooth TWS / Headphones*, *USB DAC*).
+  - Pengguna kini dapat langsung beralih output suara (misal: memindahkan suara ke Phone Speaker meskipun Bluetooth TWS masih terhubung) secara instan via API `AudioManager.setCommunicationDevice` / `setSpeakerphoneOn` tanpa harus keluar dari aplikasi.
+- **Lossless Queue Lookahead Prefetch (Instant Gapless Next-Track Playback)**:
+  - Mengintegrasikan prefetching cerdas untuk lagu berikutnya di antrean pemutaran (`prefetchAround` di `PlaybackService.kt`).
+  - Saat lagu aktif sedang diputar, sistem otomatis menjadwalkan pencarian format Hi-Res FLAC untuk 1 lagu berikutnya di antrean dengan jeda aman 3.5 detik (mencegah benturan bandwidth & bebas rate limit).
+  - Ketika lagu berganti secara alami, lagu berikutnya **langsung berputar dalam format 24-bit Hi-Res Lossless FLAC sejak detik ke-0 ($t=0\text{s}$)** dengan 0ms penundaan dan tanpa perlu pergantian format di tengah lagu.
+- **Instant Playback Start & Seamless Micro-Fade Quality Upgrade**:
+  - Mengembalikan alur `resolveWithModulePriority` agar memutar stream tercepat (YouTube Opus / cache dalam ~100ms) secara instan tanpa menunggu modul FLAC selesai.
+  - Modul FLAC melanjutkan pencarian di background; saat file Hi-Res FLAC siap, sistem melakukan pergantian format di tengah lagu (*mid-song upgrade*) dengan otomatisasi **Micro-Fade Gain Smoothing** (fade down 20ms $\to$ swap $\to$ seek $\to$ fade up 40ms) dan kompensasi offset presisi (`exactPosition + 35ms`).
+  - Transisi kualitas di tengah lagu kini berjalan **100% mulus (*seamless liquid transition*) tanpa suara klik/glitch, tanpa jeda hening, dan tanpa lompatan/pengulangan audio**.
+- **Restorasi Animasi Lirik 60/120 FPS & Frame-Clock Synchronization**:
+  - Mengembalikan kalkulasi `activeLine` berbasis frame-clock (`derivedStateOf`) pada `LyricsPanel` dan `CurrentLyricLine` agar transisi highlight kata demi kata (*syllable sweep*), efek blur halo Apple-style bloom, dan auto-scroll berjalan 100% mulus tanpa lag atau patah-patah.
+  - Memperbaiki perhitungan indeks baris lirik aktif dan fade out transisi baris lirik tunggal di atas scrubber.
+- **Discord RPC Auto-Recovery & Timestamp Stability Fix**:
+  - Memperbaiki perhitungan `endTime` pada `DiscordRPC.kt` agar tidak menghasilkan timestamp masa lalu (`endTime <= currentTime`) yang sebelumnya menyebabkan Discord menolak activity presence saat metadata durasi masih memuat atau 0.
+  - Menambahkan lazy auto-instantiation pada `pushDiscordPresence` di `PlaybackService.kt` sehingga instance `DiscordRPC` langsung terhubung kembali secara otomatis saat pemutaran lagu berjalan tanpa perlu me-restart aplikasi.
+  - Memperbaiki sinkronisasi Discord Rich Presence saat lagu berganti (*auto-advance* / playlist transition) maupun saat status player menjadi `STATE_READY`.
+- **Smart Audio Device Classification & Unique Vector Icons**:
+  - Menambahkan klasifikasi perangkat audio cerdas di `AudioDeviceHelper.kt` yang mendeteksi jenis perangkat secara spesifik: **Wireless Earbuds / TWS** (*Galaxy Buds, AirPods, Redmi Buds, In-Ear*), **Bluetooth Headphones / Over-Ear** (*Sony WH-1000, Bose, Studio*), **Bluetooth Speaker** (*JBL, Soundbar, Echo*), **USB DAC / Hi-Res Audio**, **Wired Headphones**, dan **Internal Phone Speaker**.
+  - Menyediakan ikon vektor presisi khusus untuk masing-masing kategori perangkat di `MusiqueIcons.kt` (`Earbuds`, `Headphones`, `Speaker`, `UsbDac`, `VolumeUp`).
+- **Sleep Timer Unclipped Badge & Solid Color Glyphs**:
+  - Memperbaiki penempatan badge Sleep Timer agar tampil utuh di sudut atas tanpa terpotong radius lingkaran (`CircleShape`).
+  - Mengembalikan palet solid putih elegan standar Musique pada seluruh 4 tombol bawah (Lyrics, Sleep, Audio Output, Queue) saat aktif/inaktif tanpa pergeseran warna aksen artwork.
+  - Menambahkan subtitle nama perangkat aktif (misal: "Buds2 Pro", "Speaker") tepat di bawah ikon audio dengan slot ketinggian tetap, sehingga ke-4 ikon bawah tetap sejajar 100% secara horizontal tanpa pergeseran vertikal.
+
+#### 🎨 UI, Gestures & Animasi
+- **Quick Picks 4-Song Vertical Snap Fling Behavior (YouTube Music Parity)**:
+  - Menerapkan `rememberSnapFlingBehavior` pada deretan rak lagu vertikal 4-baris (*QuickPicksShelf*) di Home screen.
+  - Setiap usapan (*swipe horizontal*) kini berpindah kolom secara bertahap dan presisi (*snap per column/page*) dengan lebar responsif 88% layar, mencegah pergeseran liar tak terkontrol.
+- **Local Files & On-Device Music Styling (BitChord Parity)**:
+  - Mempercantik kartu rak *On Device* (Downloads, Local Music / Device Files, History) pada `HomeScreen.kt` dan `LibraryScreen.kt` dengan gradien warna modern, border melengkung halus, dan ikon kontras tinggi.
+  - Menambahkan banner header gradien dinamis berikon besar pada `DetailScreen.kt` saat membuka Local Music, Downloads, atau Riwayat tanpa artwork internet.
+- **User Profile Login Avatar pada Top Navbar (BitChord Style)**:
+  - Mengganti ikon roda gigi Settings statis di bar atas (*FrostedTopBar*) dengan avatar profil pengguna interaktif.
+  - Menampilkan foto profil Google/YouTube Music (`account.thumbnailUrl`) berbingkai lingkaran saat login, inisial nama jika tidak ada avatar foto, atau ikon avatar person minimalis saat belum login.
+  - Membuka halaman Settings & Akun secara instan saat avatar ditekan.
+- **Full-Bleed Hero Artwork & Still Photo Player**:
+  - Menambahkan dukungan tampilan foto cover album layar penuh edge-to-edge (*full-bleed*) dengan masking gradien vertikal halus (`Brush.verticalGradient`) di belakang status bar.
+  - Mendukung transisi dinamis antara thumbnail sleeve saat antrean/lirik dibuka dan hero artwork saat antrean/lirik ditutup.
+  - Memperbarui `CanvasArtworkPlayer.kt` dengan `bottomFade` berbasis `RenderEffect` untuk looping video canvas.
+  - Menambahkan toggle pengaturan *"Full-screen cover art"* pada `SettingsSheet.kt` (otomatis terfilter pada layar lebar/tablet).
+- **Penyelarasan Presisi Layout FullPlayer, Queue Capsule Pills & 4 Tombol Bawah**:
+  - Menyelaraskan layout NowPlaying utama dengan presisi:
+    - Cover artwork hero di atas dengan gradien vertical fade (tanpa kotak ganda).
+    - Judul lagu (marquee) & Artis di kiri, tombol Heart & Menu (3-dots) di kanan.
+    - Baris lirik tunggal (*CurrentLyricLine*), scrubber, timestamps, transport controls (Rewind/Play/Next), dan volume bar.
+    - 4 tombol utama di paling bawah: **Lyrics · Sleep Timer · Live Audio Device Switcher · Queue** (dengan status badge).
+  - **Kontrol Bawah Persisten saat Lirik & Antrean Dibuka**: Memastikan seluruh kontrol pemutar bawah (Seekbar, Transport Play/Pause/Skip, Volume slider, dan 4 tombol bawah) tetap dapat diakses di bagian bawah layar saat panel lirik atau antrean dibuka di bagian atas.
+  - **Capsule Pill Controls di Header Antrean**: Menyematkan deretan tombol kapsul interaktif (**Shuffle · Repeat/One · AutoPlay · Clear**) di bagian atas daftar `InlineQueue`.
+
+#### 🐛 Bug Fixes
+- **NowPlayingScreen Compile & OptIn Fix**:
+  - Memperbaiki unresolved references dan smart cast `remaining` pada direct Sleep Timer sheet di `NowPlayingScreen.kt`.
+  - Menambahkan `@OptIn(ExperimentalMaterial3Api::class)` untuk komponen `ModalBottomSheet` dan `rememberModalBottomSheetState`.
+
+#### 🔧 Refactor & Infrastruktur
+- **ADB Wireless Debugging & Multi-Pairing mDNS Parser Fix (`dev.ps1`)**:
+  - Memperbaiki parser `Get-ConnectedDevices` pada `dev.ps1` agar mendukung nama serial perangkat nirkabel mDNS yang mengandung spasi dan tanda kurung (seperti `adb-... (2)._adb-tls-connect._tcp`).
+  - Mengutip argumen `-s "$device"` pada seluruh eksekusi `adb install`, `adb am start`, dan `adb logcat` sehingga dev runner otomatis mendeteksi ponsel fisik secara instan tanpa error *"Tidak ada perangkat/emulator ADB yang aktif"*.
+- **Penyelarasan Total Identitas & Namespace Musique Native**:
+  - Mengubah seluruh namespace dan package aplikasi dari `com.music.bitchord` menjadi `com.music.musique`.
+  - Memperbarui nama kelas inti, objek, dan composable dari `BitChord*` menjadi `Musique*` (`MusiqueApplication`, `MusiqueIcons`, `MusiqueTheme`, `MusiqueTypography`, `MusiqueApp`).
+  - Menyelaraskan seluruh path direktori paket source code (`app/src/main/java/com/music/musique/`, `test/`, `androidTest/`).
+  - Memperbarui konfigurasi build `rootProject.name = "Musique"` pada `settings.gradle.kts` serta `namespace = "com.music.musique"` pada `app/build.gradle.kts`.
+  - Menyelaraskan `AndroidManifest.xml` (`.MusiqueApplication`, `@style/Theme.Musique`), resource theme styles, serta script dev tooling (`dev.ps1`, `.vscode/tasks.json`, `keystore.properties.example`).
+
 ### [v1.3.6] - 2026-08-23
 
 #### ✨ Fitur Baru
@@ -146,7 +275,7 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 #### 🎨 UI, Gestures & Animasi
 - **Penyelarasan Desain Modern, Bersih & Minimalis pada History Screen**:
   - Mengintegrasikan navigasi layar History langsung ke dalam navbar terpadu `FrostedTopBar` (satu tombol kembali dan judul *History* yang elegan di atas, tanpa duplikasi tombol back).
-  - Mengadopsi tata letak baris lagu modern sesuai standar `SongRow` BitChord (`PAGE_GUTTER`, thumbnail 52dp bersih, tipografi `titleMedium` & `bodyMedium`).
+  - Mengadopsi tata letak baris lagu modern sesuai standar `SongRow` Musique (`PAGE_GUTTER`, thumbnail 52dp bersih, tipografi `titleMedium` & `bodyMedium`).
   - Kartu ringkasan atas (*Summary Card*) dengan segmented control `[ Local ]` & `[ Remote ]` yang presisi dan responsif.
   - Penyorotan lagu yang sedang aktif diputar dengan warna `primary` lembut dan indikator visualizer equalizer soundwave (`ıll`).
   - Tombol aksi mengambang **Shuffle** (`[ 🔀 Shuffle ]`) Material 3 di sudut kanan bawah untuk mengacak antrean lagu.
@@ -184,8 +313,8 @@ Semua pembaruan dan perubahan teknis pada Musique Android didokumentasikan dalam
 #### 🎨 UI, Gestures & Animasi
 - **Penyelarasan Desain Bottom Bar 4-Tombol & Badge Mode Antrean (Apple Music Parity)**:
   - **4 Tombol Bottom Bar Utama**:
-    1. **Lyrics (Paling Kiri)**: Ikon gelembung dialog tanda kutip (`BitChordIcons.LyricsQuote`) untuk membuka/menutup tab lirik secara instan.
-    2. **Sleep Timer (Kiri-Tengah)**: Ikon bulan sabit (`BitChordIcons.Moon`) dengan indikator dot biru saat aktif; membuka modal sheet pilihan waktu tidur (15m, 30m, 45m, 1 jam, Akhir lagu, Matikan timer).
+    1. **Lyrics (Paling Kiri)**: Ikon gelembung dialog tanda kutip (`MusiqueIcons.LyricsQuote`) untuk membuka/menutup tab lirik secara instan.
+    2. **Sleep Timer (Kiri-Tengah)**: Ikon bulan sabit (`MusiqueIcons.Moon`) dengan indikator dot biru saat aktif; membuka modal sheet pilihan waktu tidur (15m, 30m, 45m, 1 jam, Akhir lagu, Matikan timer).
     3. **Audio Output Switcher (Tengah / Kanan-Tengah)**: Menampilkan ikon dinamis (`Headphones`, `AirPlay`, `Speaker`) dan teks nama perangkat output aktif secara live (seperti nama TWS/AirPods/Bluetooth headset atau Phone Speaker) via `AudioDeviceHelper`. Posisi ikon sejajar presisi horizontal dengan tombol lainnya tanpa terdorong oleh teks.
     4. **Queue dengan Badge Mode (Paling Kanan)**: Ikon daftar antrean dilengkapi **badge lingkaran mini di sudut kanan atas** yang menampilkan ikon mode aktif secara dinamis (`🔀` Shuffle, `🔁`/`🔂` Repeat, `♾️` AutoPlay).
   - **Tombol Kapsul di Panel Antrean**: Memindahkan tombol **Shuffle**, **Repeat/Loop**, dan **AutoPlay** ke bagian atas panel antrean (*Queue*) dalam bentuk 3 tombol kapsul pil modern dengan feedback visual aktif/nonaktif yang kontras.

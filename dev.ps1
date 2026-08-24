@@ -11,16 +11,19 @@ function Get-ConnectedDevices {
     $raw = adb devices -l
     $devices = @()
     foreach ($line in $raw) {
-        if ($line -match "^([^\s]+)\s+device\s+(.*)$") {
-            $id = $matches[1].Trim()
-            $info = $matches[2].Trim()
-            $model = if ($info -match "model:([^\s]+)") { $matches[1] } else { $id }
-            $isEmulator = $id -match "^emulator-"
-            $devices += [PSCustomObject]@{
-                Id = $id
-                Model = $model
-                IsEmulator = $isEmulator
-                Info = $info
+        $trimmed = $line.Trim()
+        if ($trimmed -and -not ($trimmed -match "^List of devices attached")) {
+            if ($trimmed -match "^(.+?)\s+device(\s+(.*))?$") {
+                $id = $matches[1].Trim()
+                $info = if ($matches[3]) { $matches[3].Trim() } else { "" }
+                $model = if ($info -match "model:([^\s]+)") { $matches[1] } else { $id }
+                $isEmulator = $id -match "^emulator-"
+                $devices += [PSCustomObject]@{
+                    Id = $id
+                    Model = $model
+                    IsEmulator = $isEmulator
+                    Info = $info
+                }
             }
         }
     }
@@ -96,8 +99,8 @@ function Run-BuildAndLaunch {
         
         if ($apkPath -and (Test-Path $apkPath.FullName)) {
             Write-Host "[+] Memasang APK ($($apkPath.Name)) ke $device..." -ForegroundColor Cyan
-            adb -s $device install -r -d -t $apkPath.FullName
-            adb -s $device shell am start -n com.musique.client.dev/com.music.bitchord.MainActivity | Out-Null
+            adb -s "$device" install -r -d -t $apkPath.FullName
+            adb -s "$device" shell am start -n com.musique.client.dev/com.music.musique.MainActivity | Out-Null
             
             $stopwatch.Stop()
             Write-Host "[OK] Berhasil dipasang dan dibuka dalam $($stopwatch.Elapsed.TotalSeconds.ToString("0.0"))s!" -ForegroundColor Green
@@ -142,9 +145,9 @@ while ($true) {
     } elseif ($keyChar -eq "l") {
         Write-Host "`n--- Logcat Terbaru (40 Baris) dari $Global:SelectedDevice ---" -ForegroundColor Yellow
         if ($Global:SelectedDevice) {
-            adb -s $Global:SelectedDevice logcat -d -t 40 -s BitChord:V AndroidRuntime:E
+            adb -s "$Global:SelectedDevice" logcat -d -t 40 -s Musique:V AndroidRuntime:E
         } else {
-            adb logcat -d -t 40 -s BitChord:V AndroidRuntime:E
+            adb logcat -d -t 40 -s Musique:V AndroidRuntime:E
         }
     } elseif ($keyChar -eq "c") {
         Clear-Host

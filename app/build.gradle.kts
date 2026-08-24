@@ -17,7 +17,10 @@ val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
-val moduleIndexUrl: String = localProps.getProperty("MODULE_INDEX_URL", "")
+val moduleIndexUrl: String = localProps.getProperty(
+    "MODULE_INDEX_URL",
+    "https://monochrome.rickyaddons.dpdns.org/8spine-source.json",
+)
 
 val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
@@ -25,7 +28,7 @@ val signing = Properties().apply {
 }
 
 android {
-    namespace = "com.music.bitchord"
+    namespace = "com.music.musique"
     compileSdk = 36
 
     defaultConfig {
@@ -34,8 +37,8 @@ android {
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.3.6"
+        versionCode = 12
+        versionName = "1.3.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -145,6 +148,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.browser:browser:1.8.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // ---- Media playback: Media3 / ExoPlayer ----
