@@ -43,8 +43,14 @@ android {
 
         buildConfigField("String", "MODULE_INDEX_URL", "\"${moduleIndexUrl}\"")
 
-        ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "x86_64", "armeabi-v7a"))
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = true
         }
     }
 

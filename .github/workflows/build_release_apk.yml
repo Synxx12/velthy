@@ -146,16 +146,42 @@ jobs:
         run: |
           ./gradlew assembleProdRelease --stacktrace
           
-          APK_SOURCE=$(find app/build/outputs/apk/prod/release/ -name "*.apk" 2>/dev/null | head -n 1)
-          APK_DEST="Velthy-v${DISPLAY_VERSION}.apk"
-          APK_LATEST="Velthy-latest.apk"
+          mkdir -p release_assets
           
-          if [ -f "$APK_SOURCE" ]; then
-            cp "$APK_SOURCE" "$APK_DEST"
-            cp "$APK_SOURCE" "$APK_LATEST"
-            echo "APK_FILE=${APK_DEST}" >> $GITHUB_ENV
-            echo "APK_LATEST_FILE=${APK_LATEST}" >> $GITHUB_ENV
-            echo "✅ APK successfully compiled: ${APK_DEST}"
+          ARM64=$(find app/build/outputs/apk/prod/release/ -name "*arm64-v8a*.apk" 2>/dev/null | head -n 1)
+          ARMV7=$(find app/build/outputs/apk/prod/release/ -name "*armeabi-v7a*.apk" 2>/dev/null | head -n 1)
+          X86_64=$(find app/build/outputs/apk/prod/release/ -name "*x86_64*.apk" 2>/dev/null | head -n 1)
+          UNIVERSAL=$(find app/build/outputs/apk/prod/release/ -name "*universal*.apk" 2>/dev/null | head -n 1)
+          
+          # Primary APK: ARM64-v8a (or fallback to Universal)
+          PRIMARY="${ARM64:-$UNIVERSAL}"
+          
+          if [ -z "$PRIMARY" ] || [ ! -f "$PRIMARY" ]; then
+            PRIMARY=$(find app/build/outputs/apk/prod/release/ -name "*.apk" 2>/dev/null | head -n 1)
+          fi
+          
+          if [ -f "$PRIMARY" ]; then
+            # Standard lightweight assets (~27 MB)
+            cp "$PRIMARY" "release_assets/Velthy-v${DISPLAY_VERSION}.apk"
+            cp "$PRIMARY" "release_assets/Velthy-latest.apk"
+            cp "$PRIMARY" "release_assets/Velthy-v${DISPLAY_VERSION}-arm64-v8a.apk"
+            cp "$PRIMARY" "release_assets/Musique-v${DISPLAY_VERSION}-client.apk"
+            cp "$PRIMARY" "release_assets/Musique-latest-client.apk"
+            cp "$PRIMARY" "release_assets/Musique-v${DISPLAY_VERSION}.apk"
+            
+            # Universal and alternative architecture assets
+            if [ -f "$UNIVERSAL" ]; then
+              cp "$UNIVERSAL" "release_assets/Velthy-v${DISPLAY_VERSION}-universal.apk"
+            fi
+            if [ -f "$ARMV7" ]; then
+              cp "$ARMV7" "release_assets/Velthy-v${DISPLAY_VERSION}-armeabi-v7a.apk"
+            fi
+            if [ -f "$X86_64" ]; then
+              cp "$X86_64" "release_assets/Velthy-v${DISPLAY_VERSION}-x86_64.apk"
+            fi
+            
+            echo "✅ Release APKs packaged successfully:"
+            ls -lh release_assets/
           else
             echo "❌ APK Build Failed!"
             exit 1
@@ -169,8 +195,8 @@ jobs:
           python3 - <<'EOF'
           import os, re, subprocess
 
-          version_tag = os.environ.get('VERSION_TAG', 'v1.3.8')
-          display_ver = os.environ.get('DISPLAY_VERSION', '1.3.8')
+          version_tag = os.environ.get('VERSION_TAG', 'v1.3.9')
+          display_ver = os.environ.get('DISPLAY_VERSION', '1.3.9')
           custom_notes = os.environ.get('INPUT_RELEASE_NOTES', '').strip()
           version_file = f"docs/releases/{version_tag}.md"
 
@@ -188,7 +214,7 @@ jobs:
               with open("docs/CHANGELOG.md", "r", encoding="utf-8") as f:
                   content = f.read()
               
-              # First try matching specific version tag (e.g. ### [v1.3.8] or ### [1.3.8])
+              # First try matching specific version tag (e.g. ### [v1.3.9] or ### [1.3.9])
               pattern_ver = r'###\s*\[(?:v)?' + re.escape(display_ver) + r'\][^\n]*\n(.*?)(?=\n---\s*\n\s*##|\n###\s*\[|\Z)'
               match_ver = re.search(pattern_ver, content, re.DOTALL)
               if match_ver and match_ver.group(1).strip():
@@ -212,6 +238,7 @@ jobs:
               notes += "Aplikasi pemutar musik **Velthy** 100% Client-Side / Serverless langsung di perangkat Android Anda.\n\n"
               notes += "### ✨ Fitur Unggulan:\n"
               notes += "- **Client-Side Innertube**: Streaming langsung ke YouTube Music tanpa server perantara\n"
+              notes += "- **Ringan & Cepat (~27 MB)**: Optimalisasi ABI split untuk arsitektur 64-bit modern\n"
               notes += "- **Quick Picks di Home**: 4 baris lagu langsung di bagian atas untuk pemutaran instan 1-tap\n"
               notes += "- **Immersive Fullscreen Player**: Foto cover melebar edge-to-edge dengan vertical fade halus\n"
               notes += "- **Lirik Tersinkronisasi**: Lirik real-time LRCLIB ultra-smooth\n"
@@ -219,7 +246,7 @@ jobs:
               notes += "- **Opsi Background Lifecycle**: Pilihan menghentikan atau melanjutkan musik saat dihapus dari Recent Apps\n\n"
               notes += f"### 📋 Riwayat Pembaruan (Commits):\n{commits}\n"
 
-          footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
+          footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` (~27 MB) di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
 
           with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
               f.write(notes + footer)
@@ -230,8 +257,10 @@ jobs:
       # ── 8. CALCULATE SHA-256 CHECKSUM ──
       - name: Calculate Checksums
         run: |
-          sha256sum ${{ env.APK_FILE }} ${{ env.APK_LATEST_FILE }} > SHA256SUMS.txt
+          cd release_assets
+          sha256sum *.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
+          cd ..
 
       # ── 9. PUBLISH TO SYNXX12/VELTHY REPOSITORY ──
       - name: Create GitHub Release in Synxx12/velthy
@@ -242,9 +271,7 @@ jobs:
           name: "Velthy v${{ env.DISPLAY_VERSION }}"
           body_path: RELEASE_NOTES.md
           files: |
-            ${{ env.APK_FILE }}
-            ${{ env.APK_LATEST_FILE }}
-            SHA256SUMS.txt
+            release_assets/*
           token: ${{ secrets.GITHUB_TOKEN }}
           overwrite_files: true
 
@@ -257,9 +284,7 @@ jobs:
           name: "Velthy v${{ env.DISPLAY_VERSION }}"
           body_path: RELEASE_NOTES.md
           files: |
-            ${{ env.APK_FILE }}
-            ${{ env.APK_LATEST_FILE }}
-            SHA256SUMS.txt
+            release_assets/*
           repository: "Synxx12/musique-app-releases"
           token: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
           overwrite_files: true

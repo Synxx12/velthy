@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data
+package com.velthy.client.data
 
 import com.velthy.client.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -175,19 +175,27 @@ object AppUpdateChecker {
                     var apkSize = 0L
 
                     val assets = obj["assets"]?.jsonArray
-                    if (assets != null) {
-                        // 1. Prefer versioned Velthy APK: Velthy-vX.X.apk
+                        val isArm64 = android.os.Build.SUPPORTED_ABIS.any { it.contains("arm64", ignoreCase = true) }
+                        val isArmv7 = android.os.Build.SUPPORTED_ABIS.any { it.contains("armeabi", ignoreCase = true) }
+                        val isX86 = android.os.Build.SUPPORTED_ABIS.any { it.contains("x86", ignoreCase = true) }
+
+                        // 1. Prefer architecture-specific lightweight build (e.g. arm64-v8a ~27MB)
                         val preferred = assets.firstOrNull { assetEl ->
                             val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
-                            name.endsWith(".apk", ignoreCase = true) && 
-                                (name.contains("velthy", ignoreCase = true) || name.contains("client", ignoreCase = true)) && 
-                                !name.contains("latest", ignoreCase = true)
+                            if (!name.endsWith(".apk", ignoreCase = true) || name.contains("cloud", ignoreCase = true)) return@firstOrNull false
+                            if (isArm64 && name.contains("arm64", ignoreCase = true)) return@firstOrNull true
+                            if (isArmv7 && !isArm64 && name.contains("armeabi-v7a", ignoreCase = true)) return@firstOrNull true
+                            if (isX86 && !isArm64 && name.contains("x86", ignoreCase = true)) return@firstOrNull true
+                            false
                         } ?: assets.firstOrNull { assetEl ->
-                            // 2. Fallback: any client/velthy APK
+                            // 2. Default lightweight release APK (Velthy-v1.X.apk or Musique-v1.X-client.apk)
                             val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
-                            name.endsWith(".apk", ignoreCase = true) && (name.contains("velthy", ignoreCase = true) || name.contains("client", ignoreCase = true))
+                            name.endsWith(".apk", ignoreCase = true) &&
+                                (name.contains("velthy", ignoreCase = true) || name.contains("musique", ignoreCase = true) || name.contains("client", ignoreCase = true)) &&
+                                !name.contains("latest", ignoreCase = true) &&
+                                !name.contains("universal", ignoreCase = true)
                         } ?: assets.firstOrNull { assetEl ->
-                            // 3. Fallback: standard APK asset
+                            // 3. Fallback: Any compatible non-cloud APK
                             val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
                             name.endsWith(".apk", ignoreCase = true) && !name.contains("cloud", ignoreCase = true)
                         }
