@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.settings
+package com.velthy.client.data.settings
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -115,7 +115,7 @@ object AppSettings {
     val reduceAnimation = MutableStateFlow(false)
 
     /** Stop playback when the app is swiped away from the recent apps screen. */
-    val stopOnTaskRemoved = MutableStateFlow(false)
+    val stopOnTaskRemoved = MutableStateFlow(true)
 
     /** Hides the volume slider on the main player, leaving the rest of the layout to reflow. */
     val hideVolumeBar = MutableStateFlow(false)
@@ -284,7 +284,7 @@ object AppSettings {
         autoplay.value = prefs.getBoolean(KEY_AUTOPLAY, true)
         showNerdStats.value = prefs.getBoolean(KEY_NERD_STATS, false)
         reduceAnimation.value = prefs.getBoolean(KEY_REDUCE_ANIMATION, false)
-        stopOnTaskRemoved.value = prefs.getBoolean(KEY_STOP_ON_TASK_REMOVED, false)
+        stopOnTaskRemoved.value = prefs.getBoolean(KEY_STOP_ON_TASK_REMOVED, true)
         hideVolumeBar.value = prefs.getBoolean(KEY_HIDE_VOLUME_BAR, false)
         swipeToPlayNext.value = prefs.getBoolean(KEY_SWIPE_TO_PLAY_NEXT, false)
         reduceDynamicBlur.value = prefs.getBoolean(KEY_REDUCE_BLUR, false)
