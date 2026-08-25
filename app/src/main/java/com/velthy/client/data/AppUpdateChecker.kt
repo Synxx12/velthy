@@ -175,6 +175,7 @@ object AppUpdateChecker {
                     var apkSize = 0L
 
                     val assets = obj["assets"]?.jsonArray
+                    if (assets != null) {
                         val isArm64 = android.os.Build.SUPPORTED_ABIS.any { it.contains("arm64", ignoreCase = true) }
                         val isArmv7 = android.os.Build.SUPPORTED_ABIS.any { it.contains("armeabi", ignoreCase = true) }
                         val isX86 = android.os.Build.SUPPORTED_ABIS.any { it.contains("x86", ignoreCase = true) }
