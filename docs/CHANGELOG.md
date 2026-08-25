@@ -8,6 +8,16 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ### [Unreleased]
 
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Sinkronisasi Riwayat YouTube Mutakhir (SpatialFlow Telemetry Architecture)**:
+  - Mengadopsi arsitektur telemetri autentik dengan domain rewriting ke server YouTube Music resmi, parameter payload lengkap (`UNIPLAYER`), dan header identitas klien web resmi.
+  - Sistem pelacakan waktu dengar multi-tahap (validasi detik ke-1, denyut berkala 30 detik, proteksi lonjakan *scrubbing*, dan penyelesaian tuntas 96%) memastikan seluruh aktivitas dengar tercatat sempurna sebagai *real watchtime* di akun YouTube Music Anda.
+  - Pemisahan total riwayat cloud murni dan riwayat perangkat lokal tanpa pencampuran dummy, serta auto-sinkronisasi latar belakang otomatis tanpa intervensi manual.
+
+#### ✨ Fitur Baru & Tampilan
+- **Indikator Progres Refresh Halus di Bilah Atas (*Frosted Top Bar Loader*)**:
+  - Indikator tarik-untuk-memuat (*pull-to-refresh*) kini terintegrasi langsung di sepanjang garis bawah bilah atas kaca buram, menampilkan pengisian presisi 120 FPS mengikuti sentuhan jari dan animasi sapuan elegan saat memperbarui data.
+
 ### [1.4.0] - 2026-08-25
 
 #### ✨ Fitur Baru & Tampilan

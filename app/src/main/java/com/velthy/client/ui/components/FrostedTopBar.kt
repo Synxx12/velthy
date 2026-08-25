@@ -232,9 +232,9 @@ fun FrostedTopBar(
 @Composable
 private fun RefreshLine(refreshing: Boolean, pullFraction: () -> Float, modifier: Modifier = Modifier) {
     val fraction = pullFraction()
-    val pulling = fraction > 0.01f
+    val isPulling = fraction > 0.005f
     AnimatedVisibility(
-        visible = refreshing || pulling,
+        visible = refreshing || isPulling,
         enter = fadeIn(tween(120)),
         exit = fadeOut(tween(220)),
         modifier = modifier,
@@ -247,16 +247,16 @@ private fun RefreshLine(refreshing: Boolean, pullFraction: () -> Float, modifier
                 modifier = lineModifier,
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = Color.Transparent,
-                strokeCap = StrokeCap.Butt,
+                strokeCap = StrokeCap.Round,
                 gapSize = 0.dp,
             )
         } else {
             LinearProgressIndicator(
-                progress = { fraction.coerceIn(0f, 1f) },
+                progress = { pullFraction().coerceIn(0f, 1f) },
                 modifier = lineModifier,
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = Color.Transparent,
-                strokeCap = StrokeCap.Butt,
+                strokeCap = StrokeCap.Round,
                 gapSize = 0.dp,
                 drawStopIndicator = {},
             )

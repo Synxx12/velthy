@@ -173,17 +173,12 @@ object PlaybackHistoryManager {
                     }
                 }
 
-                val recentLocal = _localHistory.value.filter { now - it.playedAt < 15 * 60 * 1000L }
-                val merged = mutableListOf<HistoryItem>()
-                merged.addAll(recentLocal)
-                merged.addAll(cloudItems)
-
-                val deduplicated = deduplicateByLatest(merged)
+                val deduplicated = deduplicateByLatest(cloudItems)
                 lock.withLock {
                     val trimmed = deduplicated.take(MAX_HISTORY_ITEMS)
                     _remoteHistory.value = trimmed
                     saveFile(remoteFile, trimmed)
-                    Log.d(TAG, "Auto-synced ${trimmed.size} tracks from YouTube Music cloud history.")
+                    Log.d(TAG, "Auto-synced ${trimmed.size} tracks purely from YouTube Music cloud history.")
                 }
                 true
             } else {
@@ -209,16 +204,7 @@ object PlaybackHistoryManager {
                 _localHistory.value = trimmedLocal
                 saveFile(localFile, trimmedLocal)
 
-                // Optimistically update remote history if signed in & account auto-sync is enabled
-                if (AppSettings.accountAutoSync.value && com.velthy.client.data.innertube.Innertube.cookie != null) {
-                    val filteredRemote = _remoteHistory.value.filterNot { it.song.videoId == song.videoId }.toMutableList()
-                    filteredRemote.add(0, newItem)
-                    val trimmedRemote = if (filteredRemote.size > MAX_HISTORY_ITEMS) filteredRemote.take(MAX_HISTORY_ITEMS) else filteredRemote
-                    _remoteHistory.value = trimmedRemote
-                    saveFile(remoteFile, trimmedRemote)
-                }
-
-                Log.d(TAG, "Recorded play: ${song.title} (${song.videoId})")
+                Log.d(TAG, "Recorded local play: ${song.title} (${song.videoId})")
             }
         }
     }

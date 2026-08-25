@@ -359,6 +359,10 @@ class PlaybackService : MediaSessionService() {
                 val song = exoPlayer.currentMediaItem?.toSong()
                 val durationMs = exoPlayer.duration.takeIf { it > 0 }
                 scrobbleManager?.onPlayerStateChanged(isPlaying, song, durationMs)
+                PlaybackTracker.onPlaybackStateChanged(isPlaying)
+                if (!isPlaying) {
+                    PlaybackTracker.onPaused(exoPlayer.currentPosition)
+                }
 
                 // ListenBrainz & Live Web Stats: "now playing" on play/resume too, not just on
                 // transition — a track started from idle or resumed from pause
@@ -435,19 +439,19 @@ class PlaybackService : MediaSessionService() {
 
                 // currentPosition already belongs to the new item by now, so
                 // the outgoing track is closed out on the last sampled value.
-                PlaybackTracker.onTrackChanged(lastPositionSeconds)
+                PlaybackTracker.onTrackChanged(lastPositionSeconds * 1000L)
                 lastPositionSeconds = 0
 
                 val newSong = mediaItem?.toSong()
+                val durationMs = exoPlayer.duration.takeIf { it > 0 } ?: 0L
                 if (newSong != null) {
                     com.velthy.client.data.history.PlaybackHistoryManager.recordPlay(newSong)
-                    mediaItem.mediaId.let(PlaybackTracker::onPlaying)
+                    PlaybackTracker.onPlaying(newSong.videoId, durationMs)
                 }
 
                 // Scrobbling: stop old song, start new song
                 scrobbleManager?.onSongStop()
-                val durationMs = exoPlayer.duration.takeIf { it > 0 }
-                scrobbleManager?.onSongStart(newSong, durationMs)
+                scrobbleManager?.onSongStart(newSong, durationMs.takeIf { it > 0 })
                 val isRepeat = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
                 if (isRepeat) {
                     com.velthy.client.data.LiveStatsReporter.reset()
@@ -733,7 +737,8 @@ class PlaybackService : MediaSessionService() {
 
     private fun registerCurrentPlay() {
         val mediaItem = player?.currentMediaItem ?: return
-        mediaItem.mediaId.let(PlaybackTracker::onPlaying)
+        val durationMs = player?.duration?.takeIf { it > 0 } ?: 0L
+        PlaybackTracker.onPlaying(mediaItem.mediaId, durationMs)
         val song = mediaItem.toSong()
         com.velthy.client.data.history.PlaybackHistoryManager.recordPlay(song)
     }
@@ -1835,9 +1840,11 @@ class PlaybackService : MediaSessionService() {
         scope.launch {
             while (isActive) {
                 if (player.isPlaying) {
-                    lastPositionSeconds = player.currentPosition / 1000
+                    val posMs = player.currentPosition
+                    val durMs = player.duration.coerceAtLeast(0L)
+                    lastPositionSeconds = posMs / 1000L
                     player.currentMediaItem?.mediaId?.let {
-                        PlaybackTracker.onProgress(it, lastPositionSeconds)
+                        PlaybackTracker.onProgress(it, posMs, durMs)
                     }
                     // Same cadence for the resume point: the process can be
                     // killed at any moment without another callback arriving.
