@@ -86,7 +86,7 @@ jobs:
               TAG="v${PREFIX}${NEXT_PATCH}"
               echo "💡 Auto-incremented from ${LATEST} -> ${TAG}"
             else
-              TAG="v1.3.8"
+              TAG="v1.3.9"
             fi
           fi
           
