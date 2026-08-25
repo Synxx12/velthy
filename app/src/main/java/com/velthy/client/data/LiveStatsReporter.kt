@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data
+package com.velthy.client.data
 
 import android.util.Log
 import com.velthy.client.data.model.Song
@@ -53,7 +53,7 @@ object LiveStatsReporter {
                     put("title", song.title.ifBlank { "Unknown" })
                     put("artist", song.artist.ifBlank { "Unknown Artist" })
                     put("thumbnail", song.thumbnailUrl.orEmpty())
-                    put("edition", "client")
+                    put("edition", "native")
                 }
 
                 val request = Request.Builder()
