@@ -1,0 +1,273 @@
+name: Build & Release Velthy Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'native-v*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version (e.g. 1.3.8). Kosongkan untuk Auto-Increment +1 dari rilis terakhir.'
+        required: false
+        default: ''
+      release_notes:
+        description: 'Catatan Rilis Kustom (Opsional)'
+        required: false
+        default: ''
+      trigger_fcm:
+        description: 'Kirim FCM Push Notification ke Pengguna'
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: build-velthy-apk
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release Velthy APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      # ── 1. CHECKOUT CODEBASE ──
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── 2. SETUP JAVA 17 WITH GRADLE CACHING ──
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # ── 3. GRANT EXECUTE PERMISSIONS ──
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # ── 4. AUTO-DETERMINE & INCREMENT VERSION ──
+      - name: Determine Version Tag
+        id: get_version
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.version_tag }}" ]; then
+            RAW_VER="${{ inputs.version_tag }}"
+            RAW_VER="${RAW_VER#native-v}"
+            RAW_VER="${RAW_VER#v}"
+            TAG="v${RAW_VER}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          elif [[ "${GITHUB_REF}" == refs/tags/native-v* ]]; then
+            RAW_VER="${GITHUB_REF#refs/tags/native-v}"
+            TAG="v${RAW_VER}"
+          else
+            # Fetch latest tag from releases (Synxx12/velthy first, fallback musique-app-releases)
+            LATEST=$(gh release list --repo Synxx12/velthy --limit 30 2>/dev/null \
+              | awk '{print $3}' | grep -E '^(native-v|v)' | head -n 1 || echo "")
+            if [ -z "$LATEST" ]; then
+              LATEST=$(gh release list --repo Synxx12/musique-app-releases --limit 30 2>/dev/null \
+                | awk '{print $3}' | grep -E '^(native-v|v)' | head -n 1 || echo "")
+            fi
+            if [ -n "$LATEST" ]; then
+              RAW="${LATEST#native-v}"
+              RAW="${RAW#v}"
+              PREFIX=$(echo "$RAW" | sed -E 's/^([0-9]+\.[0-9]+\.).*/\1/')
+              PATCH=$(echo "$RAW" | sed -E 's/^[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+              NEXT_PATCH=$((PATCH + 1))
+              TAG="v${PREFIX}${NEXT_PATCH}"
+              echo "💡 Auto-incremented from ${LATEST} -> ${TAG}"
+            else
+              TAG="v1.3.8"
+            fi
+          fi
+          
+          # Extract display version (without prefix)
+          DISPLAY_VER="${TAG#native-v}"
+          DISPLAY_VER="${DISPLAY_VER#v}"
+          
+          echo "VERSION_TAG=${TAG}" >> $GITHUB_ENV
+          echo "DISPLAY_VERSION=${DISPLAY_VER}" >> $GITHUB_ENV
+          echo "✅ Release Tag: ${TAG} (Display: v${DISPLAY_VER})"
+
+      # ── 5. RESTORE RELEASE KEYSTORE & CONFIGURATION ──
+      - name: Setup Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "${KEYSTORE_BASE64}" ]; then
+            echo "${KEYSTORE_BASE64}" | base64 --decode > app/musique-release.jks
+            cat <<EOF > keystore.properties
+          storeFile=musique-release.jks
+          storePassword=${KEYSTORE_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PASSWORD}
+          EOF
+            echo "✅ Keystore restored from Secrets."
+          elif [ -f "app/musique-release.jks" ]; then
+            cat <<EOF > keystore.properties
+          storeFile=musique-release.jks
+          storePassword=musiqueappsecretkey
+          keyAlias=musique
+          keyPassword=musiqueappsecretkey
+          EOF
+            echo "⚠️ Using fallback keystore in repository."
+          fi
+
+      - name: Setup Local Properties & Module Index
+        env:
+          MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
+        run: |
+          if [ -n "$MODULE_INDEX_URL" ]; then
+            echo "MODULE_INDEX_URL=${MODULE_INDEX_URL}" > local.properties
+            echo "MODULE_INDEX_URL=${MODULE_INDEX_URL}" >> $GITHUB_ENV
+            echo "✅ MODULE_INDEX_URL securely injected from repository secrets"
+          fi
+
+      # ── 6. BUILD PRODUCTION APK RELEASE ──
+      - name: Build Android APK
+        env:
+          MODULE_INDEX_URL: ${{ env.MODULE_INDEX_URL }}
+        run: |
+          ./gradlew assembleProdRelease --stacktrace
+          
+          APK_SOURCE=$(find app/build/outputs/apk/prod/release/ -name "*.apk" 2>/dev/null | head -n 1)
+          APK_DEST="Velthy-v${DISPLAY_VERSION}.apk"
+          APK_LATEST="Velthy-latest.apk"
+          
+          if [ -f "$APK_SOURCE" ]; then
+            cp "$APK_SOURCE" "$APK_DEST"
+            cp "$APK_SOURCE" "$APK_LATEST"
+            echo "APK_FILE=${APK_DEST}" >> $GITHUB_ENV
+            echo "APK_LATEST_FILE=${APK_LATEST}" >> $GITHUB_ENV
+            echo "✅ APK successfully compiled: ${APK_DEST}"
+          else
+            echo "❌ APK Build Failed!"
+            exit 1
+          fi
+
+      # ── 7. GENERATE RELEASE NOTES ──
+      - name: Generate Release Notes
+        env:
+          INPUT_RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          python3 - <<'EOF'
+          import os, re, subprocess
+
+          version_tag = os.environ.get('VERSION_TAG', 'v1.3.8')
+          display_ver = os.environ.get('DISPLAY_VERSION', '1.3.8')
+          custom_notes = os.environ.get('INPUT_RELEASE_NOTES', '').strip()
+          version_file = f"docs/releases/{version_tag}.md"
+
+          notes = ""
+
+          # 1. Custom Notes from workflow_dispatch input
+          if custom_notes:
+              notes = f"## 🎵 Velthy v{display_ver}\n\n" + custom_notes
+          # 2. Dedicated release file
+          elif os.path.isfile(version_file):
+              with open(version_file, "r", encoding="utf-8") as f:
+                  notes = f.read().strip()
+          # 3. Smart Extraction from docs/CHANGELOG.md
+          elif os.path.isfile("docs/CHANGELOG.md"):
+              with open("docs/CHANGELOG.md", "r", encoding="utf-8") as f:
+                  content = f.read()
+              
+              # First try matching specific version tag (e.g. ### [v1.3.8] or ### [1.3.8])
+              pattern_ver = r'###\s*\[(?:v)?' + re.escape(display_ver) + r'\][^\n]*\n(.*?)(?=\n---\s*\n\s*##|\n###\s*\[|\Z)'
+              match_ver = re.search(pattern_ver, content, re.DOTALL)
+              if match_ver and match_ver.group(1).strip():
+                  extracted = match_ver.group(1).strip()
+                  notes = f"## 🎵 Velthy v{display_ver}\n\n" + extracted
+              else:
+                  pattern_unreleased = r'###\s*\[Unreleased\][^\n]*\n(.*?)(?=\n---\s*\n\s*##|\n###\s*\[|\Z)'
+                  match_unreleased = re.search(pattern_unreleased, content, re.DOTALL)
+                  if match_unreleased and match_unreleased.group(1).strip():
+                      extracted = match_unreleased.group(1).strip()
+                      notes = f"## 🎵 Velthy v{display_ver}\n\n" + extracted
+
+          # 4. Fallback: Recent git commits
+          if not notes:
+              try:
+                  commits = subprocess.check_output(['git', 'log', '-n', '10', '--pretty=format:- %s'], stderr=subprocess.DEVNULL).decode('utf-8').strip()
+              except Exception:
+                  commits = "- Initial Velthy release"
+              
+              notes = f"## 🎵 Velthy v{display_ver}\n\n"
+              notes += "Aplikasi pemutar musik **Velthy** 100% Client-Side / Serverless langsung di perangkat Android Anda.\n\n"
+              notes += "### ✨ Fitur Unggulan:\n"
+              notes += "- **Client-Side Innertube**: Streaming langsung ke YouTube Music tanpa server perantara\n"
+              notes += "- **Quick Picks di Home**: 4 baris lagu langsung di bagian atas untuk pemutaran instan 1-tap\n"
+              notes += "- **Immersive Fullscreen Player**: Foto cover melebar edge-to-edge dengan vertical fade halus\n"
+              notes += "- **Lirik Tersinkronisasi**: Lirik real-time LRCLIB ultra-smooth\n"
+              notes += "- **Offline Downloads**: Menyimpan audio dengan metadata ID3/Vorbis langsung ke folder `Downloads/Velthy`\n"
+              notes += "- **Opsi Background Lifecycle**: Pilihan menghentikan atau melanjutkan musik saat dihapus dari Recent Apps\n\n"
+              notes += f"### 📋 Riwayat Pembaruan (Commits):\n{commits}\n"
+
+          footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
+
+          with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
+              f.write(notes + footer)
+
+          print(f"✅ Generated RELEASE_NOTES.md ({len(notes)} chars)")
+          EOF
+
+      # ── 8. CALCULATE SHA-256 CHECKSUM ──
+      - name: Calculate Checksums
+        run: |
+          sha256sum ${{ env.APK_FILE }} ${{ env.APK_LATEST_FILE }} > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # ── 9. PUBLISH TO SYNXX12/VELTHY REPOSITORY ──
+      - name: Create GitHub Release in Synxx12/velthy
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: "Velthy v${{ env.DISPLAY_VERSION }}"
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ env.APK_FILE }}
+            ${{ env.APK_LATEST_FILE }}
+            SHA256SUMS.txt
+          token: ${{ secrets.GITHUB_TOKEN }}
+          overwrite_files: true
+
+      # ── 10. MIRROR RELEASE TO SYNXX12/MUSIQUE-APP-RELEASES ──
+      - name: Mirror Release to Synxx12/musique-app-releases
+        if: always() && steps.create_release.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: "Velthy v${{ env.DISPLAY_VERSION }}"
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ env.APK_FILE }}
+            ${{ env.APK_LATEST_FILE }}
+            SHA256SUMS.txt
+          repository: "Synxx12/musique-app-releases"
+          token: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
+          overwrite_files: true
+        continue-on-error: true
+
+      # ── 11. TRIGGER FCM PUSH NOTIFICATION WEBHOOK ──
+      - name: Trigger FCM Push Notification
+        if: always() && (steps.create_release.outcome == 'success' || steps.create_release.outcome == 'skipped')
+        run: |
+          curl -s -A "Mozilla/5.0 GitHubActions/1.0" \
+            -X POST "https://api.velthy.my.id/api/webhooks/github-release" \
+            -H "x-api-key: ${{ secrets.INTERNAL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tagName\": \"${VERSION_TAG}\", \"edition\": \"client\", \"title\": \"Velthy v${DISPLAY_VERSION}\"}" || true
+          echo "✅ FCM Notification Webhook Triggered."
