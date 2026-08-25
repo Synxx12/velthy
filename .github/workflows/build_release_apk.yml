@@ -160,15 +160,9 @@ jobs:
           fi
           
           if [ -f "$PRIMARY" ]; then
-            # Standard lightweight assets (~27 MB)
+            # Clean, non-duplicate Velthy Release APKs
             cp "$PRIMARY" "release_assets/Velthy-v${DISPLAY_VERSION}.apk"
-            cp "$PRIMARY" "release_assets/Velthy-latest.apk"
-            cp "$PRIMARY" "release_assets/Velthy-v${DISPLAY_VERSION}-arm64-v8a.apk"
-            cp "$PRIMARY" "release_assets/Musique-v${DISPLAY_VERSION}-client.apk"
-            cp "$PRIMARY" "release_assets/Musique-latest-client.apk"
-            cp "$PRIMARY" "release_assets/Musique-v${DISPLAY_VERSION}.apk"
             
-            # Universal and alternative architecture assets
             if [ -f "$UNIVERSAL" ]; then
               cp "$UNIVERSAL" "release_assets/Velthy-v${DISPLAY_VERSION}-universal.apk"
             fi

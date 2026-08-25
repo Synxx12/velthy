@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data
+package com.velthy.client.data
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -87,7 +87,7 @@ object AppUpdater {
                 }
 
                 val updateDir = File(context.cacheDir, "updates").apply { mkdirs() }
-                val apkFile = File(updateDir, "Musique-v${updateInfo.version}-client.apk")
+                val apkFile = File(updateDir, "Velthy-v${updateInfo.version}.apk")
 
                 if (apkFile.exists() && apkFile.length() == updateInfo.fileSize && updateInfo.fileSize > 0) {
                     // APK already downloaded completely
@@ -101,7 +101,7 @@ object AppUpdater {
 
                 val request = Request.Builder()
                     .url(downloadUrl)
-                    .header("User-Agent", "MusiqueNativeAndroid")
+                    .header("User-Agent", "VelthyAndroid")
                     .build()
 
                 _downloadState.value = DownloadState.Downloading(0f, 0, updateInfo.fileSize, 0f)
