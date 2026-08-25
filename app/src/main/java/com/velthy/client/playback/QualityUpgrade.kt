@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.net.Uri
 import android.util.Log
@@ -48,7 +48,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object QualityUpgrade {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /** The marker that distinguishes an upgraded item from the one it replaced. */
     const val MARKER = "q"

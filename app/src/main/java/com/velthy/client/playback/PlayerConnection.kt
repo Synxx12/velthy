@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.content.ComponentName
 import android.net.Uri
@@ -148,26 +148,10 @@ val MediaItem.fromAutoplay: Boolean
  * MediaItem so it survives the trip through the session — the queue belongs to
  * the player, and the UI only ever sees it back through a MediaController.
  */
-private const val EXTRA_FROM_AUTOPLAY = "musique.fromAutoplay"
-
-/** @see Song.localUri */
-private const val EXTRA_LOCAL_URI = "musique.localUri"
-
-/** @see Song.localPath */
-private const val EXTRA_LOCAL_PATH = "musique.localPath"
-
-/**
- * How long the track runs, as the row that queued it said.
- *
- * On the item rather than left to [MediaMetadata.durationMs] because that field
- * is the *player's* to state, and the player takes its own figure from the
- * decoder. This one is the claim a cross-source match is made on — see
- * [TrackMatcher] — and the two disagree often enough that overwriting either
- * with the other loses information. Carried so that [toSong] can give it back,
- * which is what [LastPlayed] saves and what puts `&d=` on a restored track's
- * playback URI.
- */
-private const val EXTRA_DURATION = "musique.durationText"
+private const val EXTRA_FROM_AUTOPLAY = "velthy.fromAutoplay"
+private const val EXTRA_LOCAL_URI = "velthy.localUri"
+private const val EXTRA_LOCAL_PATH = "velthy.localPath"
+private const val EXTRA_DURATION = "velthy.durationText"
 
 /**
  * Where AutoPlay's section of the queue begins, and so where a track queued by
@@ -265,7 +249,7 @@ fun Song.toMediaItem(): MediaItem {
         // resolves it — see [SourceResolver.substituteForYouTube] — and that
         // match is made on them, which the loader thread has no other way to
         // reach.
-        else -> "musique://watch?v=$videoId${matchQuery()}"
+        else -> "velthy://watch?v=$videoId${matchQuery()}"
     }
     return MediaItem.Builder()
         .setMediaId(videoId)

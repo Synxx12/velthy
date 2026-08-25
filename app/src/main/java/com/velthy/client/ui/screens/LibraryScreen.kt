@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,7 +16,7 @@ import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
 import com.velthy.client.data.model.ShelfItem
 import com.velthy.client.data.model.UiState
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 import com.velthy.client.ui.components.MessageState
 import com.velthy.client.ui.components.PAGE_GUTTER
 import com.velthy.client.ui.components.PullToRefresh
@@ -173,7 +173,7 @@ private fun PlaylistShelf(
         onItemLongPress = onItemLongPress,
         leadingCard = {
             NewShelfCard(
-                icon = MusiqueIcons.Plus,
+                icon = VelthyIcons.Plus,
                 label = "New playlist",
                 subtitle = "Saved to YouTube Music",
                 onClick = onNewPlaylist,

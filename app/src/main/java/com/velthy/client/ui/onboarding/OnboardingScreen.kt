@@ -51,6 +51,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Switch
@@ -256,7 +257,7 @@ fun OnboardingScreen(
                 Spacer(Modifier.size(40.dp))
             }
 
-            // ─── Animated Step Content ───
+            // ─── Animated Step Content (Scrollable Container) ───
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -278,26 +279,70 @@ fun OnboardingScreen(
                     label = "onboardingStepTransition",
                 ) { step ->
                     when (step) {
-                        0 -> WelcomeStep(colors = colors, onNext = { currentStep = 1 })
-                        1 -> SyncIntegrationsStep(colors = colors, onNext = { currentStep = 2 })
+                        0 -> WelcomeStep(colors = colors)
+                        1 -> SyncIntegrationsStep(colors = colors)
                         2 -> ConnectMusicStep(
                             colors = colors,
                             account = account,
                             onSignIn = onSignInWithGoogle,
-                            onNext = { currentStep = 3 },
                         )
                         3 -> UserReadyStep(
                             colors = colors,
                             account = account,
-                            onNext = { currentStep = 4 },
                         )
-                        4 -> PersonalizeStep(colors = colors, onNext = { currentStep = 5 })
+                        4 -> PersonalizeStep(colors = colors)
                         5 -> AllSetStep(
                             colors = colors,
                             account = account,
-                            onStartListening = onComplete,
                         )
                     }
+                }
+            }
+
+            // ─── Stable & Fixed Bottom Action Bar (Anchored at Bottom of Screen) ───
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+            ) {
+                when (currentStep) {
+                    0 -> OnboardingPillButton(
+                        text = "Get Started",
+                        showArrow = true,
+                        colors = colors,
+                        onClick = { currentStep = 1 },
+                    )
+                    1 -> OnboardingPillButton(
+                        text = "Continue",
+                        showArrow = true,
+                        colors = colors,
+                        onClick = { currentStep = 2 },
+                    )
+                    2 -> OnboardingPillButton(
+                        text = if (account != null) "Continue" else "Continue as Guest",
+                        showArrow = true,
+                        colors = colors,
+                        onClick = { currentStep = if (account != null) 3 else 4 },
+                    )
+                    3 -> OnboardingPillButton(
+                        text = "Continue",
+                        showArrow = true,
+                        colors = colors,
+                        onClick = { currentStep = 4 },
+                    )
+                    4 -> OnboardingPillButton(
+                        text = "Continue",
+                        showArrow = true,
+                        colors = colors,
+                        onClick = { currentStep = 5 },
+                    )
+                    5 -> OnboardingPillButton(
+                        text = "Start Listening",
+                        showArrow = false,
+                        isAccent = true,
+                        colors = colors,
+                        onClick = onComplete,
+                    )
                 }
             }
         }
@@ -311,60 +356,41 @@ fun OnboardingScreen(
 @Composable
 private fun WelcomeStep(
     colors: OnboardingPalette,
-    onNext: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+            .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.Center,
     ) {
-        Spacer(Modifier.height(32.dp))
+        // Authentic Velthy Logo
+        Image(
+            painter = painterResource(R.drawable.ic_logo),
+            contentDescription = "Velthy",
+            colorFilter = ColorFilter.tint(colors.textPrimary),
+            modifier = Modifier.size(88.dp),
+        )
 
-        // Center Hero Graphic
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            // Authentic Velthy Logo
-            Image(
-                painter = painterResource(R.drawable.ic_logo),
-                contentDescription = "Velthy",
-                colorFilter = ColorFilter.tint(colors.textPrimary),
-                modifier = Modifier.size(80.dp),
-            )
+        Spacer(Modifier.height(36.dp))
 
-            Spacer(Modifier.height(36.dp))
+        Text(
+            text = "Hola",
+            color = colors.textPrimary,
+            fontSize = 36.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.8).sp,
+        )
 
-            Text(
-                text = "Hola",
-                color = colors.textPrimary,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.8).sp,
-            )
+        Spacer(Modifier.height(12.dp))
 
-            Spacer(Modifier.height(10.dp))
-
-            Text(
-                text = "Welcome to Velthy.\nLet's get everything set up for you.",
-                color = colors.textSecondary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-            )
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        // Bottom CTA Button
-        OnboardingPillButton(
-            text = "Get Started",
-            showArrow = true,
-            colors = colors,
-            onClick = onNext,
+        Text(
+            text = "Welcome to Velthy.\nLet's get everything set up for you.",
+            color = colors.textSecondary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
         )
     }
 }
@@ -376,7 +402,6 @@ private fun WelcomeStep(
 @Composable
 private fun SyncIntegrationsStep(
     colors: OnboardingPalette,
-    onNext: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
 
@@ -519,15 +544,6 @@ private fun SyncIntegrationsStep(
             colors = colors,
         )
 
-        Spacer(Modifier.height(32.dp))
-
-        OnboardingPillButton(
-            text = "Continue",
-            showArrow = true,
-            colors = colors,
-            onClick = onNext,
-        )
-
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -541,7 +557,6 @@ private fun ConnectMusicStep(
     colors: OnboardingPalette,
     account: Account?,
     onSignIn: () -> Unit,
-    onNext: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
 
@@ -752,15 +767,6 @@ private fun ConnectMusicStep(
             colors = colors,
         )
 
-        Spacer(Modifier.height(32.dp))
-
-        OnboardingPillButton(
-            text = if (account != null) "Continue" else "Continue as Guest",
-            showArrow = true,
-            colors = colors,
-            onClick = onNext,
-        )
-
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -773,126 +779,109 @@ private fun ConnectMusicStep(
 private fun UserReadyStep(
     colors: OnboardingPalette,
     account: Account?,
-    onNext: () -> Unit,
 ) {
     val displayName = account?.name?.ifBlank { "Music Lover" } ?: "Music Lover"
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+            .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.Center,
     ) {
-        Spacer(Modifier.height(16.dp))
+        Text(
+            text = "Hi, $displayName!",
+            color = colors.textPrimary,
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.6).sp,
+            textAlign = TextAlign.Center,
+        )
 
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+        Spacer(Modifier.height(36.dp))
+
+        // Central Orbital Profile Showcase
+        Box(
+            modifier = Modifier.size(190.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = "Hi, $displayName!",
-                color = colors.textPrimary,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = (-0.6).sp,
-                textAlign = TextAlign.Center,
+            // Background Outer Subtle Glow Ring
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .clip(CircleShape)
+                    .background(colors.subtleBadgeBg),
             )
 
-            Spacer(Modifier.height(40.dp))
-
-            // Central Orbital Profile Showcase
-            Box(
-                modifier = Modifier.size(190.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                // Background Outer Subtle Glow Ring
+            // User Avatar
+            if (account?.thumbnailUrl != null) {
+                AsyncImage(
+                    model = account.thumbnailUrl,
+                    contentDescription = displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(CircleShape)
+                        .border(2.dp, colors.cardBorder, CircleShape),
+                )
+            } else {
                 Box(
                     modifier = Modifier
-                        .size(160.dp)
+                        .size(96.dp)
                         .clip(CircleShape)
-                        .background(colors.subtleBadgeBg),
-                )
-
-                // User Avatar
-                if (account?.thumbnailUrl != null) {
-                    AsyncImage(
-                        model = account.thumbnailUrl,
-                        contentDescription = displayName,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(96.dp)
-                            .clip(CircleShape)
-                            .border(2.dp, colors.cardBorder, CircleShape),
+                        .background(colors.cardBackground)
+                        .border(2.dp, colors.cardBorder, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.ic_logo),
+                        contentDescription = "Velthy",
+                        colorFilter = ColorFilter.tint(colors.textPrimary),
+                        modifier = Modifier.size(48.dp),
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(96.dp)
-                            .clip(CircleShape)
-                            .background(colors.cardBackground)
-                            .border(2.dp, colors.cardBorder, CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Image(
-                            painter = painterResource(R.drawable.ic_logo),
-                            contentDescription = "Velthy",
-                            colorFilter = ColorFilter.tint(colors.textPrimary),
-                            modifier = Modifier.size(48.dp),
-                        )
-                    }
                 }
-
-                // 4 Floating Orbital Badges
-                MiniOrbitalBadge(
-                    icon = Icons.Rounded.Settings,
-                    colors = colors,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .offset(x = 12.dp, y = 12.dp),
-                )
-                MiniOrbitalBadge(
-                    icon = Icons.Rounded.MusicNote,
-                    colors = colors,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = (-12).dp, y = 12.dp),
-                )
-                MiniOrbitalBadge(
-                    icon = Icons.Rounded.GraphicEq,
-                    colors = colors,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = 12.dp, y = (-12).dp),
-                )
-                MiniOrbitalBadge(
-                    icon = Icons.Rounded.AutoAwesome,
-                    colors = colors,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = (-12).dp, y = (-12).dp),
-                )
             }
 
-            Spacer(Modifier.height(36.dp))
-
-            Text(
-                text = "Your library and account are ready to roll.\nLet's finish personalizing your setup.",
-                color = colors.textSecondary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
+            // 4 Floating Orbital Badges
+            MiniOrbitalBadge(
+                icon = Icons.Rounded.Settings,
+                colors = colors,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = 12.dp, y = 12.dp),
+            )
+            MiniOrbitalBadge(
+                icon = Icons.Rounded.MusicNote,
+                colors = colors,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-12).dp, y = 12.dp),
+            )
+            MiniOrbitalBadge(
+                icon = Icons.Rounded.GraphicEq,
+                colors = colors,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = 12.dp, y = (-12).dp),
+            )
+            MiniOrbitalBadge(
+                icon = Icons.Rounded.AutoAwesome,
+                colors = colors,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = (-12).dp, y = (-12).dp),
             )
         }
 
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(36.dp))
 
-        OnboardingPillButton(
-            text = "Continue",
-            showArrow = true,
-            colors = colors,
-            onClick = onNext,
+        Text(
+            text = "Your library and account are ready to roll.\nLet's finish personalizing your setup.",
+            color = colors.textSecondary,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
         )
     }
 }
@@ -904,7 +893,6 @@ private fun UserReadyStep(
 @Composable
 private fun PersonalizeStep(
     colors: OnboardingPalette,
-    onNext: () -> Unit,
 ) {
     val scrollState = rememberScrollState()
     val currentTheme by AppSettings.themeMode.collectAsStateWithLifecycle()
@@ -940,31 +928,6 @@ private fun PersonalizeStep(
         )
 
         Spacer(Modifier.height(20.dp))
-
-        // Center Palette Icon
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-                    .background(colors.subtleBadgeBg),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Palette,
-                    contentDescription = null,
-                    tint = colors.textPrimary,
-                    modifier = Modifier.size(34.dp),
-                )
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
 
         // Group 1: Appearance Theme
         Box(
@@ -1017,43 +980,12 @@ private fun PersonalizeStep(
                         modifier = Modifier.weight(1f),
                     )
                 }
-
-                // Dynamic Haze Blur Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = "Dynamic Glass & Haze",
-                            color = colors.textPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            text = "Apple Music frosted blur effect",
-                            color = colors.textSecondary,
-                            fontSize = 12.sp,
-                        )
-                    }
-                    Switch(
-                        checked = !reduceBlur,
-                        onCheckedChange = { AppSettings.setReduceDynamicBlur(!it) },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = Color(0xFFFA2D48),
-                            uncheckedThumbColor = if (colors.isDark) Color(0xFF8E8E93) else Color.White,
-                            uncheckedTrackColor = if (colors.isDark) Color(0xFF2C2C32) else Color(0xFFD1D1D6),
-                        ),
-                    )
-                }
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
 
-        // Group 2: Audio & Playback
+        // Group 2: Audio & Transitions
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1062,15 +994,15 @@ private fun PersonalizeStep(
                 .border(1.dp, colors.cardBorder, RoundedCornerShape(20.dp))
                 .padding(16.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
-                    text = "Audio & Playback",
+                    text = "Audio Engine & Playback",
                     color = colors.textPrimary,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                 )
 
-                // AutoMix Toggle
+                // Smart Fade / DJ Automix Switch
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1078,13 +1010,13 @@ private fun PersonalizeStep(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "AutoMix (Smart Fade)",
+                            text = "AutoMix DJ & Smart Fade",
                             color = colors.textPrimary,
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Seamless DJ transitions between songs",
+                            text = "Smooth 7s beatmatched crossfade between songs",
                             color = colors.textSecondary,
                             fontSize = 12.sp,
                         )
@@ -1101,7 +1033,12 @@ private fun PersonalizeStep(
                     )
                 }
 
-                // Gapless Playback Toggle
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = colors.cardBorder,
+                )
+
+                // Skip Silence Switch
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1109,13 +1046,13 @@ private fun PersonalizeStep(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "Gapless Playback",
+                            text = "Skip Silence",
                             color = colors.textPrimary,
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Eliminate silent gaps between tracks",
+                            text = "Instantly skip dead silence at starts & ends",
                             color = colors.textSecondary,
                             fontSize = 12.sp,
                         )
@@ -1131,8 +1068,29 @@ private fun PersonalizeStep(
                         ),
                     )
                 }
+            }
+        }
 
-                // Stop on Task Removed Toggle
+        Spacer(Modifier.height(16.dp))
+
+        // Group 3: Performance & Battery Options
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(colors.cardBackground)
+                .border(1.dp, colors.cardBorder, RoundedCornerShape(20.dp))
+                .padding(16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = "Performance & System",
+                    color = colors.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                // Battery Saver / Reduce Blur
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1140,13 +1098,49 @@ private fun PersonalizeStep(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "Stop Music on Close",
+                            text = "Energy Efficiency Mode",
                             color = colors.textPrimary,
                             fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Stop playback when swiped from recent apps",
+                            text = "Reduce dynamic mesh blur for maximum battery life",
+                            color = colors.textSecondary,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    Switch(
+                        checked = reduceBlur,
+                        onCheckedChange = { AppSettings.setReduceDynamicBlur(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFFFA2D48),
+                            uncheckedThumbColor = if (colors.isDark) Color(0xFF8E8E93) else Color.White,
+                            uncheckedTrackColor = if (colors.isDark) Color(0xFF2C2C32) else Color(0xFFD1D1D6),
+                        ),
+                    )
+                }
+
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = colors.cardBorder,
+                )
+
+                // Background Playback Lifecycle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Stop on Task Removed",
+                            color = colors.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Stop audio immediately when swiping away app",
                             color = colors.textSecondary,
                             fontSize = 12.sp,
                         )
@@ -1165,15 +1159,6 @@ private fun PersonalizeStep(
             }
         }
 
-        Spacer(Modifier.height(28.dp))
-
-        OnboardingPillButton(
-            text = "Continue",
-            showArrow = true,
-            colors = colors,
-            onClick = onNext,
-        )
-
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -1186,8 +1171,8 @@ private fun PersonalizeStep(
 private fun AllSetStep(
     colors: OnboardingPalette,
     account: Account?,
-    onStartListening: () -> Unit,
 ) {
+    val scrollState = rememberScrollState()
     val themeMode by AppSettings.themeMode.collectAsStateWithLifecycle()
     val smartFade by AppSettings.smartFadeEnabled.collectAsStateWithLifecycle()
     val accountLabel = account?.name ?: "Guest Session"
@@ -1209,102 +1194,90 @@ private fun AllSetStep(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = 24.dp)
+                .verticalScroll(scrollState),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Spacer(Modifier.height(16.dp))
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
+            // Authentic Velthy Logo
+            Image(
+                painter = painterResource(R.drawable.ic_logo),
+                contentDescription = "Velthy",
+                colorFilter = ColorFilter.tint(colors.textPrimary),
+                modifier = Modifier.size(72.dp),
+            )
+
+            Spacer(Modifier.height(20.dp))
+
+            Text(
+                text = "You're all set!",
+                color = colors.textPrimary,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.6).sp,
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            Text(
+                text = "Everything is configured and ready to go.",
+                color = colors.textSecondary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+
+            Spacer(Modifier.height(24.dp))
+
+            // Summary Checklist Card
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(colors.cardBackground)
+                    .border(1.dp, colors.cardBorder, RoundedCornerShape(20.dp))
+                    .padding(18.dp),
             ) {
-                // Authentic Velthy Logo
-                Image(
-                    painter = painterResource(R.drawable.ic_logo),
-                    contentDescription = "Velthy",
-                    colorFilter = ColorFilter.tint(colors.textPrimary),
-                    modifier = Modifier.size(72.dp),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        text = "Ready to Play",
+                        color = colors.textSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp,
+                    )
 
-                Spacer(Modifier.height(24.dp))
+                    SummaryCheckItem(
+                        icon = Icons.Rounded.CloudSync,
+                        title = "Sync & Integrations",
+                        subtitle = "Telemetry & In-App Updates",
+                        colors = colors,
+                    )
 
-                Text(
-                    text = "You're all set!",
-                    color = colors.textPrimary,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = (-0.6).sp,
-                )
+                    SummaryCheckItem(
+                        icon = Icons.Rounded.MusicNote,
+                        title = "Music Source",
+                        subtitle = accountLabel,
+                        colors = colors,
+                    )
 
-                Spacer(Modifier.height(6.dp))
+                    SummaryCheckItem(
+                        icon = Icons.Rounded.Palette,
+                        title = "Appearance",
+                        subtitle = appearanceLabel,
+                        colors = colors,
+                    )
 
-                Text(
-                    text = "Everything is configured and ready to go.",
-                    color = colors.textSecondary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-
-                Spacer(Modifier.height(30.dp))
-
-                // Summary Checklist Card
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(colors.cardBackground)
-                        .border(1.dp, colors.cardBorder, RoundedCornerShape(20.dp))
-                        .padding(18.dp),
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text(
-                            text = "Ready to Play",
-                            color = colors.textSecondary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.5.sp,
-                        )
-
-                        SummaryCheckItem(
-                            icon = Icons.Rounded.CloudSync,
-                            title = "Sync & Integrations",
-                            subtitle = "Telemetry & In-App Updates",
-                            colors = colors,
-                        )
-
-                        SummaryCheckItem(
-                            icon = Icons.Rounded.MusicNote,
-                            title = "Music Source",
-                            subtitle = accountLabel,
-                            colors = colors,
-                        )
-
-                        SummaryCheckItem(
-                            icon = Icons.Rounded.Palette,
-                            title = "Appearance",
-                            subtitle = appearanceLabel,
-                            colors = colors,
-                        )
-
-                        SummaryCheckItem(
-                            icon = Icons.Rounded.Tune,
-                            title = "Audio Engine",
-                            subtitle = audioLabel,
-                            colors = colors,
-                        )
-                    }
+                    SummaryCheckItem(
+                        icon = Icons.Rounded.Tune,
+                        title = "Audio Engine",
+                        subtitle = audioLabel,
+                        colors = colors,
+                    )
                 }
             }
 
-            Spacer(Modifier.weight(1f))
-
-            OnboardingPillButton(
-                text = "Start Listening",
-                showArrow = false,
-                isAccent = true,
-                colors = colors,
-                onClick = onStartListening,
-            )
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

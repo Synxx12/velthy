@@ -325,6 +325,7 @@ class PlaybackService : MediaSessionService() {
         observeDiscord()
         watchSleepTimer()
         observeAudioDevice(exoPlayer)
+        reportProgress(exoPlayer)
         // Before the listener below is attached, so loading the queue doesn't
         // read as a track change and set the read-ahead going.
         restoreLastQueue(exoPlayer)
@@ -2457,7 +2458,7 @@ class PlaybackService : MediaSessionService() {
         const val SESSION_ID = "MusiquePlayback"
 
         /** How often played-seconds are sampled off the player. */
-        const val PROGRESS_SAMPLE_MS = 5_000L
+        const val PROGRESS_SAMPLE_MS = 1_000L
 
         /**
          * Size of each range the player fetches. The same figure read-ahead

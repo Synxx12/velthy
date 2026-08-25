@@ -66,7 +66,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import com.velthy.client.data.AppUpdateChecker
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text

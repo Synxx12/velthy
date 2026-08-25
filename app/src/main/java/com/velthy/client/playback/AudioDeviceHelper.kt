@@ -20,12 +20,18 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.Cast
 
 enum class AudioDeviceType {
     SPEAKER,
@@ -33,6 +39,7 @@ enum class AudioDeviceType {
     BLUETOOTH_TWS,
     BLUETOOTH_HEADPHONES,
     BLUETOOTH_SPEAKER,
+    TV_CAST,
     USB_DAC,
 }
 
@@ -43,10 +50,11 @@ data class ConnectedAudioDevice(
     val isExternal: Boolean get() = type != AudioDeviceType.SPEAKER
 
     val icon: ImageVector get() = when (type) {
-        AudioDeviceType.BLUETOOTH_TWS -> MusiqueIcons.Earbuds
-        AudioDeviceType.BLUETOOTH_HEADPHONES, AudioDeviceType.HEADPHONES -> MusiqueIcons.Headphones
-        AudioDeviceType.BLUETOOTH_SPEAKER -> MusiqueIcons.Speaker
-        AudioDeviceType.USB_DAC -> MusiqueIcons.UsbDac
+        AudioDeviceType.BLUETOOTH_TWS -> VelthyIcons.Earbuds
+        AudioDeviceType.BLUETOOTH_HEADPHONES, AudioDeviceType.HEADPHONES -> VelthyIcons.Headphones
+        AudioDeviceType.BLUETOOTH_SPEAKER -> VelthyIcons.Speaker
+        AudioDeviceType.TV_CAST -> Icons.Rounded.Tv
+        AudioDeviceType.USB_DAC -> VelthyIcons.UsbDac
         AudioDeviceType.SPEAKER -> Icons.AutoMirrored.Rounded.VolumeUp
     }
 
@@ -54,6 +62,7 @@ data class ConnectedAudioDevice(
         AudioDeviceType.BLUETOOTH_TWS -> "Wireless Earbuds (TWS)"
         AudioDeviceType.BLUETOOTH_HEADPHONES -> "Bluetooth Headphones"
         AudioDeviceType.BLUETOOTH_SPEAKER -> "Bluetooth Speaker"
+        AudioDeviceType.TV_CAST -> "Smart TV / Cast Display"
         AudioDeviceType.HEADPHONES -> "Wired Headphones"
         AudioDeviceType.USB_DAC -> "USB DAC / Hi-Res Audio"
         AudioDeviceType.SPEAKER -> "Phone Speaker"
@@ -65,13 +74,17 @@ data class AudioOutputOption(
     val name: String,
     val type: AudioDeviceType,
     val isSelected: Boolean,
+    val isConnected: Boolean = true,
     val deviceInfo: AudioDeviceInfo? = null,
+    val bluetoothDevice: BluetoothDevice? = null,
+    val smartTvDevice: SmartTvDevice? = null,
 ) {
     val icon: ImageVector get() = when (type) {
-        AudioDeviceType.BLUETOOTH_TWS -> MusiqueIcons.Earbuds
-        AudioDeviceType.BLUETOOTH_HEADPHONES, AudioDeviceType.HEADPHONES -> MusiqueIcons.Headphones
-        AudioDeviceType.BLUETOOTH_SPEAKER -> MusiqueIcons.Speaker
-        AudioDeviceType.USB_DAC -> MusiqueIcons.UsbDac
+        AudioDeviceType.BLUETOOTH_TWS -> VelthyIcons.Earbuds
+        AudioDeviceType.BLUETOOTH_HEADPHONES, AudioDeviceType.HEADPHONES -> VelthyIcons.Headphones
+        AudioDeviceType.BLUETOOTH_SPEAKER -> VelthyIcons.Speaker
+        AudioDeviceType.TV_CAST -> Icons.Rounded.Tv
+        AudioDeviceType.USB_DAC -> VelthyIcons.UsbDac
         AudioDeviceType.SPEAKER -> Icons.AutoMirrored.Rounded.VolumeUp
     }
 }
@@ -83,6 +96,11 @@ object AudioDeviceHelper {
 
     fun getActiveAudioDevice(context: Context): ConnectedAudioDevice {
         return runCatching {
+            val activeTv = SmartTvCastManager.activeCastDevice.value
+            if (activeTv != null) {
+                return ConnectedAudioDevice(name = activeTv.name, type = AudioDeviceType.TV_CAST)
+            }
+
             if (forceSpeaker.value) {
                 return ConnectedAudioDevice("Phone Speaker", AudioDeviceType.SPEAKER)
             }
@@ -177,6 +195,7 @@ object AudioDeviceHelper {
                         name = "Phone Speaker",
                         type = AudioDeviceType.SPEAKER,
                         isSelected = isSpeakerSelected,
+                        isConnected = true,
                     ),
                 )
 
@@ -211,6 +230,7 @@ object AudioDeviceHelper {
                             name = name,
                             type = type,
                             isSelected = isSelected,
+                            isConnected = true,
                             deviceInfo = bt,
                         ),
                     )
@@ -228,6 +248,7 @@ object AudioDeviceHelper {
                             name = name,
                             type = AudioDeviceType.HEADPHONES,
                             isSelected = active.type == AudioDeviceType.HEADPHONES,
+                            isConnected = true,
                             deviceInfo = wired,
                         ),
                     )
@@ -245,17 +266,38 @@ object AudioDeviceHelper {
                             name = name,
                             type = AudioDeviceType.USB_DAC,
                             isSelected = active.type == AudioDeviceType.USB_DAC,
+                            isConnected = true,
                             deviceInfo = usb,
                         ),
                     )
                 }
             } else {
                 outputs.add(
-                    AudioOutputOption("speaker", "Phone Speaker", AudioDeviceType.SPEAKER, !active.isExternal),
+                    AudioOutputOption("speaker", "Phone Speaker", AudioDeviceType.SPEAKER, !active.isExternal, true),
                 )
                 if (active.isExternal) {
                     outputs.add(
-                        AudioOutputOption("external", active.name, active.type, true),
+                        AudioOutputOption("external", active.name, active.type, true, true),
+                    )
+                }
+            }
+
+            // 5. Discovered Smart TVs & DLNA/UPnP Media Renderers on Wi-Fi
+            val activeTv = SmartTvCastManager.activeCastDevice.value
+            val smartTvs = SmartTvCastManager.discoveredDevices.value
+            for (tv in smartTvs) {
+                val isTvSelected = activeTv?.id == tv.id
+                val alreadyInList = outputs.any { it.name.equals(tv.name, ignoreCase = true) }
+                if (!alreadyInList) {
+                    outputs.add(
+                        AudioOutputOption(
+                            id = "tv_${tv.id}",
+                            name = tv.name,
+                            type = AudioDeviceType.TV_CAST,
+                            isSelected = isTvSelected,
+                            isConnected = isTvSelected,
+                            smartTvDevice = tv,
+                        ),
                     )
                 }
             }
@@ -269,6 +311,19 @@ object AudioDeviceHelper {
     fun selectAudioOutput(context: Context, option: AudioOutputOption): Boolean {
         return runCatching {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+
+            // If switching away from TV to Phone Speaker, stop TV cast
+            if (option.type == AudioDeviceType.SPEAKER && SmartTvCastManager.activeCastDevice.value != null) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    SmartTvCastManager.stopCast()
+                }
+            }
+
+            if (!option.isConnected && option.smartTvDevice == null) {
+                // Bluetooth device is paired but not currently connected -> open System Media Output panel
+                openSystemMediaOutput(context)
+                return true
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
@@ -325,6 +380,14 @@ object AudioDeviceHelper {
     private fun classifyBluetoothDevice(name: String): AudioDeviceType {
         val lower = name.lowercase()
         return when {
+            lower.contains("tv") || lower.contains("bravia") || (lower.contains("samsung") && (lower.contains("series") || lower.contains("tv") || lower.contains("screen"))) ||
+                lower.contains("webos") || lower.contains("chromecast") || lower.contains("fire tv") ||
+                lower.contains("roku") || lower.contains("shield") || lower.contains("cast") ||
+                lower.contains("smart screen") || lower.contains("mi tv") || lower.contains("tcl") ||
+                lower.contains("hisense") || lower.contains("philips tv") || lower.contains("sharp tv") ||
+                lower.contains("vizio") || lower.contains("apple tv") -> {
+                AudioDeviceType.TV_CAST
+            }
             lower.contains("speaker") || lower.contains("soundbar") || lower.contains("flip") ||
                 lower.contains("charge") || lower.contains("boombox") || lower.contains("clip") ||
                 lower.contains("go") || lower.contains("megaboom") || lower.contains("wonderboom") ||
@@ -343,6 +406,13 @@ object AudioDeviceHelper {
     }
 
     /**
+     * Triggers in-app Smart TV discovery without leaving the application.
+     */
+    fun openCastDialog(context: Context) {
+        SmartTvCastManager.startDiscovery(context)
+    }
+
+    /**
      * Opens system Media Output dialog or Sound Settings.
      */
     fun openSystemMediaOutput(context: Context) {
@@ -351,6 +421,7 @@ object AudioDeviceHelper {
             val broadcastIntent = Intent("com.android.systemui.action.LAUNCH_MEDIA_OUTPUT_DIALOG").apply {
                 setPackage("com.android.systemui")
                 putExtra("package_name", context.packageName)
+                putExtra("extra_package_name", context.packageName)
             }
             context.sendBroadcast(broadcastIntent)
         }

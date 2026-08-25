@@ -33,7 +33,7 @@ import java.util.Locale
  */
 object PlaybackHistoryManager {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
     private const val LOCAL_HISTORY_FILE = "local_listening_history.json"
     private const val REMOTE_HISTORY_FILE = "remote_listening_history.json"
     private const val LEGACY_HISTORY_FILE = "listening_history.json"
@@ -129,11 +129,19 @@ object PlaybackHistoryManager {
      * When [force] is false, respects [AppSettings.accountAutoSync].
      */
     suspend fun syncWithYouTube(force: Boolean = false): Boolean {
-        if (!force && !AppSettings.accountAutoSync.value) return false
-        if (com.velthy.client.data.innertube.Innertube.cookie == null) return false
+        if (!force && !AppSettings.accountAutoSync.value) {
+            Log.d(TAG, "syncWithYouTube skipped: accountAutoSync is false and force is false")
+            return false
+        }
+        if (com.velthy.client.data.innertube.Innertube.cookie == null) {
+            Log.w(TAG, "syncWithYouTube skipped: Innertube.cookie is null (user not logged in)")
+            return false
+        }
         return runCatching {
+            Log.d(TAG, "syncWithYouTube: fetching FEmusic_history from YouTube Music...")
             val response = com.velthy.client.data.innertube.Innertube.browse("FEmusic_history")
             val sections = com.velthy.client.data.innertube.InnertubeParser.parseHistorySections(response)
+            Log.d(TAG, "syncWithYouTube: parsed ${sections.size} sections, total songs: ${sections.sumOf { it.songs.size }}")
             if (sections.isNotEmpty()) {
                 val now = System.currentTimeMillis()
                 val todayStart = Calendar.getInstance().apply {
@@ -182,8 +190,11 @@ object PlaybackHistoryManager {
                 }
                 true
             } else {
+                Log.w(TAG, "syncWithYouTube: no sections found in FEmusic_history response")
                 false
             }
+        }.onFailure {
+            Log.e(TAG, "syncWithYouTube failed: ${it.message}", it)
         }.getOrDefault(false)
     }
 

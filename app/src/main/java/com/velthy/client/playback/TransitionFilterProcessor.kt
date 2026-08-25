@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.util.Log
 import androidx.media3.common.C
@@ -263,7 +263,7 @@ class TransitionFilterProcessor : BaseAudioProcessor() {
         value.coerceIn(Short.MIN_VALUE.toFloat(), Short.MAX_VALUE.toFloat()).toInt().toShort()
 
     companion object {
-        private const val TAG = "MusiqueTransitionFilter"
+        private const val TAG = "VelthyTransitionFilter"
 
         /** A low-pass at or above this is doing nothing audible, so it counts as off. */
         const val OPEN_HZ = 20_000f

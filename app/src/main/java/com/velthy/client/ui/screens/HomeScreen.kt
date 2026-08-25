@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -48,7 +48,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LibraryMusic
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 import coil3.compose.AsyncImage
 import com.velthy.client.data.model.CARD_ART_PX
 import com.velthy.client.data.model.HEADER_ART_PX
@@ -115,26 +115,31 @@ fun HomeScreen(
                 }
                 is UiState.Success -> {
                     itemsIndexedShelves(state.data, onItemClick)
+                    // Show skeleton at bottom when loading more (always visible when flag is true)
                     if (loadingMore) feedMoreSkeleton()
+                    else if (onLoadMore != null) {
+                        // Spacer so users see there's content below
+                        item(key = "loadmore_bottom_spacer") { Spacer(Modifier.height(8.dp)) }
+                    }
                 }
             }
         }
     }
 
     if (onLoadMore != null && state is UiState.Success) {
-        // Fires again each time the tail end of the list comes back into
-        // view — appending shelves doesn't reset it, only leaving the
-        // bottom and scrolling back down does, which is exactly when
-        // another page is worth asking for.
+        // Trigger load-more when approaching the end of the list.
+        // Uses a wider threshold (5 items) so the skeleton appears
+        // before the user actually hits the bottom — feels instant.
         val nearEnd by remember {
             derivedStateOf {
                 val layout = listState.layoutInfo
                 val last = layout.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
-                layout.totalItemsCount > 0 && last >= layout.totalItemsCount - 3
+                layout.totalItemsCount > 0 && last >= layout.totalItemsCount - 5
             }
         }
-        LaunchedEffect(nearEnd) {
-            if (nearEnd) onLoadMore()
+        LaunchedEffect(nearEnd, loadingMore) {
+            // Guard: only fire when actually near end and not already loading
+            if (nearEnd && !loadingMore) onLoadMore()
         }
     }
 }
@@ -491,7 +496,7 @@ private fun ShelfCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = MusiqueIcons.Download,
+                        imageVector = VelthyIcons.Download,
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(42.dp),

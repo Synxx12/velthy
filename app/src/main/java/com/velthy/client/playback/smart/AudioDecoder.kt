@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Modeled on Orchard's own AudioDecoder (https://github.com/SFG5453/Orchard),
  * scoped down to the platform MediaCodec path — Orchard prefers a native
  * libopus decode with the platform decoder as its documented fallback; this
@@ -47,7 +47,7 @@ import kotlin.math.max
  */
 object AudioDecoder {
 
-    private const val TAG = "MusiqueAudioDecoder"
+    private const val TAG = "VelthyAudioDecoder"
     private const val TIMEOUT_US = 10_000L
 
     /** Decoded mono PCM at the container's own sample rate; the caller resamples. */

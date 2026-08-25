@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Modeled on Orchard's own TrackAnalyzer (https://github.com/SFG5453/Orchard).
  * Phase 1 was the DSP-only pass (native/analyzer/audio_analysis.cpp); Phase 2
  * adds the Beat This! ONNX model (see [BeatTracker]) and Phase 3 the
@@ -126,7 +126,7 @@ class TrackAnalyzer(context: Context, private val cache: AudioCache) {
     private fun discardsOf(key: String): Int = discarded[key] ?: 0
 
     private val executor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "musique-smart-analysis").apply {
+        Thread(runnable, "velthy-smart-analysis").apply {
             isDaemon = true
             priority = Thread.NORM_PRIORITY
         }
@@ -1026,7 +1026,7 @@ class TrackAnalyzer(context: Context, private val cache: AudioCache) {
     }
 
     private companion object {
-        const val TAG = "MusiqueTrackAnalyzer"
+        const val TAG = "VelthyTrackAnalyzer"
 
         /**
          * What an unmeasured instant reads as. Below the policy's VOCAL_ACTIVE_THRESHOLD by

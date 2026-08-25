@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.player
+package com.velthy.client.ui.player
 
 import android.content.Intent
 import android.database.ContentObserver
@@ -8,7 +8,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -66,6 +69,7 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeDown
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Cast
+import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DragHandle
@@ -79,8 +83,12 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import com.velthy.client.playback.AudioDeviceHelper
 import com.velthy.client.playback.AudioDeviceType
+import com.velthy.client.playback.AudioOutputOption
 import com.velthy.client.playback.SleepTimer
+import com.velthy.client.playback.SmartTvCastManager
 import com.velthy.client.playback.rememberActiveAudioDevice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.velthy.client.ui.theme.rememberArtworkPalette
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -151,7 +159,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
 import com.velthy.client.ui.components.thumbnailBorder
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.data.NerdStats
 import com.velthy.client.data.settings.TrackAnalysisState
@@ -988,7 +996,7 @@ fun NowPlayingScreen(
                     ) {
                         if (!artLoaded) {
                             Icon(
-                                imageVector = MusiqueIcons.MusicNote,
+                                imageVector = VelthyIcons.MusicNote,
                                 contentDescription = null,
                                 tint = Color.White.copy(alpha = 0.35f),
                                 modifier = Modifier.size(lerp(40.dp, 20.dp, p)),
@@ -998,11 +1006,6 @@ fun NowPlayingScreen(
                             // Decode at the sleeve's *expanded* size, always.
                             // Coil otherwise sizes the decode to however large
                             // this is when the request goes out — and changing
-                            // track from the queue does that while the sleeve is
-                            // collapsed to a thumbnail, leaving a thumbnail-sized
-                            // bitmap to be blown back up when the queue closes.
-                            // Skipping tracks with the transport keeps it sharp
-                            // only because the sleeve happens to be full size at
                             // that moment.
                             //
                             // Asked for at the source's own size rather than the
@@ -1176,7 +1179,7 @@ fun NowPlayingScreen(
                     if (signedIn && song.localUri == null) {
                         val liked = likeStatus == LikeStatus.LIKE
                         CircleGlyph(
-                            icon = if (liked) MusiqueIcons.HeartFilled else MusiqueIcons.Heart,
+                            icon = if (liked) VelthyIcons.HeartFilled else VelthyIcons.Heart,
                             contentDescription = if (liked) "Remove from Liked Music" else "Like",
                             onClick = onToggleLike,
                             active = liked,
@@ -1479,7 +1482,7 @@ fun NowPlayingScreen(
             ) {
                 // 1. Lyrics Button
                 BottomGlyph(
-                    icon = MusiqueIcons.LyricsQuote,
+                    icon = VelthyIcons.LyricsQuote,
                     contentDescription = "Lyrics",
                     onClick = {
                         queueOpen = false
@@ -1511,7 +1514,7 @@ fun NowPlayingScreen(
                     }
                 }
                 BottomGlyph(
-                    icon = MusiqueIcons.Moon,
+                    icon = VelthyIcons.Moon,
                     contentDescription = "Sleep Timer",
                     onClick = { showSleepTimerSheet = true },
                     highlighted = isSleepActive,
@@ -1723,27 +1726,82 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    val permissionLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.RequestMultiplePermissions(),
+                    ) {
+                        SmartTvCastManager.startDiscovery(context)
+                    }
 
-                    val availableOutputs = remember(showAudioOutputSheet, activeDevice) {
+                    LaunchedEffect(showAudioOutputSheet) {
+                        if (showAudioOutputSheet) {
+                            val perms = mutableListOf<String>()
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                if (context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                                    perms.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+                                }
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                if (context.checkSelfPermission(android.Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+                                    perms.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
+                                }
+                            }
+                            if (perms.isNotEmpty()) {
+                                permissionLauncher.launch(perms.toTypedArray())
+                            }
+                            SmartTvCastManager.startDiscovery(context)
+                        }
+                    }
+
+                    val isCastScanning by SmartTvCastManager.isScanning.collectAsStateWithLifecycle()
+                    val activeTv by SmartTvCastManager.activeCastDevice.collectAsStateWithLifecycle()
+                    val availableOutputs = remember(showAudioOutputSheet, activeDevice, activeTv) {
                         AudioDeviceHelper.getAvailableAudioOutputs(context)
                     }
 
-                    // Available Output Devices Group
+                    val connectedOutputs = remember(availableOutputs) {
+                        availableOutputs.filter { it.isConnected }
+                    }
+                    val discoveredTvs = remember(availableOutputs) {
+                        availableOutputs.filter { it.type == AudioDeviceType.TV_CAST && !it.isConnected }
+                    }
+
+                    val handleOptionClick: (AudioOutputOption) -> Unit = { option ->
+                        if (option.smartTvDevice != null) {
+                            val tv = option.smartTvDevice
+                            scope.launch {
+                                val resolvedUrl = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        com.velthy.client.data.innertube.StreamResolver.resolve(song.videoId)
+                                    }.getOrNull()
+                                }
+                                if (!resolvedUrl.isNullOrBlank()) {
+                                    SmartTvCastManager.castAudio(
+                                        device = tv,
+                                        streamUrl = resolvedUrl,
+                                        title = song.title,
+                                        artist = song.artist,
+                                        artworkUrl = song.thumbnailUrl ?: "",
+                                    )
+                                }
+                            }
+                        } else {
+                            AudioDeviceHelper.selectAudioOutput(context, option)
+                        }
+                        showAudioOutputSheet = false
+                    }
+
+                    // 1. Connected Output Devices Group
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(18.dp))
                             .background(Color.White.copy(alpha = 0.08f)),
                     ) {
-                        availableOutputs.forEachIndexed { index, option ->
+                        connectedOutputs.forEachIndexed { index, option ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable {
-                                        AudioDeviceHelper.selectAudioOutput(context, option)
-                                        showAudioOutputSheet = false
-                                    }
+                                    .clickable { handleOptionClick(option) }
                                     .padding(horizontal = 16.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -1777,10 +1835,11 @@ fun NowPlayingScreen(
                                     Text(
                                         text = when (option.type) {
                                             AudioDeviceType.SPEAKER -> "Internal Device Speaker"
-                                            AudioDeviceType.BLUETOOTH_TWS -> "Wireless Earbuds (TWS)"
-                                            AudioDeviceType.BLUETOOTH_HEADPHONES -> "Bluetooth Headphones"
-                                            AudioDeviceType.BLUETOOTH_SPEAKER -> "Bluetooth Speaker"
-                                            AudioDeviceType.HEADPHONES -> "Wired Headphones"
+                                            AudioDeviceType.BLUETOOTH_TWS -> "Wireless Earbuds (Connected)"
+                                            AudioDeviceType.BLUETOOTH_HEADPHONES -> "Bluetooth Headphones (Connected)"
+                                            AudioDeviceType.BLUETOOTH_SPEAKER -> "Bluetooth Speaker (Connected)"
+                                            AudioDeviceType.TV_CAST -> "Smart TV (Casting Live)"
+                                            AudioDeviceType.HEADPHONES -> "Wired Headphones (Plugged In)"
                                             AudioDeviceType.USB_DAC -> "USB DAC / Hi-Res Audio"
                                         },
                                         style = MaterialTheme.typography.bodySmall,
@@ -1796,7 +1855,7 @@ fun NowPlayingScreen(
                                     )
                                 }
                             }
-                            if (index < availableOutputs.lastIndex) {
+                            if (index < connectedOutputs.lastIndex) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(start = 68.dp),
                                     thickness = 0.5.dp,
@@ -1806,9 +1865,131 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    Spacer(Modifier.height(12.dp))
+                    // 2. Discovered Smart TVs on Local Wi-Fi Group
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 4.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "SMART TVS & WIRELESS AUDIO (ON WI-FI)",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                            ),
+                            color = Color.White.copy(alpha = 0.4f),
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isCastScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                color = palette.accent,
+                                strokeWidth = 1.5.dp,
+                            )
+                        }
+                    }
 
-                    // Output Actions Group
+                    if (discoveredTvs.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.White.copy(alpha = 0.06f)),
+                        ) {
+                            discoveredTvs.forEachIndexed { index, option ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { handleOptionClick(option) }
+                                        .padding(horizontal = 16.dp, vertical = 13.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .background(Color.White.copy(alpha = 0.08f), CircleShape),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            imageVector = option.icon,
+                                            contentDescription = null,
+                                            tint = Color.White.copy(alpha = 0.8f),
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
+                                    Spacer(Modifier.width(14.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            text = option.name,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = Color.White.copy(alpha = 0.9f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = "Smart TV · Tap to Cast Audio",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = palette.accent,
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Rounded.Tv,
+                                        contentDescription = null,
+                                        tint = palette.accent.copy(alpha = 0.8f),
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                if (index < discoveredTvs.lastIndex) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(start = 68.dp),
+                                        thickness = 0.5.dp,
+                                        color = Color.White.copy(alpha = 0.05f),
+                                    )
+                                }
+                            }
+                        }
+                    } else if (isCastScanning) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color.White.copy(alpha = 0.04f))
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = palette.accent,
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = "Scanning local Wi-Fi for Samsung, LG, Sony & Cast...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.6f),
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color.White.copy(alpha = 0.04f))
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = "No Smart TVs found. Ensure TV & phone are on the same Wi-Fi.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.45f),
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(14.dp))
+
+                    // 3. Output Actions Group
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1816,12 +1997,11 @@ fun NowPlayingScreen(
                             .background(Color.White.copy(alpha = 0.06f)),
                     ) {
                         CompactActionRow(
-                            icon = MusiqueIcons.AirPlay,
-                            label = "System Media Output Panel",
-                            subtitle = "Open Android volume & device switcher",
+                            icon = Icons.Rounded.Tv,
+                            label = "Scan for Smart TVs & Audio",
+                            subtitle = if (isCastScanning) "Searching local Wi-Fi for TVs & Cast..." else "Scan local Wi-Fi for Samsung, LG, Sony & Cast",
                             onClick = {
-                                showAudioOutputSheet = false
-                                AudioDeviceHelper.openSystemMediaOutput(context)
+                                SmartTvCastManager.startDiscovery(context)
                             },
                         )
 
@@ -1833,11 +2013,33 @@ fun NowPlayingScreen(
 
                         CompactActionRow(
                             icon = Icons.Rounded.Bluetooth,
-                            label = "Bluetooth Settings",
-                            subtitle = "Pair or manage headphones & speakers",
+                            label = "Connect Bluetooth Device",
+                            subtitle = "Open Bluetooth device switcher & settings",
                             onClick = {
                                 showAudioOutputSheet = false
-                                AudioDeviceHelper.openBluetoothSettings(context)
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        },
+                                    )
+                                }
+                            },
+                        )
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 52.dp),
+                            thickness = 0.5.dp,
+                            color = Color.White.copy(alpha = 0.08f),
+                        )
+
+                        CompactActionRow(
+                            icon = VelthyIcons.AirPlay,
+                            label = "System Media Output Panel",
+                            subtitle = "Open Android volume & device switcher",
+                            onClick = {
+                                showAudioOutputSheet = false
+                                AudioDeviceHelper.openSystemMediaOutput(context)
                             },
                         )
                     }
@@ -2367,7 +2569,7 @@ private fun LyricsPanel(
                     label = "noteSize",
                 )
                 Icon(
-                    imageVector = MusiqueIcons.MusicNote,
+                    imageVector = VelthyIcons.MusicNote,
                     contentDescription = "Instrumental",
                     tint = Color.White.copy(alpha = lineAlpha),
                     modifier = Modifier
@@ -2516,7 +2718,7 @@ private fun CurrentLyricLine(
     ) {
         if (instrumental) {
             Icon(
-                imageVector = MusiqueIcons.MusicNote,
+                imageVector = VelthyIcons.MusicNote,
                 contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.size(16.dp),
@@ -2547,7 +2749,7 @@ private fun CurrentLyricLine(
         Spacer(Modifier.width(6.dp))
         // Disclosure hint: this strip opens the full lyrics screen.
         Icon(
-            imageVector = MusiqueIcons.ChevronRight,
+            imageVector = VelthyIcons.ChevronRight,
             contentDescription = null,
             tint = Color.White.copy(alpha = 0.5f),
             modifier = Modifier.size(14.dp),
@@ -2918,7 +3120,7 @@ private fun InlineQueue(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = MusiqueIcons.Shuffle,
+                        imageVector = VelthyIcons.Shuffle,
                         contentDescription = "Shuffle",
                         tint = if (shuffleEnabled) Color.White else Color.White.copy(alpha = 0.7f),
                         modifier = Modifier.size(16.dp),
@@ -2944,7 +3146,7 @@ private fun InlineQueue(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) MusiqueIcons.RepeatOne else MusiqueIcons.Repeat,
+                        imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) VelthyIcons.RepeatOne else VelthyIcons.Repeat,
                         contentDescription = "Repeat",
                         tint = if (isRepeatOn) Color.White else Color.White.copy(alpha = 0.7f),
                         modifier = Modifier.size(16.dp),
@@ -2969,7 +3171,7 @@ private fun InlineQueue(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = MusiqueIcons.Infinity,
+                        imageVector = VelthyIcons.Infinity,
                         contentDescription = "AutoPlay",
                         tint = if (autoplayEnabled) Color.White else Color.White.copy(alpha = 0.7f),
                         modifier = Modifier.size(16.dp),
@@ -3053,7 +3255,7 @@ private fun InlineQueue(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
-                            MusiqueIcons.Infinity,
+                            VelthyIcons.Infinity,
                             contentDescription = null,
                             tint = Color.White.copy(alpha = 0.75f),
                             modifier = Modifier.size(18.dp),

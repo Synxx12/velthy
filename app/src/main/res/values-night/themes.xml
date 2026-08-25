@@ -3,5 +3,4 @@
     <style name="Theme.Velthy" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
     </style>
-    <style name="Theme.Musique" parent="Theme.Velthy" />
 </resources>

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Ported from Orchard (https://github.com/SFG5453/Orchard).
  *
  * Copyright (C) 2026 SFG545 (original Orchard implementation)
@@ -254,7 +254,7 @@ class VocalTracker(private val context: Context) {
     }
 
     companion object {
-        private const val TAG = "MusiqueVocalTracker"
+        private const val TAG = "VelthyVocalTracker"
         private const val MODEL_ASSET = "vocals_umxhq_int8.onnx"
         private const val INFERENCE_THREADS = 4
 

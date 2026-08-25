@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -62,7 +62,7 @@ import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.UserPlaylist
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.ui.components.thumbnailBorder
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 
 /**
  * Where a track goes: one of the account's playlists, or a new one.
@@ -108,7 +108,7 @@ fun PlaylistPickerSheet(
         SheetHeading(if (song != null) "ADD TO PLAYLIST" else "YOUR PLAYLISTS")
 
         ActionRow(
-            icon = MusiqueIcons.Plus,
+            icon = VelthyIcons.Plus,
             label = "New playlist",
             onClick = { creating = true },
         )

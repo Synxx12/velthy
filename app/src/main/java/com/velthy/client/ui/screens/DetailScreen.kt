@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -81,7 +81,7 @@ import com.velthy.client.ui.components.SHELF_CARD_WIDTH
 import com.velthy.client.ui.components.SongRow
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.components.detailSkeleton
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 import com.velthy.client.ui.theme.ArtworkPalette
 import com.velthy.client.ui.theme.rememberArtworkPalette
 import kotlin.math.roundToInt
@@ -422,7 +422,7 @@ private fun ReleaseHeader(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CircleIconButton(
-                        icon = MusiqueIcons.Shuffle,
+                        icon = VelthyIcons.Shuffle,
                         contentDescription = "Shuffle",
                         palette = palette,
                         onClick = onShuffle,
@@ -433,7 +433,7 @@ private fun ReleaseHeader(
                     )
                     onDownload?.let { download ->
                         CircleIconButton(
-                            icon = MusiqueIcons.Download,
+                            icon = VelthyIcons.Download,
                             contentDescription = "Download all",
                             palette = palette,
                             onClick = { download(songs) },
@@ -515,7 +515,7 @@ private fun PageBackground(
                 )
             } else {
                 val icon = when (page.browseId) {
-                    "local:downloads" -> MusiqueIcons.Download
+                    "local:downloads" -> VelthyIcons.Download
                     "app:history" -> Icons.Rounded.History
                     else -> Icons.Rounded.LibraryMusic
                 }
@@ -704,7 +704,7 @@ private fun ActionRow(palette: ArtworkPalette, onPlay: () -> Unit, onShuffle: ()
     ) {
         // Circular Shuffle button
         CircleIconButton(
-            icon = MusiqueIcons.Shuffle,
+            icon = VelthyIcons.Shuffle,
             contentDescription = "Shuffle",
             palette = palette,
             onClick = onShuffle,
@@ -740,7 +740,7 @@ private fun PlayPill(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = MusiqueIcons.Play,
+            imageVector = VelthyIcons.Play,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.size(18.dp),

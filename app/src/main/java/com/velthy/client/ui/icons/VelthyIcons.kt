@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.icons
+package com.velthy.client.ui.icons
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -635,5 +635,3 @@ object VelthyIcons {
         }.build()
     }
 }
-
-typealias MusiqueIcons = VelthyIcons

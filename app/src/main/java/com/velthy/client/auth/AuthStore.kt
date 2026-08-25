@@ -1,4 +1,4 @@
-﻿package com.velthy.client.auth
+package com.velthy.client.auth
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -32,7 +32,7 @@ class AuthStore(context: Context) {
     private val prefs: SharedPreferences = runCatching {
         EncryptedSharedPreferences.create(
             context,
-            "musique_auth",
+            "velthy_auth",
             MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build(),
@@ -40,8 +40,46 @@ class AuthStore(context: Context) {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
     }.getOrElse {
-        Log.w("Musique", "EncryptedSharedPreferences unavailable, falling back: ${it.message}")
-        context.getSharedPreferences("musique_auth_plain", Context.MODE_PRIVATE)
+        Log.w("Velthy", "EncryptedSharedPreferences unavailable, falling back: ${it.message}")
+        context.getSharedPreferences("velthy_auth_plain", Context.MODE_PRIVATE)
+    }
+
+    init {
+        // Automatically migrate authenticated session from legacy "musique_auth" to "velthy_auth"
+        if (prefs.getString(KEY_COOKIE, null).isNullOrBlank()) {
+            runCatching {
+                val legacyEncrypted = EncryptedSharedPreferences.create(
+                    context,
+                    "musique_auth",
+                    MasterKey.Builder(context)
+                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                        .build(),
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+                )
+                val legacyCookie = legacyEncrypted.getString(KEY_COOKIE, null)
+                val legacyAccounts = legacyEncrypted.getString(KEY_SAVED_ACCOUNTS, null)
+                if (!legacyCookie.isNullOrBlank()) {
+                    prefs.edit()
+                        .putString(KEY_COOKIE, legacyCookie)
+                        .putString(KEY_SAVED_ACCOUNTS, legacyAccounts)
+                        .apply()
+                    Log.d("Velthy", "Migrated authenticated session from musique_auth to velthy_auth successfully.")
+                }
+            }
+            if (prefs.getString(KEY_COOKIE, null).isNullOrBlank()) {
+                val legacyPlain = context.getSharedPreferences("musique_auth_plain", Context.MODE_PRIVATE)
+                val legacyCookie = legacyPlain.getString(KEY_COOKIE, null)
+                val legacyAccounts = legacyPlain.getString(KEY_SAVED_ACCOUNTS, null)
+                if (!legacyCookie.isNullOrBlank()) {
+                    prefs.edit()
+                        .putString(KEY_COOKIE, legacyCookie)
+                        .putString(KEY_SAVED_ACCOUNTS, legacyAccounts)
+                        .apply()
+                    Log.d("Velthy", "Migrated session from musique_auth_plain to velthy_auth successfully.")
+                }
+            }
+        }
     }
 
     private val _savedAccounts = MutableStateFlow<List<SavedAccount>>(loadSavedAccounts())

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Ported from Orchard (https://github.com/SFG5453/Orchard).
  *
  * Copyright (C) 2026 SFG545 (original Orchard implementation)
@@ -168,7 +168,7 @@ object TrackFeatures {
         }
     }
 
-    private const val TAG = "MusiqueTrackFeatures"
+    private const val TAG = "VelthyTrackFeatures"
 
     @JvmStatic private external fun nativeAnalyze(
         samples: FloatArray,

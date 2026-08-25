@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data
+package com.velthy.client.data
 
 import android.util.Log
 import com.velthy.client.data.innertube.Innertube

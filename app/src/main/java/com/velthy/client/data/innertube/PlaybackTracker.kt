@@ -19,7 +19,7 @@ import kotlinx.coroutines.sync.withLock
  * 1. Forced domain rewrite to https://music.youtube.com for genuine YouTube Music history.
  * 2. Multi-stage heartbeat cadence:
  *    - 1s validation ping (marks song as started)
- *    - 30s heartbeat intervals (maintains active watch session)
+ *    - 15s heartbeat intervals (maintains active watch session)
  *    - Seek/scrubbing delta protection (credits segment before jump)
  *    - 96% completion ping with state="ended"
  *    - On pause/skip: flushes last uncommitted segment with state="paused"
@@ -33,12 +33,13 @@ object PlaybackTracker {
     private class Session(
         val videoId: String,
         val cpn: String,
-        val durationMs: Long,
+        @Volatile var durationMs: Long,
         val tracking: Innertube.PlaybackTracking,
         val sessionStartTimeMs: Long,
     ) {
         @Volatile var currentPositionMs: Long = 0L
         @Volatile var lastReportedTimeMs: Long = 0L
+        @Volatile var initialPingSent: Boolean = false
         @Volatile var completedReported: Boolean = false
     }
 
@@ -85,9 +86,15 @@ object PlaybackTracker {
     fun onPaused(positionMs: Long) {
         isAudioPlaying = false
         val current = session ?: return
-        scope.launch {
-            runCatching { flush(current, positionMs, isFinal = true, state = "paused") }
-                .onFailure { Log.w(TAG, "paused watchtime ping failed: ${it.message}") }
+        val startSec = current.lastReportedTimeMs / 1000L
+        val endSec = positionMs / 1000L
+        if (endSec > startSec) {
+            current.lastReportedTimeMs = positionMs
+            scope.launch {
+                runCatching {
+                    sendWatchtime(current, startSec = startSec, endSec = endSec, state = "paused")
+                }.onFailure { Log.w(TAG, "paused watchtime ping failed: ${it.message}") }
+            }
         }
     }
 
@@ -97,9 +104,14 @@ object PlaybackTracker {
     fun onTrackChanged(positionMs: Long) {
         val closing = session ?: return
         session = null
-        scope.launch {
-            runCatching { flush(closing, positionMs, isFinal = true, state = "paused") }
-                .onFailure { Log.w(TAG, "closing watchtime ping failed: ${it.message}") }
+        val startSec = closing.lastReportedTimeMs / 1000L
+        val endSec = positionMs / 1000L
+        if (endSec > startSec) {
+            scope.launch {
+                runCatching {
+                    sendWatchtime(closing, startSec = startSec, endSec = endSec, state = "paused")
+                }.onFailure { Log.w(TAG, "closing watchtime ping failed: ${it.message}") }
+            }
         }
     }
 
@@ -110,37 +122,53 @@ object PlaybackTracker {
         val current = session ?: return
         if (current.videoId != videoId) return
 
-        // 1. Scrubbing / Seek Jump Detection (> 2000ms jump)
-        if (kotlin.math.abs(positionMs - current.currentPositionMs) > 2000L) {
-            val prevPosSec = current.lastReportedTimeMs / 1000L
-            val preSeekSec = current.currentPositionMs / 1000L
-            if (preSeekSec > prevPosSec) {
+        if (durationMs > 0L && current.durationMs <= 0L) {
+            current.durationMs = durationMs
+        }
+
+        val prevPos = current.currentPositionMs
+        current.currentPositionMs = positionMs
+
+        if (!isAudioPlaying || positionMs <= 0L) return
+
+        // 1. Scrubbing / Seek Jump Detection (> 3000ms jump)
+        if (prevPos > 0L && kotlin.math.abs(positionMs - prevPos) > 3000L) {
+            val lastReportedSec = current.lastReportedTimeMs / 1000L
+            val preSeekSec = prevPos / 1000L
+            if (preSeekSec > lastReportedSec) {
                 scope.launch {
-                    runCatching { flush(current, current.currentPositionMs, state = "playing") }
+                    runCatching {
+                        sendWatchtime(current, startSec = lastReportedSec, endSec = preSeekSec, state = "playing")
+                    }
                 }
             }
             current.lastReportedTimeMs = positionMs
+            return
         }
-
-        current.currentPositionMs = positionMs
-        if (!isAudioPlaying || positionMs <= 0L) return
 
         val totalDurationMs = if (current.durationMs > 0L) current.durationMs else durationMs
         val positionSec = positionMs / 1000L
         val lastReportedSec = current.lastReportedTimeMs / 1000L
 
         // 2. Stage 1: 1-Second Initial Playback Validation
-        if (lastReportedSec == 0L && positionSec >= 1L) {
+        if (!current.initialPingSent && positionSec >= 1L) {
+            current.initialPingSent = true
+            current.lastReportedTimeMs = positionMs
             scope.launch {
-                runCatching { flush(current, positionMs, state = "playing") }
+                runCatching {
+                    sendWatchtime(current, startSec = 0L, endSec = positionSec, state = "playing")
+                }
             }
             return
         }
 
-        // 3. Stage 2: 30-Seconds Standard Heartbeat Cadence
+        // 3. Stage 2: 30-Seconds Standard YouTube Heartbeat Cadence (SpatialFlow Standard)
         if (positionSec - lastReportedSec >= 30L) {
+            current.lastReportedTimeMs = positionMs
             scope.launch {
-                runCatching { flush(current, positionMs, state = "playing") }
+                runCatching {
+                    sendWatchtime(current, startSec = lastReportedSec, endSec = positionSec, state = "playing")
+                }
             }
             return
         }
@@ -150,8 +178,11 @@ object PlaybackTracker {
             val completionRatio = positionMs.toFloat() / totalDurationMs.toFloat()
             if (completionRatio >= 0.96f) {
                 current.completedReported = true
+                current.lastReportedTimeMs = positionMs
                 scope.launch {
-                    runCatching { flush(current, positionMs, state = "ended") }
+                    runCatching {
+                        sendWatchtime(current, startSec = lastReportedSec, endSec = positionSec, state = "ended")
+                    }
                 }
             }
         }
@@ -175,8 +206,8 @@ object PlaybackTracker {
         val status = Innertube.pingPlayback(
             baseUrl = tracking.playbackUrl,
             cpn = fresh.cpn,
+            videoId = videoId,
             rtSec = 0L,
-            playerClient = tracking.client,
         )
         _registeredPlays.value++
         Log.d(TAG, "Playback start telemetry sent for $videoId with cpn=$cpn (HTTP $status)")
@@ -190,31 +221,26 @@ object PlaybackTracker {
         }
     }
 
-    private suspend fun flush(
+    private suspend fun sendWatchtime(
         target: Session,
-        positionMs: Long,
-        isFinal: Boolean = false,
-        state: String = "playing",
+        startSec: Long,
+        endSec: Long,
+        state: String,
     ) = lock.withLock {
         val url = target.tracking.watchtimeUrl ?: return@withLock
-        val startSec = target.lastReportedTimeMs / 1000L
-        val endSec = positionMs / 1000L
-        val lenSec = target.durationMs / 1000L
+        val lenSec = if (target.durationMs > 0L) target.durationMs / 1000L else 0L
         val rtSec = (System.currentTimeMillis() - target.sessionStartTimeMs) / 1000L
-
-        if (endSec < startSec && !isFinal) return@withLock
 
         val status = Innertube.pingWatchtime(
             baseUrl = url,
             cpn = target.cpn,
+            videoId = target.videoId,
             st = startSec,
             et = endSec,
             lenSec = lenSec,
             state = state,
             rtSec = rtSec,
-            playerClient = target.tracking.client,
         )
-        target.lastReportedTimeMs = positionMs
-        Log.d(TAG, "Watchtime ping sent [st=$startSec, et=$endSec, state=$state] for ${target.videoId} (HTTP $status)")
+        Log.d(TAG, "Watchtime ping sent [st=$startSec, et=$endSec, len=$lenSec, state=$state] for ${target.videoId} (HTTP $status)")
     }
 }

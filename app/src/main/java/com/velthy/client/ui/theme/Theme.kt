@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.theme
+package com.velthy.client.ui.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -71,8 +71,6 @@ private val VelthyTypography = Typography(
     labelSmall = TextStyle(fontWeight = FontWeight.W600, fontSize = 11.sp),
 ).withFamily(SFProDisplay)
 
-private val MusiqueTypography = VelthyTypography
-
 /** Applies [family] to every style in the scale, so nothing is left on Roboto. */
 private fun Typography.withFamily(family: FontFamily) = Typography(
     displayLarge = displayLarge.copy(fontFamily = family),
@@ -103,12 +101,6 @@ fun VelthyTheme(
         content = content,
     )
 }
-
-@Composable
-fun MusiqueTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    content: @Composable () -> Unit,
-) = VelthyTheme(darkTheme = darkTheme, content = content)
 
 /**
  * Draws the status and navigation bar glyphs dark or light.

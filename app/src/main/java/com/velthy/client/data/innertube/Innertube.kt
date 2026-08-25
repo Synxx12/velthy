@@ -65,7 +65,7 @@ object Innertube {
     private const val WEB_REMIX_VERSION = "1.20260707.12.00"
     private const val WEB_REMIX_CLIENT_ID = "67"
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /** Session cookie captured by the login WebView; null = browse as guest. */
     var cookie: String? = null
@@ -309,20 +309,33 @@ object Innertube {
      * Rewrites s.youtube.com -> music.youtube.com for 100% reliable history attribution.
      */
     suspend fun playbackTracking(videoId: String, cpn: String): PlaybackTracking? {
-        if (cookie == null) return null
+        val currentCookie = cookie
+        if (currentCookie.isNullOrBlank()) {
+            Log.w(TAG, "playbackTracking: user not signed in (cookie is null)")
+            return null
+        }
+
+        // Fetch signature timestamp to authorize the WEB_REMIX player request
+        val sigTimestamp = runCatching {
+            org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager.getSignatureTimestamp(videoId)
+        }.getOrNull()
 
         // 1. Primary: WEB_REMIX (The official YouTube Music web client where user session cookies originate)
         val webRemixResponse = runCatching {
-            postPlayer(videoId, PlayerClient.WEB_REMIX, signatureTimestamp = null, authenticated = true)
-        }.getOrNull()
+            postPlayer(videoId, PlayerClient.WEB_REMIX, signatureTimestamp = sigTimestamp, authenticated = true)
+        }.onFailure { Log.e(TAG, "postPlayer WEB_REMIX failed: ${it.message}", it) }.getOrNull()
+
+        Log.d(TAG, "playbackTracking WEB_REMIX: sigTimestamp=$sigTimestamp, responseKeys=${webRemixResponse?.keys}, playabilityStatus=${webRemixResponse?.get("playabilityStatus")}, hasTracking=${webRemixResponse?.get("playbackTracking") != null}")
 
         val webTracking = webRemixResponse?.get("playbackTracking")?.jsonObject
         if (webTracking != null) {
             val playbackUrl = webTracking.trackingUrl("videostatsPlaybackUrl")
+            val watchtimeUrl = webTracking.trackingUrl("videostatsWatchtimeUrl")
             if (playbackUrl != null) {
+                Log.d(TAG, "Retrieved signed WebRemix tracking URLs for $videoId:\n  playbackUrl: $playbackUrl\n  watchtimeUrl: $watchtimeUrl")
                 return PlaybackTracking(
                     playbackUrl = playbackUrl.rewriteToMusicDomain(),
-                    watchtimeUrl = webTracking.trackingUrl("videostatsWatchtimeUrl")?.rewriteToMusicDomain(),
+                    watchtimeUrl = watchtimeUrl?.rewriteToMusicDomain(),
                     client = PlayerClient.WEB_REMIX,
                 )
             }
@@ -331,15 +344,17 @@ object Innertube {
         // 2. Secondary fallback: ANDROID_MUSIC (native YouTube Music client)
         val androidMusicResponse = runCatching {
             postPlayer(videoId, PlayerClient.ANDROID_MUSIC, signatureTimestamp = null, authenticated = true)
-        }.getOrNull()
+        }.onFailure { Log.e(TAG, "postPlayer ANDROID_MUSIC failed: ${it.message}") }.getOrNull()
 
         val androidTracking = androidMusicResponse?.get("playbackTracking")?.jsonObject
         if (androidTracking != null) {
             val playbackUrl = androidTracking.trackingUrl("videostatsPlaybackUrl")
+            val watchtimeUrl = androidTracking.trackingUrl("videostatsWatchtimeUrl")
             if (playbackUrl != null) {
+                Log.d(TAG, "Retrieved signed AndroidMusic tracking URLs for $videoId")
                 return PlaybackTracking(
                     playbackUrl = playbackUrl.rewriteToMusicDomain(),
-                    watchtimeUrl = androidTracking.trackingUrl("videostatsWatchtimeUrl")?.rewriteToMusicDomain(),
+                    watchtimeUrl = watchtimeUrl?.rewriteToMusicDomain(),
                     client = PlayerClient.WEB_REMIX,
                 )
             }
@@ -352,10 +367,12 @@ object Innertube {
         val iosTracking = iosResponse?.get("playbackTracking")?.jsonObject
         if (iosTracking != null) {
             val playbackUrl = iosTracking.trackingUrl("videostatsPlaybackUrl")
+            val watchtimeUrl = iosTracking.trackingUrl("videostatsWatchtimeUrl")
             if (playbackUrl != null) {
+                Log.d(TAG, "Retrieved signed IOS tracking URLs for $videoId")
                 return PlaybackTracking(
                     playbackUrl = playbackUrl.rewriteToMusicDomain(),
-                    watchtimeUrl = iosTracking.trackingUrl("videostatsWatchtimeUrl")?.rewriteToMusicDomain(),
+                    watchtimeUrl = watchtimeUrl?.rewriteToMusicDomain(),
                     client = PlayerClient.WEB_REMIX,
                 )
             }
@@ -381,71 +398,64 @@ object Innertube {
      * becomes audible. This is what creates the history entry the home feed
      * feeds off. [cpn] is the client-playback-nonce identifying this one play.
      */
+    /**
+     * The "playback started" ping real YouTube Music clients send once a track
+     * becomes audible. This is what creates the history entry in the user's YouTube Music account.
+     */
     suspend fun pingPlayback(
         baseUrl: String,
         cpn: String,
+        videoId: String,
         rtSec: Long = 0L,
-        playerClient: PlayerClient = PlayerClient.WEB_REMIX,
-    ) = pingStats(baseUrl, cpn, playerClient) {
-        parameter("el", "detailpage")
-        parameter("ns", "yt")
-        parameter("fexp", "")
-        parameter("cplayer", "UNIPLAYER")
-        parameter("rt", rtSec.toString())
-        parameter("lact", "1")
+    ): Int {
+        val forcedUrl = baseUrl.rewriteToMusicDomain()
+        val separator = if (forcedUrl.contains("?")) "&" else "?"
+        var url = "$forcedUrl${separator}cpn=$cpn&rt=$rtSec"
+        if (!url.contains("docid=")) url += "&docid=$videoId"
+        if (!url.contains("ns=")) url += "&ns=yt"
+        if (!url.contains("el=")) url += "&el=detailpage"
+        if (!url.contains("ver=")) url += "&ver=2"
+        if (!url.contains("c=")) url += "&c=WEB_REMIX&cver=${PlayerClient.WEB_REMIX.clientVersion}&cplayer=UNIPLAYER"
+        if (!url.contains("lact=")) url += "&lact=1"
+        return executeTelemetryGet(url)
     }
 
     /**
-     * The follow-up ping reporting how much of the track was actually heard.
-     * A history entry with no watchtime behind it reads as a skip.
-     * [st] and [et] are the watched segment's bounds, in seconds.
+     * The follow-up watchtime ping reporting how much of the track was heard.
+     * YouTube requires both playback and watchtime pings to write to user's history.
      */
     suspend fun pingWatchtime(
         baseUrl: String,
         cpn: String,
+        videoId: String,
         st: Long,
         et: Long,
         lenSec: Long = 0L,
         state: String = "playing",
         rtSec: Long = 0L,
-        playerClient: PlayerClient = PlayerClient.WEB_REMIX,
-    ) = pingStats(baseUrl, cpn, playerClient) {
-        parameter("st", st.toString())
-        parameter("et", et.toString())
-        parameter("cmt", et.toString())
-        if (lenSec > 0L) parameter("len", lenSec.toString())
-        parameter("state", state)
-        parameter("el", "detailpage")
-        parameter("ns", "yt")
-        parameter("volume", "100")
-        parameter("muted", "0")
-        parameter("afmt", "251")
-        parameter("cplayer", "UNIPLAYER")
-        parameter("rt", rtSec.toString())
-        parameter("lact", "1")
+    ): Int {
+        val forcedUrl = baseUrl.rewriteToMusicDomain()
+        val separator = if (forcedUrl.contains("?")) "&" else "?"
+        var url = "$forcedUrl${separator}cpn=$cpn&state=$state&st=$st&et=$et&cmt=$et&rt=$rtSec&lact=1"
+        if (lenSec > 0L && !url.contains("len=")) url += "&len=$lenSec"
+        if (!url.contains("docid=")) url += "&docid=$videoId"
+        if (!url.contains("ns=")) url += "&ns=yt"
+        if (!url.contains("el=")) url += "&el=detailpage"
+        if (!url.contains("ver=")) url += "&ver=2"
+        if (!url.contains("c=")) url += "&c=WEB_REMIX&cver=${PlayerClient.WEB_REMIX.clientVersion}&cplayer=UNIPLAYER"
+        if (!url.contains("afmt=")) url += "&afmt=251&muted=0&volume=100"
+        return executeTelemetryGet(url)
     }
 
-    /** Shared shape of the YouTube Music stats pings, including session auth. */
-    private suspend fun pingStats(
-        baseUrl: String,
-        cpn: String,
-        playerClient: PlayerClient,
-        extras: HttpRequestBuilder.() -> Unit,
-    ): Int = runCatching {
-        val targetUrl = baseUrl.rewriteToMusicDomain()
+    private suspend fun executeTelemetryGet(fullUrl: String): Int = runCatching {
         val origin = MUSIC_ORIGIN
-        client.get(targetUrl) {
-            parameter("ver", "2")
-            parameter("c", playerClient.clientName)
-            parameter("cver", playerClient.clientVersion)
-            parameter("cpn", cpn)
-            extras()
-            header("User-Agent", playerClient.userAgent)
+        client.get(fullUrl) {
+            header("User-Agent", WEB_USER_AGENT)
             header("X-Origin", origin)
             header("Origin", origin)
             header("Referer", "$origin/")
-            header("X-YouTube-Client-Name", playerClient.clientId.ifEmpty { "67" })
-            header("X-YouTube-Client-Version", playerClient.clientVersion)
+            header("X-YouTube-Client-Name", "67")
+            header("X-YouTube-Client-Version", PlayerClient.WEB_REMIX.clientVersion)
             visitorData?.let { header("X-Goog-Visitor-Id", it) }
             cookie?.let { c ->
                 header("Cookie", c)
@@ -454,7 +464,7 @@ object Innertube {
             }
         }.status.value
     }.getOrElse { e ->
-        Log.w(TAG, "pingStats failed for $baseUrl: ${e.message}")
+        Log.w(TAG, "executeTelemetryGet failed for $fullUrl: ${e.message}")
         -1
     }
 

@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Ported from Orchard (https://github.com/SFG5453/Orchard).
  *
  * Copyright (C) 2026 SFG545 (original Orchard implementation)
@@ -204,7 +204,7 @@ class BeatTracker(private val context: Context) {
     }
 
     companion object {
-        private const val TAG = "MusiqueBeatTracker"
+        private const val TAG = "VelthyBeatTracker"
         private const val MODEL_ASSET = "beat_this_int8.onnx"
         private const val INFERENCE_THREADS = 4
 

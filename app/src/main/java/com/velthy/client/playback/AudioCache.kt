@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.content.Context
 import android.media.MediaDataSource
@@ -665,7 +665,7 @@ object AudioCache {
                 if (!clearPartialHead(videoId, want)) return@launch
                 fetch(
                     cacheKey = videoId,
-                    uri = Uri.parse("musique://watch?v=$videoId"),
+                    uri = Uri.parse("velthy://watch?v=$videoId"),
                     position = 0,
                     length = want,
                     pinKey = true,
@@ -1032,7 +1032,7 @@ object AudioCache {
      * from a track played earlier, or skipped back to — costs only the rest.
      */
     private suspend fun fetch(videoId: String, position: Long, length: Long) =
-        fetch(videoId, Uri.parse("musique://watch?v=$videoId"), position, length)
+        fetch(videoId, Uri.parse("velthy://watch?v=$videoId"), position, length)
 
     /**
      * [pinKey] forces the write to land under [cacheKey] instead of wherever

@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.player
+package com.velthy.client.ui.player
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -368,4 +368,4 @@ private fun mimeTypeOf(url: String): String? {
     }
 }
 
-private const val TAG = "MusiqueCanvas"
+private const val TAG = "VelthyCanvas"

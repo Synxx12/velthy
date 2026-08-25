@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui
+package com.velthy.client.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -619,13 +619,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * track starts — but re-fetching there would rearrange the page under
      * whoever is reading it, and the tab is usually in the background anyway.
      * It's re-fetched when the tab is next opened instead.
+     *
+     * A 5-minute cooldown prevents multiple rapid refreshes when the user
+     * switches between tabs repeatedly or opens/closes detail pages quickly.
      */
     private var homeStale = false
+    private var lastHomeRefreshMs = 0L
+    private val HOME_REFRESH_COOLDOWN_MS = 5 * 60 * 1000L // 5 minutes
 
     /** Call when the home tab becomes visible. */
     fun onHomeShown() {
         if (!homeStale) return
+        val now = System.currentTimeMillis()
+        if (now - lastHomeRefreshMs < HOME_REFRESH_COOLDOWN_MS) return
         homeStale = false
+        lastHomeRefreshMs = now
         // A first load already in flight will pick the new play up by itself.
         if (_home.value is UiState.Success) refresh(Feed.HOME)
     }
@@ -956,7 +964,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 browseId == "local:downloads" -> {
                     val context = getApplication<Application>()
                     val songs = LocalMediaRepository.getDownloadedSongs(context)
-                    if (songs.isEmpty()) UiState.Error("No downloaded tracks in Downloads/Musique")
+                    if (songs.isEmpty()) UiState.Error("No downloaded tracks in Downloads/Velthy")
                     else UiState.Success(songs)
                 }
                 browseId == "local:all" -> {
@@ -1030,7 +1038,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val state: UiState<List<Song>> = when (browseId) {
                 "local:downloads" -> {
                     val songs = LocalMediaRepository.getDownloadedSongs(context)
-                    if (songs.isEmpty()) UiState.Error("No downloaded tracks in Downloads/Musique")
+                    if (songs.isEmpty()) UiState.Error("No downloaded tracks in Downloads/Velthy")
                     else UiState.Success(songs)
                 }
                 "local:all" -> {

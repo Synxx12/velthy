@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -129,7 +129,10 @@ fun HistoryScreen(
 
                 if (activeItems.isEmpty()) {
                     item(key = "history_empty_state", contentType = "empty") {
-                        EmptyHistoryView(isRemote = selectedTab == HistorySourceTab.REMOTE)
+                        EmptyHistoryView(
+                            isRemote = selectedTab == HistorySourceTab.REMOTE,
+                            isSyncing = refreshing,
+                        )
                     }
                 } else {
                     grouped.forEach { section ->
@@ -446,6 +449,7 @@ private fun HistoryRowItem(
 @Composable
 private fun EmptyHistoryView(
     isRemote: Boolean,
+    isSyncing: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -470,13 +474,21 @@ private fun EmptyHistoryView(
         }
         Spacer(Modifier.height(14.dp))
         Text(
-            text = if (isRemote) "No remote history" else "No local history",
+            text = when {
+                isSyncing && isRemote -> "Syncing with YouTube Music..."
+                isRemote -> "No remote history"
+                else -> "No local history"
+            },
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
             color = MaterialTheme.colorScheme.onBackground,
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = if (isRemote) "Pull down to refresh or sync songs from your YouTube Music account" else "Music played on this device will appear here",
+            text = when {
+                isSyncing && isRemote -> "Fetching your latest listening activity from cloud..."
+                isRemote -> "Pull down to refresh or sync songs from your YouTube Music account"
+                else -> "Music played on this device will appear here"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,

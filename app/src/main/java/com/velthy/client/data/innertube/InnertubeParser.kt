@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.innertube
+package com.velthy.client.data.innertube
 
 import com.velthy.client.data.model.Account
 import com.velthy.client.data.model.ArtistPage
@@ -365,7 +365,8 @@ object InnertubeParser {
         for (shelf in shelves) {
             val title = shelf.o("title").runs().ifBlank { "Recent" }
             val songs = shelf.a("contents").orEmpty().mapNotNull { item ->
-                parseResponsiveListItem(item.o("musicResponsiveListItemRenderer"))
+                val renderer = item.o("musicResponsiveListItemRenderer") ?: (item as? JsonObject)
+                parseResponsiveListItem(renderer)
             }
             if (songs.isNotEmpty()) {
                 out.add(ParsedHistorySection(title, songs))
@@ -375,6 +376,13 @@ object InnertubeParser {
             val deep = collectSongsDeep(response)
             if (deep.isNotEmpty()) {
                 out.add(ParsedHistorySection("Today", deep))
+            }
+        }
+        if (out.isEmpty()) {
+            val allResponsive = collectRenderers(response, "musicResponsiveListItemRenderer")
+            val songs = allResponsive.mapNotNull { parseResponsiveListItem(it) }
+            if (songs.isNotEmpty()) {
+                out.add(ParsedHistorySection("Today", songs))
             }
         }
         return out

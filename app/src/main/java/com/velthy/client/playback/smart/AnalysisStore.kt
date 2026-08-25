@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback.smart
+package com.velthy.client.playback.smart
 
 import android.content.Context
 import android.util.Log
@@ -237,7 +237,7 @@ class AnalysisStore(private val context: Context) {
     }
 
     private companion object {
-        const val TAG = "MusiqueAnalysisStore"
+        const val TAG = "VelthyAnalysisStore"
         const val DIRECTORY = "smart_analysis"
 
         /**

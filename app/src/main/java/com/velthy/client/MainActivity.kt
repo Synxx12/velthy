@@ -127,7 +127,7 @@ import com.velthy.client.ui.components.MusicRecognitionSheet
 import com.velthy.client.ui.components.TopFadeBlur
 import com.velthy.client.ui.components.LyricsSourcesDialog
 import com.velthy.client.ui.components.UpdateAvailableDialog
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 import androidx.media3.common.Player
 import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.ui.player.NowPlayingScreen
@@ -137,7 +137,7 @@ import com.velthy.client.ui.screens.HomeScreen
 import com.velthy.client.ui.screens.LibraryScreen
 import com.velthy.client.ui.screens.SearchScreen
 import com.velthy.client.ui.screens.SearchTopBarField
-import com.velthy.client.ui.theme.MusiqueTheme
+import com.velthy.client.ui.theme.VelthyTheme
 import com.velthy.client.ui.theme.rememberArtworkPalette
 import com.velthy.client.ui.theme.SystemBarIcons
 import dev.chrisbanes.haze.HazeState
@@ -164,8 +164,8 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
-            MusiqueTheme(darkTheme = darkTheme) {
-                MusiqueApp(darkTheme = darkTheme)
+            VelthyTheme(darkTheme = darkTheme) {
+                VelthyApp(darkTheme = darkTheme)
             }
         }
     }
@@ -179,6 +179,7 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         val uri = intent?.data ?: return
         val isDiscordCallback = uri.scheme == "discord-1541308554173227080" ||
+            (uri.scheme == "velthy" && (uri.host == "discord" || uri.path?.contains("discord") == true)) ||
             (uri.scheme == "musique" && (uri.host == "discord" || uri.path?.contains("discord") == true))
 
         if (isDiscordCallback) {
@@ -199,7 +200,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()) {
+private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
     val hazeState = remember { HazeState() }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -393,12 +394,14 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
         else -> searchListState
     }
 
-    // Pull-to-refresh: the drag lives with the feed, but the indicator is the
+    // Pull-to-refresh: the drag lives with the feed/screen, but the indicator is the
     // line under the top bar, so the state has to be visible to both.
     val homePull = rememberPullToRefreshState()
     val explorePull = rememberPullToRefreshState()
     val libraryPull = rememberPullToRefreshState()
-    val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
+    val historyPull = rememberPullToRefreshState()
+    var historyRefreshing by remember { mutableStateOf(false) }
+
     val currentFeed = when {
         showSettings || showAccountScrobbling || detail != null -> null
         selectedTab == TAB_HOME -> MainViewModel.Feed.HOME
@@ -406,6 +409,14 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
         selectedTab == TAB_LIBRARY -> MainViewModel.Feed.LIBRARY
         else -> null
     }
+
+    val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
+    val isHistoryPage = detail?.browseId == "app:history"
+    val isCurrentRefreshing = when {
+        isHistoryPage -> historyRefreshing
+        else -> currentFeed != null && currentFeed in refreshing
+    }
+
     // The lead shelf is listening history, so opening Home after playing
     // something is exactly when it needs re-fetching.
     LaunchedEffect(currentFeed) {
@@ -415,11 +426,12 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
         if (currentFeed == MainViewModel.Feed.LIBRARY) viewModel.onLibraryShown()
     }
 
-    val currentPull = when (currentFeed) {
-        MainViewModel.Feed.HOME -> homePull
-        MainViewModel.Feed.EXPLORE -> explorePull
-        MainViewModel.Feed.LIBRARY -> libraryPull
-        null -> null
+    val currentPull = when {
+        isHistoryPage -> historyPull
+        currentFeed == MainViewModel.Feed.HOME -> homePull
+        currentFeed == MainViewModel.Feed.EXPLORE -> explorePull
+        currentFeed == MainViewModel.Feed.LIBRARY -> libraryPull
+        else -> null
     }
     val scrolled by remember(currentListState) {
         derivedStateOf {
@@ -751,8 +763,6 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
             } else if (page != null && (page.browseId == "app:history" || key == "app:history")) {
                 val localHistoryItems by com.velthy.client.data.history.PlaybackHistoryManager.localHistory.collectAsStateWithLifecycle()
                 val remoteHistoryItems by com.velthy.client.data.history.PlaybackHistoryManager.remoteHistory.collectAsStateWithLifecycle()
-                var historyRefreshing by remember { mutableStateOf(false) }
-                val historyPull = rememberPullToRefreshState()
                 val syncHistory: () -> Unit = {
                     scope.launch {
                         historyRefreshing = true
@@ -987,7 +997,7 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                 detail != null -> detailScrolled
                 else -> scrolled
             },
-            refreshing = currentFeed != null && currentFeed in refreshing,
+            refreshing = isCurrentRefreshing,
             pullFraction = { currentPull?.distanceFraction ?: 0f },
             searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications) {
                 {
@@ -1018,7 +1028,9 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                 } else if (detail?.browseId == "app:history") {
                     IconButton(onClick = {
                         scope.launch {
-                            com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube()
+                            historyRefreshing = true
+                            com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
+                            historyRefreshing = false
                         }
                     }) {
                         Icon(

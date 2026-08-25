@@ -1,4 +1,4 @@
-﻿package com.velthy.client
+package com.velthy.client
 
 import android.app.Application
 import androidx.annotation.OptIn
@@ -93,5 +93,3 @@ open class VelthyApplication : Application(), SingletonImageLoader.Factory {
             private set
     }
 }
-
-typealias MusiqueApplication = VelthyApplication

@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,7 +67,7 @@ import com.velthy.client.ui.components.ROW_DIVIDER_INSET
 import com.velthy.client.ui.components.SongRow
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.components.songListSkeleton
-import com.velthy.client.ui.icons.MusiqueIcons
+import com.velthy.client.ui.icons.VelthyIcons
 
 @Composable
 fun SearchScreen(
@@ -396,7 +396,7 @@ private fun RecentSearchRow(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                MusiqueIcons.NorthWest,
+                VelthyIcons.NorthWest,
                 contentDescription = "Fill \"$term\"",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp),
@@ -455,7 +455,7 @@ private fun LazyListScope.exploreCategoriesSection(
                 ExploreCategoryCard(
                     title = "Top Charts",
                     gradient = Brush.linearGradient(listOf(Color(0xFFFF5722), Color(0xFFFF9800))),
-                    icon = MusiqueIcons.TrendingUp,
+                    icon = VelthyIcons.TrendingUp,
                     onClick = { onCategoryClick("FEmusic_charts", "Top Charts") },
                     modifier = Modifier.weight(1f),
                 )
@@ -474,7 +474,7 @@ private fun LazyListScope.exploreCategoriesSection(
                 ExploreCategoryCard(
                     title = "Podcasts & Shows",
                     gradient = Brush.linearGradient(listOf(Color(0xFF009688), Color(0xFF00BCD4))),
-                    icon = MusiqueIcons.Podcasts,
+                    icon = VelthyIcons.Podcasts,
                     onClick = { onCategoryClick("FEmusic_library_non_music_audio_list", "Podcasts & Shows") },
                     modifier = Modifier.weight(1f),
                 )

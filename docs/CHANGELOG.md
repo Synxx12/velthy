@@ -8,15 +8,27 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ### [Unreleased]
 
+
+### [1.4.1] - 2026-08-25
+
 #### 🎵 Pemutar Audio & Sinkronisasi
-- **Sinkronisasi Riwayat YouTube Mutakhir (SpatialFlow Telemetry Architecture)**:
-  - Mengadopsi arsitektur telemetri autentik dengan domain rewriting ke server YouTube Music resmi, parameter payload lengkap (`UNIPLAYER`), dan header identitas klien web resmi.
-  - Sistem pelacakan waktu dengar multi-tahap (validasi detik ke-1, denyut berkala 30 detik, proteksi lonjakan *scrubbing*, dan penyelesaian tuntas 96%) memastikan seluruh aktivitas dengar tercatat sempurna sebagai *real watchtime* di akun YouTube Music Anda.
-  - Pemisahan total riwayat cloud murni dan riwayat perangkat lokal tanpa pencampuran dummy, serta auto-sinkronisasi latar belakang otomatis tanpa intervensi manual.
+- **Panel Output Audio Bersih & Deteksi Cepat Smart TV (*Zero-Clutter Audio Output & Dual Cast Discovery Engine*)**:
+  - Panel *Audio Output* kini hanya menampilkan perangkat yang **sedang aktif terhubung** (*Phone Speaker*, *TWS Earbuds*, *Headphones*, *USB DAC*, atau *Smart TV* yang sedang di-cast), menghilangkan daftar panjang perangkat Bluetooth nonaktif masa lalu yang memenuhi layar dan tidak responsif saat ditekan.
+  - Penambahan permintaan izin perangkat sekitar (*Nearby Devices Runtime Permission*) secara otomatis saat membuka panel output pada Android 12/13/14+ agar deteksi Smart TV dan Bluetooth berjalan sempurna tanpa hambatan izin sistem.
+  - Peningkatan mesin pencari Smart TV dengan dukungan ganda *Subnet Broadcast SSDP* dan *Native Android NSD / mDNS* untuk mendeteksi Samsung, LG webOS, Sony Bravia, Xiaomi TV, Chromecast, Google TV, dan smart speaker secara instan dalam 1–2 detik di jaringan Wi-Fi lokal.
+  - Penambahan tombol cepat *Connect Bluetooth Device* yang terstruktur rapi untuk menghubungkan headset baru tanpa mengacaukan daftar output utama.
 
 #### ✨ Fitur Baru & Tampilan
+- **Bilah Tombol Aksi Bawah Stabil & Terpatri pada Onboarding (*Anchored Bottom CTA Action Bar*)**:
+  - Tombol *Continue / Get Started / Start Listening* pada panduan awal (*Onboarding Wizard*) kini terpatri kokoh di bagian bawah layar secara permanen, sehingga posisi tombol tidak lagi bergeser, melompat, atau tersembunyi saat menggulir konten atau beralih antar langkah.
+  - Pengalaman navigasi langkah terasa jauh lebih nyaman, konsisten, dan mudah dijangkau oleh ibu jari (*one-hand thumb zone*).
 - **Indikator Progres Refresh Halus di Bilah Atas (*Frosted Top Bar Loader*)**:
   - Indikator tarik-untuk-memuat (*pull-to-refresh*) kini terintegrasi langsung di sepanjang garis bawah bilah atas kaca buram, menampilkan pengisian presisi 120 FPS mengikuti sentuhan jari dan animasi sapuan elegan saat memperbarui data.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Beranda Tidak Lagi Muat Ulang Tiba-Tiba**: Penambahan batas waktu pendingin 5 menit mencegah beranda menyegarkan konten secara berulang saat pengguna berpindah tab, membuka halaman detail, atau kembali dari pemutar. Beranda kini hanya diperbarui ketika betul-betul diperlukan.
+- **Indikator Muat Lebih Cepat di Gulir Ke Bawah**: *Skeleton* pemuat kini muncul lebih awal (5 konten sebelum batas bawah, dari sebelumnya 3) sehingga data tambahan terasa dimuat secara instan saat menggulir ke bawah pada beranda.
+
 
 ### [1.4.0] - 2026-08-25
 
