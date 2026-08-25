@@ -107,22 +107,26 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -n "${KEYSTORE_BASE64}" ]; then
-            echo "${KEYSTORE_BASE64}" | base64 --decode > app/musique-release.jks
+            echo "${KEYSTORE_BASE64}" | base64 --decode > app/release.jks
             cat <<EOF > keystore.properties
-          storeFile=musique-release.jks
+          storeFile=release.jks
           storePassword=${KEYSTORE_PASSWORD}
           keyAlias=${KEY_ALIAS}
           keyPassword=${KEY_PASSWORD}
           EOF
             echo "✅ Keystore restored from Secrets."
-          elif [ -f "app/musique-release.jks" ]; then
+          else
+            echo "⚠️ KEYSTORE_BASE64 secret not provided, auto-generating release keystore..."
+            keytool -genkey -v -keystore app/release.jks -alias velthy -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass velthyreleasekey -keypass velthyreleasekey \
+              -dname "CN=Velthy, OU=Release, O=VelthyApp, L=Jakarta, ST=Jakarta, C=ID"
             cat <<EOF > keystore.properties
-          storeFile=musique-release.jks
-          storePassword=musiqueappsecretkey
-          keyAlias=musique
-          keyPassword=musiqueappsecretkey
+          storeFile=release.jks
+          storePassword=velthyreleasekey
+          keyAlias=velthy
+          keyPassword=velthyreleasekey
           EOF
-            echo "⚠️ Using fallback keystore in repository."
+            echo "✅ Release keystore generated successfully."
           fi
 
       - name: Setup Local Properties & Module Index
