@@ -280,22 +280,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           overwrite_files: true
 
-      # ── 10. MIRROR RELEASE TO SYNXX12/MUSIQUE-APP-RELEASES ──
-      - name: Mirror Release to Synxx12/musique-app-releases
-        if: always() && steps.create_release.outcome == 'success'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.VERSION_TAG }}
-          name: "Velthy v${{ env.DISPLAY_VERSION }}"
-          body_path: RELEASE_NOTES.md
-          files: |
-            release_assets/*
-          repository: "Synxx12/musique-app-releases"
-          token: ${{ secrets.RELEASES_PAT || secrets.GITHUB_TOKEN }}
-          overwrite_files: true
-        continue-on-error: true
-
-      # ── 11. TRIGGER FCM PUSH NOTIFICATION WEBHOOK ──
+      # ── 10. TRIGGER FCM PUSH NOTIFICATION WEBHOOK ──
       - name: Trigger FCM Push Notification
         if: always() && (steps.create_release.outcome == 'success' || steps.create_release.outcome == 'skipped')
         run: |
