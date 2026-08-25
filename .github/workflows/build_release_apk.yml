@@ -133,11 +133,10 @@ jobs:
         env:
           MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
         run: |
-          if [ -n "$MODULE_INDEX_URL" ]; then
-            echo "MODULE_INDEX_URL=${MODULE_INDEX_URL}" > local.properties
-            echo "MODULE_INDEX_URL=${MODULE_INDEX_URL}" >> $GITHUB_ENV
-            echo "✅ MODULE_INDEX_URL securely injected from repository secrets"
-          fi
+          MOD_URL="${MODULE_INDEX_URL:-https://monochrome.rickyaddons.dpdns.org/8spine-source.json}"
+          echo "MODULE_INDEX_URL=${MOD_URL}" > local.properties
+          echo "MODULE_INDEX_URL=${MOD_URL}" >> $GITHUB_ENV
+          echo "✅ MODULE_INDEX_URL injected successfully: ${MOD_URL}"
 
       # ── 6. BUILD PRODUCTION APK RELEASE ──
       - name: Build Android APK

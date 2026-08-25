@@ -19,7 +19,7 @@ val localProps = Properties().apply {
 }
 val moduleIndexUrl: String = System.getenv("MODULE_INDEX_URL")
     ?: localProps.getProperty("MODULE_INDEX_URL")
-    ?: ""
+    ?: "https://monochrome.rickyaddons.dpdns.org/8spine-source.json"
 
 val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
