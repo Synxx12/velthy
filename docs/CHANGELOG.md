@@ -36,7 +36,9 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
   - Membaca tensor output ONNX secara langsung via `FloatBuffer` pada `reduceToBandCurve()`, menghilangkan overhead boxing ke 4.098 object array Java (~16MB per pemanggilan).
 
 #### 🎵 Player, Audio & Lirik
-- **Lyrics Note & Instrumental Break Overlap Fixes**:
+- **Default Lifecycle Setting: Stop Music on Close (`stopOnTaskRemoved = true`)**:
+  - Mengubah nilai bawaan (default) `stopOnTaskRemoved` di `AppSettings.kt` menjadi `true` sehingga pemutaran musik otomatis berhenti saat aplikasi ditutup/di-swipe dari recent apps secara default.
+- **Enhanced Word-by-Word & TTML Synchronized Lyrics (Vocals Tracking & Non-Overlapping Instrumentals)**:
   - Menambahkan field `sungUntilMs` dan flag `hasKnownEnd` pada `LyricLine.kt` untuk melacak durasi vokal yang sebenarnya pada format lirik TTML dan LRC per kata (`LyricsPlus.kt`, `TtmlLyrics.kt`).
   - Memperbaiki `LyricGaps.kt` agar hanya menambahkan gap instrumental ketika baris lirik memiliki batas akhir yang pasti (`hasKnownEnd == true`), mencegah teks lirik tumpang tindih dengan jeda instrumental.
 - **Enhanced Stream Recovery, Substitute Tracking & Quality Tag Resilience**:
