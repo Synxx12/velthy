@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.history
+package com.velthy.client.data.history
 
 import android.content.Context
 import android.util.Log
@@ -173,7 +173,12 @@ object PlaybackHistoryManager {
                     }
                 }
 
-                val deduplicated = deduplicateByLatest(cloudItems)
+                val recentLocal = _localHistory.value.filter { now - it.playedAt < 15 * 60 * 1000L }
+                val merged = mutableListOf<HistoryItem>()
+                merged.addAll(recentLocal)
+                merged.addAll(cloudItems)
+
+                val deduplicated = deduplicateByLatest(merged)
                 lock.withLock {
                     val trimmed = deduplicated.take(MAX_HISTORY_ITEMS)
                     _remoteHistory.value = trimmed

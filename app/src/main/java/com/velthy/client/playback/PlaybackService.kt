@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.app.PendingIntent
 import android.content.Context
@@ -437,16 +437,21 @@ class PlaybackService : MediaSessionService() {
                 // the outgoing track is closed out on the last sampled value.
                 PlaybackTracker.onTrackChanged(lastPositionSeconds)
                 lastPositionSeconds = 0
-                if (exoPlayer.isPlaying) {
-                    registerCurrentPlay()
+
+                val newSong = mediaItem?.toSong()
+                if (newSong != null) {
+                    com.velthy.client.data.history.PlaybackHistoryManager.recordPlay(newSong)
+                    mediaItem.mediaId.let(PlaybackTracker::onPlaying)
                 }
 
                 // Scrobbling: stop old song, start new song
                 scrobbleManager?.onSongStop()
-                val newSong = mediaItem?.toSong()
                 val durationMs = exoPlayer.duration.takeIf { it > 0 }
                 scrobbleManager?.onSongStart(newSong, durationMs)
-                com.velthy.client.data.history.PlaybackHistoryManager.recordPlay(newSong)
+                val isRepeat = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                if (isRepeat) {
+                    com.velthy.client.data.LiveStatsReporter.reset()
+                }
                 com.velthy.client.data.LiveStatsReporter.report(newSong)
 
                 // ListenBrainz: submit finished for old song, playing_now for new song.
@@ -1875,8 +1880,22 @@ class PlaybackService : MediaSessionService() {
     private fun observeAudioDevice(player: ExoPlayer) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             scope.launch {
+                var isFirst = true
                 AudioDeviceHelper.preferredDevice.collect { device ->
+                    if (isFirst) {
+                        isFirst = false
+                        player.setPreferredAudioDevice(device)
+                        return@collect
+                    }
                     player.setPreferredAudioDevice(device)
+                    // If player is currently playing, force the AudioTrack buffer to flush
+                    // so the hardware output switch takes effect immediately on the 1st attempt.
+                    if (player.isPlaying) {
+                        runCatching {
+                            val pos = player.currentPosition
+                            player.seekTo(pos)
+                        }
+                    }
                 }
             }
         }

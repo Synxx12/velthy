@@ -1,4 +1,4 @@
-﻿package com.velthy.client
+package com.velthy.client
 
 import android.Manifest
 import android.content.Intent
@@ -20,6 +20,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,8 +42,12 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.SystemUpdate
@@ -68,6 +74,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.velthy.client.ui.components.LaunchSplashScreen
+import com.velthy.client.ui.onboarding.OnboardingScreen
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -283,6 +291,26 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
     val historyItems by com.velthy.client.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showRecognitionSheet by remember { mutableStateOf(false) }
+    val hasCompletedOnboarding by AppSettings.hasCompletedOnboarding.collectAsStateWithLifecycle()
+    var isSplashVisible by remember { mutableStateOf(true) }
+
+    LaunchedEffect(hasCompletedOnboarding, homeState) {
+        if (!hasCompletedOnboarding) {
+            delay(500)
+            isSplashVisible = false
+        } else {
+            if (homeState !is UiState.Loading) {
+                delay(350)
+                isSplashVisible = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(2200)
+        isSplashVisible = false
+    }
+
     val searchFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(searchFocusTrigger) {
         if (searchFocusTrigger > 0) {
@@ -417,10 +445,10 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
 
     val tabs = remember {
         listOf(
-            BottomTab("Play", MusiqueIcons.Play),
-            BottomTab("Explore", MusiqueIcons.Explore),
-            BottomTab("Library", MusiqueIcons.Library),
-            BottomTab("Search", MusiqueIcons.Search),
+            BottomTab("Home", Icons.Rounded.Home),
+            BottomTab("New", Icons.Rounded.GridView),
+            BottomTab("Library", Icons.Rounded.LibraryMusic),
+            BottomTab("Search", Icons.Rounded.Search),
         )
     }
 
@@ -645,7 +673,16 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
         BackHandler(enabled = showListenBrainzLogin) { showListenBrainzLogin = false }
         BackHandler(enabled = showLastfmLogin) { showLastfmLogin = false }
 
-        AnimatedContent(
+        if (!hasCompletedOnboarding) {
+            OnboardingScreen(
+                account = account,
+                onSignInWithGoogle = { showLogin = true },
+                onComplete = {
+                    AppSettings.setHasCompletedOnboarding(true)
+                },
+            )
+        } else {
+            AnimatedContent(
             targetState = when {
                 showDiscord -> "discord"
                 showAccountScrobbling -> "account_scrobbling"
@@ -940,7 +977,7 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                 showNotifications -> "Notifications"
                 detail != null -> detail.title
                 else -> tabs[selectedTab].let {
-                    if (it.label == "Play") "Listen Now" else it.label
+                    if (it.label == "New") "Explore" else it.label
                 }
             },
             hazeState = hazeState,
@@ -1051,7 +1088,10 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectTapGestures { /* Absorb empty space taps in navbar/miniplayer area */ }
+                },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1233,6 +1273,7 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                 )
             }
         }
+    }
 
         // ---- Album / playlist detail ----
         // ---- Long-press track actions ----
@@ -1578,6 +1619,11 @@ private fun MusiqueApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel(
                 onDismiss = { discordDialog = null },
             )
         }
+
+        // ---- Launch Splash Screen Overlay (Hides initial cold start skeleton) ----
+        LaunchSplashScreen(
+            visible = isSplashVisible,
+        )
     }
 }
 

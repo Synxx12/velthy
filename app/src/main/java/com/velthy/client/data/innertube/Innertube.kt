@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.innertube
+package com.velthy.client.data.innertube
 
 import android.util.Log
 import io.ktor.client.HttpClient
@@ -304,24 +304,7 @@ object Innertube {
     suspend fun playbackTracking(videoId: String, cpn: String): PlaybackTracking? {
         if (cookie == null) return null
 
-        // 1. Primary: ANDROID_MUSIC (native YouTube Music client; unciphered & reliable)
-        val androidMusicResponse = runCatching {
-            postPlayer(videoId, PlayerClient.ANDROID_MUSIC, signatureTimestamp = null, authenticated = true)
-        }.getOrNull()
-
-        val androidTracking = androidMusicResponse?.get("playbackTracking")?.jsonObject
-        if (androidTracking != null) {
-            val playbackUrl = androidTracking.trackingUrl("videostatsPlaybackUrl")
-            if (playbackUrl != null) {
-                return PlaybackTracking(
-                    playbackUrl = playbackUrl,
-                    watchtimeUrl = androidTracking.trackingUrl("videostatsWatchtimeUrl"),
-                    client = PlayerClient.ANDROID_MUSIC,
-                )
-            }
-        }
-
-        // 2. Secondary: WEB_REMIX (web client)
+        // 1. Primary: WEB_REMIX (The official YouTube Music web client where user session cookies originate)
         val webRemixResponse = runCatching {
             postPlayer(videoId, PlayerClient.WEB_REMIX, signatureTimestamp = null, authenticated = true)
         }.getOrNull()
@@ -334,6 +317,23 @@ object Innertube {
                     playbackUrl = playbackUrl,
                     watchtimeUrl = webTracking.trackingUrl("videostatsWatchtimeUrl"),
                     client = PlayerClient.WEB_REMIX,
+                )
+            }
+        }
+
+        // 2. Secondary fallback: ANDROID_MUSIC (native YouTube Music client)
+        val androidMusicResponse = runCatching {
+            postPlayer(videoId, PlayerClient.ANDROID_MUSIC, signatureTimestamp = null, authenticated = true)
+        }.getOrNull()
+
+        val androidTracking = androidMusicResponse?.get("playbackTracking")?.jsonObject
+        if (androidTracking != null) {
+            val playbackUrl = androidTracking.trackingUrl("videostatsPlaybackUrl")
+            if (playbackUrl != null) {
+                return PlaybackTracking(
+                    playbackUrl = playbackUrl,
+                    watchtimeUrl = androidTracking.trackingUrl("videostatsWatchtimeUrl"),
+                    client = PlayerClient.ANDROID_MUSIC,
                 )
             }
         }
@@ -354,8 +354,8 @@ object Innertube {
             }
         }
 
-        val playability = androidMusicResponse?.get("playabilityStatus")?.jsonObject
-            ?: webRemixResponse?.get("playabilityStatus")?.jsonObject
+        val playability = webRemixResponse?.get("playabilityStatus")?.jsonObject
+            ?: androidMusicResponse?.get("playabilityStatus")?.jsonObject
         Log.w(
             TAG,
             "player response has no playbackTracking for $videoId " +
@@ -377,7 +377,7 @@ object Innertube {
     suspend fun pingPlayback(
         baseUrl: String,
         cpn: String,
-        playerClient: PlayerClient = PlayerClient.ANDROID_MUSIC,
+        playerClient: PlayerClient = PlayerClient.WEB_REMIX,
     ) = pingStats(baseUrl, cpn, playerClient) {
         parameter("el", "detailpage")
         parameter("ns", "yt")
@@ -395,7 +395,7 @@ object Innertube {
         baseUrl: String,
         cpn: String,
         seconds: Long,
-        playerClient: PlayerClient = PlayerClient.ANDROID_MUSIC,
+        playerClient: PlayerClient = PlayerClient.WEB_REMIX,
     ) = pingStats(baseUrl, cpn, playerClient) {
         parameter("st", "0")
         parameter("et", seconds.toString())
@@ -422,11 +422,9 @@ object Innertube {
             parameter("cpn", cpn)
             extras()
             header("User-Agent", playerClient.userAgent)
-            playerClient.origin?.let {
-                header("X-Origin", it)
-                header("Origin", it)
-                header("Referer", "$it/")
-            }
+            header("X-Origin", origin)
+            header("Origin", origin)
+            header("Referer", "$origin/")
             visitorData?.let { header("X-Goog-Visitor-Id", it) }
             cookie?.let { c ->
                 header("Cookie", c)

@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.innertube
+package com.velthy.client.data.innertube
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -134,6 +134,11 @@ object PlaybackTracker {
         session = fresh
         _registeredPlays.value++
         Log.d(TAG, "history entry created for $videoId via ${tracking.client.clientName} with cpn=$cpn (HTTP $status)")
+        scope.launch {
+            runCatching {
+                com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube()
+            }
+        }
     }
 
     private suspend fun flush(target: Session, positionSeconds: Long) = lock.withLock {

@@ -36,5 +36,11 @@ keystore.properties
 
 # Project scratch / debug artifacts
 .shots/
+screenshots/
 .tmp_verify/
 .debug/
+
+# AI Agent & Internal configs
+.agents/
+.gemini/
+.antigravity/

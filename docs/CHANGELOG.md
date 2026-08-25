@@ -8,6 +8,21 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ### [Unreleased]
 
+### [1.4.0] - 2026-08-25
+
+#### ✨ Fitur Baru & Tampilan
+- **Alur Setup & Onboarding Interaktif**: Memperkenalkan panduan penyambutan 6-langkah yang elegan dengan transisi tema dinamis secara *real-time*, integrasi akun, personalisasi audio, dan efek selebrasi.
+- **Layar Pembuka OLED Minimalis**: Tampilan splash screen hitam pekat dengan animasi logo Velthy yang halus dan transisi instan ke beranda tanpa kedipan.
+- **Navigasi Bawah Dual-Island**: Desain bilah navigasi melayang (*floating islands*) bergaya modern dengan indikator kapsul lentur (*spring physics*), dukungan gesture usap, dan tombol pencarian terdedikasi.
+
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Pengalihan Output Audio Instan**: Beralih antar earphone/TWS Bluetooth dan speaker ponsel kini berlangsung instan pada percobaan pertama tanpa jeda buffer.
+- **Sinkronisasi Riwayat YouTube Real-Time**: Riwayat lagu yang diputar kini tercatat seketika (0ms) dan tersinkronisasi secara akurat dan konsisten dengan akun YouTube Music Anda.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Presisi Kontrol Layar & Anti Ketidaksengajaan**: Menyempurnakan bilah navigasi dan menu atas agar ketukan jari pada area kosong tidak lagi memicu pergantian lagu secara tidak sengaja.
+- **Optimasi Efisiensi Jaringan & Baterai**: Mengurangi pengiriman data latar belakang berlebih saat menggeser durasi lagu atau melihat lirik, membuat konsumsi daya dan kuota lebih hemat.
+
 #### ✨ Fitur Baru & Rebranding
 - **Transformasi Identitas & Rebranding Menyeluruh ke Velthy (`velthy.my.id`)**:
   - Mengubah identitas brand aplikasi menjadi **Velthy** dengan Application ID `com.velthy.client` (Dev: `com.velthy.client.dev`).

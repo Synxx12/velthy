@@ -31,20 +31,23 @@ object LiveStatsReporter {
     private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
     private val scope = CoroutineScope(Dispatchers.IO)
-    private var lastReportedVideoId: String? = null
-    private var lastReportedTimeMs: Long = 0L
+    private var currentActiveVideoId: String? = null
 
-    fun report(song: Song?) {
+    /**
+     * Broadcasts a now-playing telemetry ping when a track begins playing.
+     * Guaranteed to send at most ONCE per unique track session.
+     * Seeking in progress bar, jumping between lyrics lines, and pause/resume
+     * are cleanly deduplicated and will never fire duplicate pings.
+     */
+    fun report(song: Song?, force: Boolean = false) {
         if (song == null || song.videoId.isBlank()) return
         if (!AppSettings.shareLiveStats.value) return
 
-        val now = System.currentTimeMillis()
-        // Deduplicate rapid duplicate pings within 10 seconds for the same song
-        if (song.videoId == lastReportedVideoId && (now - lastReportedTimeMs) < 10_000L) {
+        // Prevent duplicate pings for the same track session (e.g. seeking or lyrics jump)
+        if (!force && song.videoId == currentActiveVideoId) {
             return
         }
-        lastReportedVideoId = song.videoId
-        lastReportedTimeMs = now
+        currentActiveVideoId = song.videoId
 
         scope.launch {
             runCatching {
@@ -73,5 +76,12 @@ object LiveStatsReporter {
                 Log.w(TAG, "Live stats ping failed (non-critical): ${e.message}")
             }
         }
+    }
+
+    /**
+     * Resets the active track session (e.g. when track repeats or replay is requested).
+     */
+    fun reset() {
+        currentActiveVideoId = null
     }
 }

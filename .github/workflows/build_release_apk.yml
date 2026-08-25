@@ -243,7 +243,19 @@ jobs:
               notes += "- **Lirik Tersinkronisasi**: Lirik real-time LRCLIB ultra-smooth\n"
               notes += "- **Offline Downloads**: Menyimpan audio dengan metadata ID3/Vorbis langsung ke folder `Downloads/Velthy`\n"
               notes += "- **Opsi Background Lifecycle**: Pilihan menghentikan atau melanjutkan musik saat dihapus dari Recent Apps\n\n"
-              notes += f"### 📋 Riwayat Pembaruan (Commits):\n{commits}\n"
+          def sanitize_for_public(text):
+              # Strip internal markdown file links: [foo.kt](file:///...) -> foo
+              text = re.sub(r'\[([^\]]+)\]\(file:///[^\)]+\)', r'\1', text)
+              # Strip backticked source filenames like (`Foo.kt`), (`dev.ps1`), etc.
+              text = re.sub(r'\s*\(`[^`]+\.(?:kt|ps1|xml|kts|java|json)`\)', '', text)
+              # Strip developer-internal bullet points (like dev scripts, adb commands, pm clear)
+              text = re.sub(r'-\s*\*\*Dev Runner[^\n]*\n(?:[ \t]+-[^\n]*\n)*', '', text)
+              # Normalize multiple blank lines
+              text = re.sub(r'\n{3,}', '\n\n', text)
+              return text.strip()
+
+          # Clean the extracted notes for consumer presentation
+          notes = sanitize_for_public(notes)
 
           footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` (~27 MB) di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
 

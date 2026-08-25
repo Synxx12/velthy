@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -99,6 +101,9 @@ fun FrostedTopBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .pointerInput(Unit) {
+                detectTapGestures { /* Absorb any taps in top bar empty space so they never trigger items underneath */ }
+            }
             .then(
                 when {
                     !ownBackdrop -> Modifier

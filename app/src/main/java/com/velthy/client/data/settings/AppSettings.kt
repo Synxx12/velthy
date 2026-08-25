@@ -166,6 +166,9 @@ object AppSettings {
     val accountForceSyncOnSwitch = MutableStateFlow(true)
     val audioCacheLimitBytes = MutableStateFlow(DEFAULT_CACHE_LIMIT_BYTES)
 
+    /** First-launch onboarding / setup wizard completion flag. */
+    val hasCompletedOnboarding = MutableStateFlow(false)
+
     // ── Discord Rich Presence ───────────────────────────────────────────
 
     /**
@@ -296,6 +299,7 @@ object AppSettings {
         accountMoreContent.value = prefs.getBoolean(KEY_ACCOUNT_MORE_CONTENT, false)
         accountAutoSync.value = prefs.getBoolean(KEY_ACCOUNT_AUTO_SYNC, true)
         accountForceSyncOnSwitch.value = prefs.getBoolean(KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH, true)
+        hasCompletedOnboarding.value = prefs.getBoolean(KEY_COMPLETED_ONBOARDING, false)
         audioCacheLimitBytes.value = prefs.getLong(KEY_CACHE_LIMIT, DEFAULT_CACHE_LIMIT_BYTES)
             .coerceIn(DEFAULT_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES)
         lastfmEnabled.value = prefs.getBoolean(KEY_LASTFM_ENABLED, false)
@@ -328,6 +332,11 @@ object AppSettings {
         discordButton2Visible.value = prefs.getBoolean(KEY_DISCORD_BUTTON_2_VISIBLE, true)
         discordInfoDismissed.value = prefs.getBoolean(KEY_DISCORD_INFO_DISMISSED, false)
         watchConnection(context)
+    }
+
+    fun setHasCompletedOnboarding(completed: Boolean) {
+        hasCompletedOnboarding.value = completed
+        prefs.edit().putBoolean(KEY_COMPLETED_ONBOARDING, completed).apply()
     }
 
     /**
@@ -748,6 +757,7 @@ object AppSettings {
     private const val KEY_DISCORD_BUTTON_2_VISIBLE = "discord_button_2_visible"
     private const val KEY_DISCORD_INFO_DISMISSED = "discord_info_dismissed"
     private const val KEY_LAST_VERSION_CODE = "last_version_code"
+    private const val KEY_COMPLETED_ONBOARDING = "completed_onboarding"
 }
 
 /**

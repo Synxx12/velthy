@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -279,25 +279,34 @@ object AudioDeviceHelper {
                             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE)
                     }
                     preferredDevice.value = speaker
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && speaker != null) {
-                        runCatching { audioManager.setCommunicationDevice(speaker) }
-                    }
-                    @Suppress("DEPRECATION")
-                    runCatching { audioManager.isSpeakerphoneOn = true }
-                } else {
-                    forceSpeaker.value = false
-                    preferredDevice.value = option.deviceInfo
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         runCatching {
-                            if (option.deviceInfo != null) {
-                                audioManager.setCommunicationDevice(option.deviceInfo)
+                            if (speaker != null) {
+                                audioManager.setCommunicationDevice(speaker)
                             } else {
                                 audioManager.clearCommunicationDevice()
                             }
                         }
                     }
-                    @Suppress("DEPRECATION")
-                    runCatching { audioManager.isSpeakerphoneOn = false }
+                } else {
+                    forceSpeaker.value = false
+                    val targetDevice = option.deviceInfo ?: devices.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                            it.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                            it.type == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+                            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                            it.type == AudioDeviceInfo.TYPE_USB_DEVICE
+                    }
+                    preferredDevice.value = targetDevice
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        runCatching {
+                            if (targetDevice != null) {
+                                audioManager.setCommunicationDevice(targetDevice)
+                            } else {
+                                audioManager.clearCommunicationDevice()
+                            }
+                        }
+                    }
                 }
             } else {
                 @Suppress("DEPRECATION")

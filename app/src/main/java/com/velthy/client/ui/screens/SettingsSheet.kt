@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import android.content.Context
 import android.content.Intent
@@ -716,6 +716,23 @@ fun SettingsScreen(
                 },
                 onClick = {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://velthy.my.id")))
+                },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.AutoAwesome,
+                title = "Setup Wizard & Onboarding",
+                subtitle = "Replay first-launch welcome and personalization guide",
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                },
+                onClick = {
+                    AppSettings.setHasCompletedOnboarding(false)
                 },
             )
         }

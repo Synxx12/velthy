@@ -1,4 +1,4 @@
-# Interactive Dev Runner for Musique (Single-Key Responsive)
+# Interactive Dev Runner for Velthy (Single-Key Responsive)
 param(
     [string]$TargetDevice = ""
 )
@@ -61,17 +61,21 @@ function Select-TargetDevice ([bool]$Interactive = $false) {
     }
     Write-Host "Tekan angka pilihan (1-$($devices.Count)): " -NoNewline -ForegroundColor Yellow
 
-    $key = [System.Console]::ReadKey($true)
-    $char = $key.KeyChar.ToString()
-    if ($char -match "^[1-9]$") {
-        $idx = [int]$char - 1
-        if ($idx -ge 0 -and $idx -lt $devices.Count) {
-            $Global:SelectedDevice = $devices[$idx].Id
-            $tag = if ($devices[$idx].IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
-            Write-Host "$char" -ForegroundColor Green
-            Write-Host "[OK] Target dipilih: $tag $($devices[$idx].Model) ($($devices[$idx].Id))`n" -ForegroundColor Green
-            return $Global:SelectedDevice
+    try {
+        $key = [System.Console]::ReadKey($true)
+        $char = $key.KeyChar.ToString()
+        if ($char -match "^[1-9]$") {
+            $idx = [int]$char - 1
+            if ($idx -ge 0 -and $idx -lt $devices.Count) {
+                $Global:SelectedDevice = $devices[$idx].Id
+                $tag = if ($devices[$idx].IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
+                Write-Host "$char" -ForegroundColor Green
+                Write-Host "[OK] Target dipilih: $tag $($devices[$idx].Model) ($($devices[$idx].Id))`n" -ForegroundColor Green
+                return $Global:SelectedDevice
+            }
         }
+    } catch {
+        return $null
     }
 
     # Fallback default ke perangkat pertama jika input lain
@@ -100,6 +104,10 @@ function Run-BuildAndLaunch {
         if ($apkPath -and (Test-Path $apkPath.FullName)) {
             Write-Host "[+] Memasang APK ($($apkPath.Name)) ke $device..." -ForegroundColor Cyan
             adb -s "$device" install -r -d -t $apkPath.FullName
+            
+            # Bersihkan file staging APK sementara di HP agar tidak menumpuk di internal storage
+            adb -s "$device" shell "rm -f /data/local/tmp/*.apk" 2>$null
+            
             adb -s "$device" shell am start -n com.velthy.client.dev/com.velthy.client.MainActivity | Out-Null
             
             $stopwatch.Stop()
@@ -114,6 +122,53 @@ function Run-BuildAndLaunch {
     }
 }
 
+function Take-DeviceScreenshot {
+    if (-not $Global:SelectedDevice) {
+        Write-Host "`n[!] Tidak ada target perangkat yang aktif." -ForegroundColor Red
+        return
+    }
+
+    $device = $Global:SelectedDevice
+    $screenshotDir = Join-Path $PSScriptRoot "screenshots"
+    if (-not (Test-Path $screenshotDir)) {
+        New-Item -ItemType Directory -Path $screenshotDir -Force | Out-Null
+    }
+
+    $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
+    $fileName = "velthy_${timestamp}.png"
+    $localPath = Join-Path $screenshotDir $fileName
+    $remotePath = "/data/local/tmp/velthy_shot_${timestamp}.png"
+
+    Write-Host "`n[+] Mengambil screenshot layar dari $device..." -ForegroundColor Cyan
+    adb -s "$device" shell screencap -p "$remotePath"
+    if ($LASTEXITCODE -eq 0) {
+        adb -s "$device" pull "$remotePath" "$localPath" | Out-Null
+        adb -s "$device" shell rm -f "$remotePath" 2>$null
+
+        if (Test-Path $localPath) {
+            Write-Host "[OK] 📸 Screenshot tersimpan: $localPath" -ForegroundColor Green
+            # Buka otomatis di image viewer bawaan OS
+            Start-Process "$localPath"
+        } else {
+            Write-Host "[X] Gagal mengunduh screenshot ke PC." -ForegroundColor Red
+        }
+    } else {
+        Write-Host "[X] Gagal mengeksekusi screencap di perangkat." -ForegroundColor Red
+    }
+}
+
+function Restart-AppOnly {
+    if (-not $Global:SelectedDevice) {
+        Write-Host "`n[!] Tidak ada target perangkat yang aktif." -ForegroundColor Red
+        return
+    }
+    $device = $Global:SelectedDevice
+    Write-Host "`n[+] Me-restart aplikasi Velthy di $device..." -ForegroundColor Cyan
+    adb -s "$device" shell am force-stop com.velthy.client.dev
+    adb -s "$device" shell am start -n com.velthy.client.dev/com.velthy.client.MainActivity | Out-Null
+    Write-Host "[OK] ⚡ Aplikasi dibuka kembali tanpa compile ulang.`n" -ForegroundColor Green
+}
+
 # 1. Pilih target device di awal jika ada lebih dari 1 perangkat
 $devices = Get-ConnectedDevices
 if ($devices.Count -gt 1) {
@@ -125,44 +180,73 @@ if ($devices.Count -gt 1) {
 # 2. Jalankan build & launch pertama kali
 Run-BuildAndLaunch
 
-# 3. Main interactive loop
-while ($true) {
-    Write-Host "`n----------------------------------------" -ForegroundColor DarkGray
-    Write-Host "Target: $($Global:SelectedDevice)" -ForegroundColor Magenta
-    Write-Host " [r] Reload  [d] Ganti Device  [l] Logcat  [c] Clear  [q] Keluar" -ForegroundColor Cyan
-    Write-Host " (Tekan hurufnya langsung tanpa perlu Enter)" -ForegroundColor DarkGray
-    Write-Host "----------------------------------------" -ForegroundColor DarkGray
+# 3. Main interactive loop dengan penanganan aman Ctrl+C dan shortcut instan
+try {
+    while ($true) {
+        Write-Host "`n----------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "Target: $($Global:SelectedDevice)" -ForegroundColor Magenta
+        Write-Host " [r] Reload (Build)  [o] Quick Restart  [s] Screenshot  [k] Clean" -ForegroundColor Cyan
+        Write-Host " [x] Clear Cache     [l] Logcat         [d] Ganti Dev   [q] Keluar" -ForegroundColor Cyan
+        Write-Host " (Tekan hurufnya langsung | Ctrl+C / [q] untuk keluar)" -ForegroundColor DarkGray
+        Write-Host "----------------------------------------------------------------" -ForegroundColor DarkGray
 
-    $keyInfo = [System.Console]::ReadKey($true)
-    $keyChar = $keyInfo.KeyChar.ToString().ToLower()
-    $keyCode = $keyInfo.Key
-
-    if ($keyChar -eq "q" -or $keyCode -eq [System.ConsoleKey]::Escape) {
-        Write-Host "`nKeluar dari dev runner. Sampai jumpa! 👋" -ForegroundColor Yellow
-        break
-    } elseif ($keyChar -eq "d" -or $keyCode -eq [System.ConsoleKey]::Tab) {
-        Select-TargetDevice -Interactive $true
-    } elseif ($keyChar -eq "l") {
-        Write-Host "`n--- Logcat Terbaru (40 Baris) dari $Global:SelectedDevice ---" -ForegroundColor Yellow
-        if ($Global:SelectedDevice) {
-            adb -s "$Global:SelectedDevice" logcat -d -t 40 -s Musique:V AndroidRuntime:E
-        } else {
-            adb logcat -d -t 40 -s Musique:V AndroidRuntime:E
+        try {
+            $keyInfo = [System.Console]::ReadKey($true)
+        } catch {
+            Write-Host "`nKeluar dari dev runner. 👋" -ForegroundColor Yellow
+            break
         }
-    } elseif ($keyChar -eq "c") {
-        Clear-Host
-        Write-Host "========================================" -ForegroundColor Cyan
-        Write-Host "   Velthy Dev Runner (Live Dev)         " -ForegroundColor Yellow
-        Write-Host "========================================" -ForegroundColor Cyan
-    } elseif ($keyChar -eq "r" -or $keyCode -eq [System.ConsoleKey]::Enter -or $keyCode -eq [System.ConsoleKey]::Spacebar) {
-        Run-BuildAndLaunch
-    } elseif ($keyChar -match "^[1-9]$") {
-        $devs = Get-ConnectedDevices
-        $idx = [int]$keyChar - 1
-        if ($idx -ge 0 -and $idx -lt $devs.Count) {
-            $Global:SelectedDevice = $devs[$idx].Id
-            $tag = if ($devs[$idx].IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
-            Write-Host "`n[OK] ⚡ Beralih langsung ke: $tag $($devs[$idx].Model) ($($devs[$idx].Id))`n" -ForegroundColor Green
+
+        $keyChar = $keyInfo.KeyChar.ToString().ToLower()
+        $keyCode = $keyInfo.Key
+        $isCtrlC = ($keyCode -eq [System.ConsoleKey]::C -and ($keyInfo.Modifiers -band [System.ConsoleModifiers]::Control))
+
+        if ($keyChar -eq "q" -or $keyCode -eq [System.ConsoleKey]::Escape -or $isCtrlC) {
+            Write-Host "`nKeluar dari dev runner. Sampai jumpa! 👋" -ForegroundColor Yellow
+            break
+        } elseif ($keyChar -eq "s") {
+            Take-DeviceScreenshot
+        } elseif ($keyChar -eq "o") {
+            Restart-AppOnly
+        } elseif ($keyChar -eq "d" -or $keyCode -eq [System.ConsoleKey]::Tab) {
+            Select-TargetDevice -Interactive $true
+        } elseif ($keyChar -eq "k") {
+            Write-Host "`n[+] Menjalankan Gradle Clean..." -ForegroundColor Yellow
+            .\gradlew.bat clean
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[OK] Folder build dan cache intermediate berhasil dibersihkan!`n" -ForegroundColor Green
+            }
+        } elseif ($keyChar -eq "x") {
+            if ($Global:SelectedDevice) {
+                Write-Host "`n[+] Membersihkan data & cache aplikasi di $Global:SelectedDevice..." -ForegroundColor Yellow
+                adb -s "$Global:SelectedDevice" shell pm clear com.velthy.client.dev
+                Write-Host "[OK] Data & disk cache aplikasi berhasil dikosongkan.`n" -ForegroundColor Green
+            }
+        } elseif ($keyChar -eq "l") {
+            Write-Host "`n--- Logcat Terbaru (40 Baris) dari $Global:SelectedDevice ---" -ForegroundColor Yellow
+            if ($Global:SelectedDevice) {
+                adb -s "$Global:SelectedDevice" logcat -d -t 40 -s Musique:V AndroidRuntime:E
+            } else {
+                adb logcat -d -t 40 -s Musique:V AndroidRuntime:E
+            }
+        } elseif ($keyChar -eq "c") {
+            Clear-Host
+            Write-Host "========================================" -ForegroundColor Cyan
+            Write-Host "   Velthy Dev Runner (Live Dev)         " -ForegroundColor Yellow
+            Write-Host "========================================" -ForegroundColor Cyan
+        } elseif ($keyChar -eq "r" -or $keyCode -eq [System.ConsoleKey]::Enter -or $keyCode -eq [System.ConsoleKey]::Spacebar) {
+            Run-BuildAndLaunch
+        } elseif ($keyChar -match "^[1-9]$") {
+            $devs = Get-ConnectedDevices
+            $idx = [int]$keyChar - 1
+            if ($idx -ge 0 -and $idx -lt $devs.Count) {
+                $Global:SelectedDevice = $devs[$idx].Id
+                $tag = if ($devs[$idx].IsEmulator) { "[EMULATOR]" } else { "[HP FISIK]" }
+                Write-Host "`n[OK] ⚡ Beralih langsung ke: $tag $($devs[$idx].Model) ($($devs[$idx].Id))`n" -ForegroundColor Green
+            }
         }
     }
+} finally {
+    # Pastikan kursor konsol kembali normal saat keluar
+    [System.Console]::CursorVisible = $true
 }
