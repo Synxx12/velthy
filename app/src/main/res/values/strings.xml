@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Velthy</string>
+    <string name="playback_channel_name">Now playing</string>
+</resources>
