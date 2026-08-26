@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.innertube
+package com.velthy.client.data.innertube
 
 import android.os.SystemClock
 import android.util.Log
@@ -470,14 +470,21 @@ object StreamResolver {
          */
         val downloadExtension: String
             get() = when {
+                "mp4" in mimeType || "m4a" in mimeType || "aac" in mimeType -> "m4a"
+                "flac" in mimeType -> "flac"
+                "mp3" in mimeType || "mpeg" in mimeType -> "mp3"
                 isOpus || "webm" in mimeType -> "webm"
-                "mp4" in mimeType || "m4a" in mimeType -> "m4a"
-                else -> "webm"
+                else -> "m4a"
             }
 
         /** What the media store should be told this file is. */
         val downloadMimeType: String
-            get() = if (downloadExtension == "m4a") "audio/mp4" else "audio/webm"
+            get() = when (downloadExtension) {
+                "m4a" -> "audio/mp4"
+                "flac" -> "audio/flac"
+                "mp3" -> "audio/mpeg"
+                else -> "audio/ogg"
+            }
     }
 
     /**
@@ -517,56 +524,40 @@ object StreamResolver {
      */
     suspend fun resolveForDownload(videoId: String): Stream {
         init
-
-        // Whether any client offered Opus at all, as distinct from whether one
-        // could be turned into a working URL. Those are different failures and
-        // only one of them is a reason to accept a worse format: a track that
-        // genuinely has no Opus is a fact about the track, while Opus that
-        // won't probe is a bad afternoon on Google's side, and quietly saving
-        // AAC because of the latter would hand back a permanently worse file
-        // for a temporary reason.
+        val formatPref = AppSettings.downloadFormat.value
+        val preferM4a = formatPref == com.velthy.client.data.settings.DownloadFormat.M4A
         var offered = false
 
         repeat(DOWNLOAD_ATTEMPTS) { attempt ->
             if (attempt > 0) delay(DOWNLOAD_RETRY_MS)
-            // Fresh each time. Responses are only cached once a client has
-            // answered, and re-deriving a URL from a cached response produces
-            // the same URL that just failed to probe — so carrying the map
-            // across attempts would make every attempt after the first a
-            // no-op.
             val responses = mutableMapOf<PlayerClient, JsonObject>()
-            playerStream(videoId, { response -> pickOpus(response)?.also { offered = true } }, responses)
-                ?.let { return it }
+            val picker: (JsonObject) -> Audio? = if (preferM4a) {
+                { response -> pickM4a(response)?.also { offered = true } }
+            } else {
+                { response -> pickOpus(response)?.also { offered = true } }
+            }
+            playerStream(videoId, picker, responses)?.let { return it }
         }
 
-        // Not "try again later" — every client being refused at once is a state
-        // that lasts hours, and it is precisely the state [resolve] extracts its
-        // way out of. Asking for Opus specifically, because this is still a
-        // download: the failsafe is a different route to the bytes, not a
-        // licence to take a worse format.
-        Log.w(TAG, "no client minted a usable Opus URL for $videoId; extracting")
+        Log.w(TAG, "no client minted a usable stream for $videoId; extracting with NewPipe")
         runCatching {
             newPipeStream(videoId) { candidates ->
-                candidates.filter { it.second.isOpus }
+                val filtered = if (preferM4a) {
+                    candidates.filter { !it.second.isOpus && it.second.format == org.schabi.newpipe.extractor.MediaFormat.M4A }
+                } else {
+                    candidates.filter { it.second.isOpus }
+                }
+                filtered.ifEmpty { candidates }
                     .maxByOrNull { it.first }?.second
                     ?.also { offered = true }
             }
         }.onSuccess { return it }
-            .onFailure { Log.w(TAG, "extraction found no Opus for $videoId: ${it.message}") }
+            .onFailure { Log.w(TAG, "extraction failed for $videoId: ${it.message}") }
 
-        if (offered) {
-            error("Opus wasn't available for this track just now — try again")
-        }
-
-        Log.w(TAG, "nothing offered Opus for $videoId; taking the best available")
+        Log.w(TAG, "taking best available stream for $videoId")
         return playerStream(videoId, ::pickBest)
             ?: newPipeStream(videoId) { candidates ->
-                // Reached only when no client answered at all, so this is
-                // re-deriving the formats from scratch rather than picking
-                // over the ones already rejected — Opus is still worth asking
-                // for here, and still worth doing without.
-                val opus = candidates.filter { it.second.isOpus }
-                opus.ifEmpty { candidates }.maxByOrNull { it.first }?.second
+                candidates.maxByOrNull { it.first }?.second
             }
     }
 
@@ -771,6 +762,11 @@ object StreamResolver {
      */
     private fun pickOpus(response: JsonObject): Audio? =
         audioFormats(response).filter { it.isOpus }.maxByOrNull { it.kbps }
+
+    private fun pickM4a(response: JsonObject): Audio? =
+        audioFormats(response).filter { !it.isOpus && (it.mimeType.contains("mp4") || it.mimeType.contains("m4a") || it.mimeType.contains("aac")) }
+            .maxByOrNull { it.kbps }
+            ?: pickBest(response)
 
     /** The fallback for the rare track that no client offers Opus for. */
     private fun pickBest(response: JsonObject): Audio? =

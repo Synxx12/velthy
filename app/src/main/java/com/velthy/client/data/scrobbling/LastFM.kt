@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.scrobbling
+package com.velthy.client.data.scrobbling
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -196,6 +196,9 @@ object LastFM {
         apiKey: String,
         secret: String,
     ) {
+        require(apiKey.isNotBlank() && secret.isNotBlank()) {
+            "Last.fm API credentials are not configured for this build"
+        }
         configure(
             endpoint = runtimeConfig.endpoint,
             apiKey = apiKey,

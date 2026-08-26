@@ -88,6 +88,31 @@ object VelthyIcons {
         }.build()
     }
 
+    /**
+     * Clock face with two hands — a download asked for but not yet on disk.
+     */
+    val Clock: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "velthy_clock",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // Dial (full circle from two arcs)
+                moveTo(3.4f, 12f)
+                arcToRelative(8.6f, 8.6f, 0f, isMoreThanHalf = true, isPositiveArc = true, 17.2f, 0f)
+                arcToRelative(8.6f, 8.6f, 0f, isMoreThanHalf = true, isPositiveArc = true, -17.2f, 0f)
+                // Minute hand up, hour hand down to the right
+                moveTo(12f, 7.4f); lineTo(12f, 12f); lineTo(15.4f, 13.8f)
+            }
+        }.build()
+    }
+
     val Shuffle: ImageVector by lazy {
         ImageVector.Builder(
             name = "mq_shuffle",

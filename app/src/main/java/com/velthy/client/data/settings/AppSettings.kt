@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import com.velthy.client.BuildConfig
 import com.velthy.client.auth.AuthStore
 import com.velthy.client.data.lyrics.LyricsSource
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,35 @@ enum class AudioQuality(
 
 enum class ThemeMode(val label: String) {
     SYSTEM("System"), LIGHT("Light"), DARK("Dark")
+}
+
+enum class DownloadFormat(
+    val label: String,
+    val extension: String,
+    val mimeType: String,
+    val detail: String,
+) {
+    M4A("M4A (AAC)", "m4a", "audio/mp4", "Universal high-quality AAC format with full metadata tagging"),
+    OPUS("Opus (WebM)", "webm", "audio/webm", "Native YouTube Music high-efficiency audio format"),
+    FLAC("FLAC (Lossless)", "flac", "audio/flac", "Studio quality if available from Lossless sources"),
+}
+
+enum class DownloadLocation(
+    val label: String,
+    val detail: String,
+) {
+    APP_INTERNAL("App Internal (Secure)", "Saved securely in app private directory."),
+    PHONE_MUSIC("Phone Music Folder (/Music/Musique)", "Visible in File Manager & native phone music apps."),
+    DOWNLOADS("Downloads Folder (/Download/Velthy)", "Saved in device public downloads folder."),
+}
+
+enum class DownloadFolderStructure(
+    val label: String,
+    val pattern: String,
+) {
+    FLAT("Flat Single Folder", "Artist - Title.m4a"),
+    ARTIST_ALBUM("By Artist & Album", "/Artist/Album/Title.m4a"),
+    PLAYLIST("By Download Collection", "/Downloaded/Title.m4a"),
 }
 
 /**
@@ -126,6 +156,9 @@ object AppSettings {
     /** Drops haze blur (status bar, mini player, bottom fade, lyrics focus) for a solid-fill look. */
     val reduceDynamicBlur = MutableStateFlow(false)
 
+    /** Vibrate on button taps, player gestures, and tab switches. */
+    val hapticFeedback = MutableStateFlow(true)
+
     /**
      * Plays a looping video behind the cover art on the player when one is
      * published for the track — Spotify's Canvas, Apple's motion artwork.
@@ -214,6 +247,9 @@ object AppSettings {
 
     // ── Scrobbling ──────────────────────────────────────────────────────
 
+    /** One release gate shared by the settings UI and the playback service. */
+    val scrobblingAvailable = true
+
     val lastfmEnabled = MutableStateFlow(false)
     val lastfmUsername = MutableStateFlow("")
     val lastfmSessionKey = MutableStateFlow("")
@@ -261,6 +297,10 @@ object AppSettings {
      */
     val smartTransitionWindow = MutableStateFlow<TransitionWindow?>(null)
 
+    val downloadFormat = MutableStateFlow(DownloadFormat.M4A)
+    val downloadLocation = MutableStateFlow(DownloadLocation.APP_INTERNAL)
+    val downloadFolderStructure = MutableStateFlow(DownloadFolderStructure.FLAT)
+
     /** The ceiling that applies to a stream started right now. */
     val effectiveAudioQuality: AudioQuality
         get() = if (meteredConnection.value == true) {
@@ -291,6 +331,7 @@ object AppSettings {
         hideVolumeBar.value = prefs.getBoolean(KEY_HIDE_VOLUME_BAR, false)
         swipeToPlayNext.value = prefs.getBoolean(KEY_SWIPE_TO_PLAY_NEXT, false)
         reduceDynamicBlur.value = prefs.getBoolean(KEY_REDUCE_BLUR, false)
+        hapticFeedback.value = prefs.getBoolean(KEY_HAPTIC_FEEDBACK, true)
         animatedCanvas.value = prefs.getBoolean(KEY_ANIMATED_CANVAS, true)
         fullBleedArtwork.value = prefs.getBoolean(KEY_FULL_BLEED_ARTWORK, true)
         syncedLyrics.value = prefs.getBoolean(KEY_SYNCED_LYRICS, true)
@@ -305,11 +346,11 @@ object AppSettings {
         lastfmEnabled.value = prefs.getBoolean(KEY_LASTFM_ENABLED, false)
         lastfmUsername.value = prefs.getString(KEY_LASTFM_USERNAME, "").orEmpty()
         lastfmSessionKey.value = prefs.getString(KEY_LASTFM_SESSION_KEY, "").orEmpty()
-        lastfmApiKey.value = prefs.getString(KEY_LASTFM_API_KEY, "").orEmpty()
-        lastfmSecret.value = prefs.getString(KEY_LASTFM_SECRET, "").orEmpty()
+        lastfmApiKey.value = prefs.getString(KEY_LASTFM_API_KEY, "").orEmpty().ifBlank { BuildConfig.LASTFM_API_KEY }
+        lastfmSecret.value = prefs.getString(KEY_LASTFM_SECRET, "").orEmpty().ifBlank { BuildConfig.LASTFM_SECRET }
         lastfmEndpoint.value = prefs.getString(KEY_LASTFM_ENDPOINT, "").orEmpty()
         lastfmScrobbleEnabled.value = prefs.getBoolean(KEY_LASTFM_SCROBBLE_ENABLED, false)
-        lastfmNowPlaying.value = prefs.getBoolean(KEY_LASTFM_NOW_PLAYING, false)
+        lastfmNowPlaying.value = prefs.getBoolean(KEY_LASTFM_NOW_PLAYING, false) && lastfmScrobbleEnabled.value
         scrobbleMinDuration.value = prefs.getInt(KEY_SCROBBLE_MIN_DURATION, 30)
         scrobbleDelayPercent.value = prefs.getFloat(KEY_SCROBBLE_DELAY_PERCENT, 0.5f)
         scrobbleDelaySeconds.value = prefs.getInt(KEY_SCROBBLE_DELAY_SECONDS, 180)
@@ -331,7 +372,31 @@ object AppSettings {
         discordButton2Text.value = prefs.getString(KEY_DISCORD_BUTTON_2_TEXT, "").orEmpty()
         discordButton2Visible.value = prefs.getBoolean(KEY_DISCORD_BUTTON_2_VISIBLE, true)
         discordInfoDismissed.value = prefs.getBoolean(KEY_DISCORD_INFO_DISMISSED, false)
+        downloadFormat.value = runCatching {
+            DownloadFormat.valueOf(prefs.getString(KEY_DOWNLOAD_FORMAT, null) ?: "M4A")
+        }.getOrDefault(DownloadFormat.M4A)
+        downloadLocation.value = runCatching {
+            DownloadLocation.valueOf(prefs.getString(KEY_DOWNLOAD_LOCATION, null) ?: "APP_INTERNAL")
+        }.getOrDefault(DownloadLocation.APP_INTERNAL)
+        downloadFolderStructure.value = runCatching {
+            DownloadFolderStructure.valueOf(prefs.getString(KEY_DOWNLOAD_STRUCTURE, null) ?: "FLAT")
+        }.getOrDefault(DownloadFolderStructure.FLAT)
         watchConnection(context)
+    }
+
+    fun setDownloadFormat(format: DownloadFormat) {
+        downloadFormat.value = format
+        prefs.edit().putString(KEY_DOWNLOAD_FORMAT, format.name).apply()
+    }
+
+    fun setDownloadLocation(location: DownloadLocation) {
+        downloadLocation.value = location
+        prefs.edit().putString(KEY_DOWNLOAD_LOCATION, location.name).apply()
+    }
+
+    fun setDownloadFolderStructure(structure: DownloadFolderStructure) {
+        downloadFolderStructure.value = structure
+        prefs.edit().putString(KEY_DOWNLOAD_STRUCTURE, structure.name).apply()
     }
 
     fun setHasCompletedOnboarding(completed: Boolean) {
@@ -492,6 +557,11 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_REDUCE_BLUR, value).apply()
     }
 
+    fun setHapticFeedback(value: Boolean) {
+        hapticFeedback.value = value
+        prefs.edit().putBoolean(KEY_HAPTIC_FEEDBACK, value).apply()
+    }
+
     fun setSyncedLyrics(value: Boolean) {
         syncedLyrics.value = value
         prefs.edit().putBoolean(KEY_SYNCED_LYRICS, value).apply()
@@ -581,10 +651,15 @@ object AppSettings {
 
     fun setLastfmScrobbleEnabled(value: Boolean) {
         lastfmScrobbleEnabled.value = value
-        prefs.edit().putBoolean(KEY_LASTFM_SCROBBLE_ENABLED, value).apply()
+        if (!value) lastfmNowPlaying.value = false
+        prefs.edit()
+            .putBoolean(KEY_LASTFM_SCROBBLE_ENABLED, value)
+            .putBoolean(KEY_LASTFM_NOW_PLAYING, if (value) lastfmNowPlaying.value else false)
+            .apply()
     }
 
     fun setLastfmNowPlaying(value: Boolean) {
+        if (!lastfmScrobbleEnabled.value && value) return
         lastfmNowPlaying.value = value
         prefs.edit().putBoolean(KEY_LASTFM_NOW_PLAYING, value).apply()
     }
@@ -719,6 +794,7 @@ object AppSettings {
     private const val KEY_HIDE_VOLUME_BAR = "hide_volume_bar"
     private const val KEY_SWIPE_TO_PLAY_NEXT = "swipe_to_play_next"
     private const val KEY_REDUCE_BLUR = "reduce_dynamic_blur"
+    private const val KEY_HAPTIC_FEEDBACK = "haptic_feedback"
     private const val KEY_ANIMATED_CANVAS = "animated_canvas"
     private const val KEY_FULL_BLEED_ARTWORK = "full_bleed_artwork"
     private const val KEY_SYNCED_LYRICS = "synced_lyrics"
@@ -758,6 +834,9 @@ object AppSettings {
     private const val KEY_DISCORD_INFO_DISMISSED = "discord_info_dismissed"
     private const val KEY_LAST_VERSION_CODE = "last_version_code"
     private const val KEY_COMPLETED_ONBOARDING = "completed_onboarding"
+    private const val KEY_DOWNLOAD_FORMAT = "download_format"
+    private const val KEY_DOWNLOAD_LOCATION = "download_location"
+    private const val KEY_DOWNLOAD_STRUCTURE = "download_structure"
 }
 
 /**

@@ -107,7 +107,6 @@ fun FrostedTopBar(
             .then(
                 when {
                     !ownBackdrop -> Modifier
-                    searchBar != null && !scrolled -> Modifier
                     reduceDynamicBlur -> Modifier.background(MaterialTheme.colorScheme.surface)
                     else -> Modifier.hazeEffect(
                         state = hazeState,

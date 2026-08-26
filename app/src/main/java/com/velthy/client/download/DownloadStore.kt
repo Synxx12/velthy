@@ -1,4 +1,4 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
 
 import android.content.ContentValues
 import android.content.Context
@@ -93,7 +93,7 @@ object DownloadStore {
      * Everything a FAT32 volume, the media store or a shell would each object
      * to for its own reasons, plus the whitespace that survives them.
      */
-    private fun sanitise(raw: String): String = raw
+    fun sanitise(raw: String): String = raw
         .replace(ILLEGAL, " ")
         .replace(WHITESPACE, " ")
         .trim()
@@ -114,7 +114,9 @@ object DownloadStore {
     fun storable(codec: String?): Storable? = when (codec?.lowercase()?.trim()) {
         "flac", "x-flac" -> Storable("flac", "audio/flac")
         "wav", "x-wav", "wave" -> Storable("wav", "audio/x-wav")
-        "alac", "m4a", "mp4" -> Storable("m4a", "audio/mp4")
+        "alac", "m4a", "mp4", "aac" -> Storable("m4a", "audio/mp4")
+        "mp3", "mpeg" -> Storable("mp3", "audio/mpeg")
+        "opus", "webm" -> Storable("webm", "audio/ogg")
         else -> null
     }
 
@@ -122,18 +124,17 @@ object DownloadStore {
 
     /**
      * The uri of a file already saved under this name, or null.
-     *
-     * Worth asking before every download because the media store does not
-     * refuse a duplicate — it silently renames it to `… (1)`, and a user who
-     * taps download twice gets two copies rather than being told they already
-     * have one.
      */
-    fun existing(context: Context, name: String): Uri? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    fun existing(context: Context, name: String): Uri? {
+        val internalFile = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), name)
+        if (internalFile.exists()) return Uri.fromFile(internalFile)
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             mediaStoreEntry(context, name)
         } else {
             legacyFile(name).takeIf { it.exists() }?.let(Uri::fromFile)
         }
+    }
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun mediaStoreEntry(context: Context, name: String): Uri? = runCatching {
@@ -154,12 +155,6 @@ object DownloadStore {
 
     /**
      * Whether [uri] still names a file that is there.
-     *
-     * The record of what has been downloaded is kept by this app, but the files
-     * are not this app's to keep: they sit in a folder built for the user to
-     * manage, and one deleted from a file manager leaves the record behind
-     * claiming a download that no longer exists. Cheap to ask, and the answer
-     * is what stops the menu offering to delete nothing.
      */
     fun exists(context: Context, uri: Uri): Boolean = runCatching {
         if (uri.scheme == "file") return uri.path?.let { File(it).exists() } == true
@@ -178,18 +173,14 @@ object DownloadStore {
 
     /**
      * A destination that exists but is not yet a file anyone else can see.
-     *
-     * Every path out of here is either [commit] or [abort]; there is no third
-     * option, because the thing being protected against is a partial file
-     * surviving a failure and looking like a whole one.
      */
     class Pending internal constructor(
         private val context: Context,
         val uri: Uri,
         val name: String,
-        /** Set on the legacy path only: the `.part` file being written. */
+        /** Set on file-based paths: the `.part` file being written. */
         private val part: File?,
-        /** Set on the legacy path only: what [part] is renamed to. */
+        /** Set on file-based paths: what [part] is renamed to. */
         private val target: File?,
     ) {
         fun openStream(): OutputStream =
@@ -201,8 +192,6 @@ object DownloadStore {
         fun commit(): Uri {
             if (part != null && target != null) {
                 if (!part.renameTo(target)) error("Could not finish writing $name")
-                // Nothing indexes a file that simply appeared; without this it
-                // is on disk and invisible to every app that lists media.
                 MediaScannerConnection.scanFile(
                     context,
                     arrayOf(target.absolutePath),
@@ -228,29 +217,91 @@ object DownloadStore {
 
     /**
      * Reserve [name] and return somewhere to write it.
-     *
-     * @throws IllegalStateException if the folder or the store row can't be
-     *   made — a failure worth surfacing, since every one of them means the
-     *   download cannot start rather than that it might not finish.
      */
-    fun begin(context: Context, name: String, mimeType: String): Pending {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
-            }
-            val uri = context.contentResolver
-                .insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
-                ?: error("Could not create $name in Music")
-            return Pending(context, uri, name, part = null, target = null)
+    fun begin(
+        context: Context,
+        name: String,
+        mimeType: String,
+        subfolder: String = "",
+    ): Pending {
+        val location = com.velthy.client.data.settings.AppSettings.downloadLocation.value
+        val safeMimeType = when {
+            name.endsWith(".m4a") || mimeType == "audio/mp4" -> "audio/mp4"
+            name.endsWith(".flac") || mimeType == "audio/flac" -> "audio/flac"
+            name.endsWith(".mp3") || mimeType == "audio/mpeg" -> "audio/mpeg"
+            else -> "audio/ogg" // Universal audio MIME type for Opus/WebM accepted across all Android devices
         }
 
-        val target = legacyFile(name)
-        val folder = target.parentFile ?: error("No Music folder on this device")
-        if (!folder.exists() && !folder.mkdirs()) error("Could not create ${folder.path}")
-        val part = File(folder, "$name.part")
+        // 1. App Internal (Private Directory)
+        if (location == com.velthy.client.data.settings.DownloadLocation.APP_INTERNAL) {
+            val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: context.filesDir
+            val targetDir = if (subfolder.isNotBlank()) File(baseDir, subfolder) else baseDir
+            if (!targetDir.exists()) targetDir.mkdirs()
+            val target = File(targetDir, name)
+            val part = File(targetDir, "$name.part")
+            part.delete()
+            return Pending(context, Uri.fromFile(target), name, part = part, target = target)
+        }
+
+        // 2. Phone Music Folder (/Music/Velthy)
+        if (location == com.velthy.client.data.settings.DownloadLocation.PHONE_MUSIC) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val relPath = if (subfolder.isNotBlank()) "${Environment.DIRECTORY_MUSIC}/$FOLDER/$subfolder" else "${Environment.DIRECTORY_MUSIC}/$FOLDER"
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, safeMimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = runCatching {
+                    context.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+                }.getOrNull()
+
+                if (uri != null) {
+                    return Pending(context, uri, name, part = null, target = null)
+                }
+                // Fallback to internal storage if MediaStore is restricted on this OEM
+                val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: context.filesDir
+                val targetDir = if (subfolder.isNotBlank()) File(baseDir, subfolder) else baseDir
+                if (!targetDir.exists()) targetDir.mkdirs()
+                val target = File(targetDir, name)
+                val part = File(targetDir, "$name.part")
+                part.delete()
+                return Pending(context, Uri.fromFile(target), name, part = part, target = target)
+            } else {
+                val baseDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), FOLDER)
+                val targetDir = if (subfolder.isNotBlank()) File(baseDir, subfolder) else baseDir
+                if (!targetDir.exists()) targetDir.mkdirs()
+                val target = File(targetDir, name)
+                val part = File(targetDir, "$name.part")
+                part.delete()
+                return Pending(context, Uri.fromFile(target), name, part = part, target = target)
+            }
+        }
+
+        // 3. Downloads Folder (/Download/Velthy)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val relPath = if (subfolder.isNotBlank()) "${Environment.DIRECTORY_DOWNLOADS}/$FOLDER/$subfolder" else "${Environment.DIRECTORY_DOWNLOADS}/$FOLDER"
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, safeMimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = runCatching {
+                context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            }.getOrNull()
+
+            if (uri != null) {
+                return Pending(context, uri, name, part = null, target = null)
+            }
+        }
+
+        val baseDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), FOLDER)
+        val targetDir = if (subfolder.isNotBlank()) File(baseDir, subfolder) else baseDir
+        if (!targetDir.exists()) targetDir.mkdirs()
+        val target = File(targetDir, name)
+        val part = File(targetDir, "$name.part")
         part.delete()
         return Pending(context, Uri.fromFile(target), name, part = part, target = target)
     }

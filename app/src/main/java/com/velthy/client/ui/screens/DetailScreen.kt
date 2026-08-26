@@ -262,6 +262,7 @@ fun DetailScreen(
                             rowBackground = Color.Transparent,
                             trackNumber = (index + 1).takeIf { numbered },
                             subtitleColor = palette.onBackgroundVariant,
+                            downloadedTint = palette.onBackgroundVariant,
                         )
                         if (index < state.data.lastIndex) {
                             HorizontalDivider(

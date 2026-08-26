@@ -27,6 +27,7 @@ data class SavedAccount(
  */
 class AuthStore(context: Context) {
 
+    private val appContext = context.applicationContext
     private val json = Json { ignoreUnknownKeys = true }
 
     private val prefs: SharedPreferences = runCatching {
@@ -45,8 +46,8 @@ class AuthStore(context: Context) {
     }
 
     init {
-        // Automatically migrate authenticated session from legacy "musique_auth" to "velthy_auth"
-        if (prefs.getString(KEY_COOKIE, null).isNullOrBlank()) {
+        // Automatically migrate authenticated session from legacy "musique_auth" to "velthy_auth" only once
+        if (!prefs.getBoolean(KEY_MIGRATED, false)) {
             runCatching {
                 val legacyEncrypted = EncryptedSharedPreferences.create(
                     context,
@@ -59,26 +60,29 @@ class AuthStore(context: Context) {
                 )
                 val legacyCookie = legacyEncrypted.getString(KEY_COOKIE, null)
                 val legacyAccounts = legacyEncrypted.getString(KEY_SAVED_ACCOUNTS, null)
-                if (!legacyCookie.isNullOrBlank()) {
+                if (!legacyCookie.isNullOrBlank() && prefs.getString(KEY_COOKIE, null).isNullOrBlank()) {
                     prefs.edit()
                         .putString(KEY_COOKIE, legacyCookie)
                         .putString(KEY_SAVED_ACCOUNTS, legacyAccounts)
                         .apply()
                     Log.d("Velthy", "Migrated authenticated session from musique_auth to velthy_auth successfully.")
                 }
+                legacyEncrypted.edit().clear().apply()
             }
-            if (prefs.getString(KEY_COOKIE, null).isNullOrBlank()) {
+            runCatching {
                 val legacyPlain = context.getSharedPreferences("musique_auth_plain", Context.MODE_PRIVATE)
                 val legacyCookie = legacyPlain.getString(KEY_COOKIE, null)
                 val legacyAccounts = legacyPlain.getString(KEY_SAVED_ACCOUNTS, null)
-                if (!legacyCookie.isNullOrBlank()) {
+                if (!legacyCookie.isNullOrBlank() && prefs.getString(KEY_COOKIE, null).isNullOrBlank()) {
                     prefs.edit()
                         .putString(KEY_COOKIE, legacyCookie)
                         .putString(KEY_SAVED_ACCOUNTS, legacyAccounts)
                         .apply()
                     Log.d("Velthy", "Migrated session from musique_auth_plain to velthy_auth successfully.")
                 }
+                legacyPlain.edit().clear().apply()
             }
+            prefs.edit().putBoolean(KEY_MIGRATED, true).apply()
         }
     }
 
@@ -139,12 +143,30 @@ class AuthStore(context: Context) {
         set(value) = prefs.edit().putString(KEY_DISCORD_AUTH_STATE, value).apply()
 
     fun signOut() {
-        prefs.edit().remove(KEY_COOKIE).apply()
+        prefs.edit()
+            .remove(KEY_COOKIE)
+            .putBoolean(KEY_MIGRATED, true)
+            .apply()
+        runCatching {
+            appContext.getSharedPreferences("musique_auth_plain", Context.MODE_PRIVATE).edit().clear().apply()
+        }
+        runCatching {
+            EncryptedSharedPreferences.create(
+                appContext,
+                "musique_auth",
+                MasterKey.Builder(appContext)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            ).edit().clear().apply()
+        }
     }
 
     private companion object {
         const val KEY_COOKIE = "cookie"
         const val KEY_SAVED_ACCOUNTS = "saved_accounts"
+        const val KEY_MIGRATED = "legacy_migrated"
         const val KEY_DISCORD_TOKEN = "discord_token"
         const val KEY_DISCORD_CODE_VERIFIER = "discord_code_verifier"
         const val KEY_DISCORD_AUTH_STATE = "discord_auth_state"

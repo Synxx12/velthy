@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import android.content.Intent
 import android.net.Uri
@@ -144,7 +144,8 @@ fun SongActionsSheet(
     val disliked = likeStatus == LikeStatus.DISLIKE
     // A local file or a finished download has no YouTube identity behind it to
     // rate, save, queue into a playlist, fetch again, or share a link for.
-    val isOffline = song.localUri != null
+    val isLocalFile = song.videoId.startsWith("content://") || song.videoId.startsWith("file://")
+    val isOffline = song.localUri != null || isLocalFile
 
     TintedSheet(palette = palette, imageUrl = song.thumbnailUrl, modifier = modifier) {
         if (pickingSleepTimer) {
@@ -191,7 +192,9 @@ fun SongActionsSheet(
             )
         }
 
-        DownloadRow(song, palette, isOffline, onDownload)
+        if (!isLocalFile) {
+            DownloadRow(song, palette, isOffline, onDownload)
+        }
         ActionRow(
             icon = Icons.AutoMirrored.Rounded.PlaylistPlay,
             label = "Play next",
@@ -205,11 +208,11 @@ fun SongActionsSheet(
             onClick = onAddToQueue,
         )
         when (val id = song.albumId) {
-            null -> if (resolvingLinks) LoadingActionRow(Icons.Rounded.Album, "Open album", palette)
+            null -> if (resolvingLinks && !isLocalFile) LoadingActionRow(Icons.Rounded.Album, "Open album", palette)
             else -> ActionRow(Icons.Rounded.Album, "Open album", accent = palette.accent) { onOpenAlbum(id) }
         }
         when (val id = song.artistId) {
-            null -> if (resolvingLinks) LoadingActionRow(Icons.Rounded.Person, "Open artist", palette)
+            null -> if (resolvingLinks && !isLocalFile) LoadingActionRow(Icons.Rounded.Person, "Open artist", palette)
             else -> ActionRow(Icons.Rounded.Person, "Open artist", accent = palette.accent) { onOpenArtist(id) }
         }
         if (showSleepTimer) {
@@ -222,7 +225,7 @@ fun SongActionsSheet(
 
             val nerd = com.velthy.client.data.NerdStats.current.collectAsStateWithLifecycle().value
             val isPlayingThis = com.velthy.client.playback.PlaybackService.isCurrentMediaId(song.videoId)
-            if (isPlayingThis) {
+            if (isPlayingThis && !isLocalFile) {
                 val racingSet by com.velthy.client.data.NerdStats.racingLossless.collectAsStateWithLifecycle()
                 val isSearchingLossless = song.videoId in racingSet
                 val isLossless = nerd?.isLossless == true

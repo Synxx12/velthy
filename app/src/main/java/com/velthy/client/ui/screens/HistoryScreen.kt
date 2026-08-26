@@ -58,6 +58,7 @@ import com.velthy.client.data.history.PlaybackHistoryManager.HistoryItem
 import com.velthy.client.data.model.ROW_ART_PX
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.artworkAt
+import com.velthy.client.ui.components.MessageState
 import com.velthy.client.ui.components.PAGE_GUTTER
 import com.velthy.client.ui.components.PullToRefresh
 import com.velthy.client.ui.components.thumbnailBorder
@@ -70,6 +71,8 @@ enum class HistorySourceTab {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
+    signedIn: Boolean,
+    onSignIn: () -> Unit,
     localHistoryItems: List<HistoryItem>,
     remoteHistoryItems: List<HistoryItem>,
     currentSong: Song? = null,
@@ -89,15 +92,15 @@ fun HistoryScreen(
 
     val activeItems = when (selectedTab) {
         HistorySourceTab.LOCAL -> localHistoryItems
-        HistorySourceTab.REMOTE -> remoteHistoryItems
+        HistorySourceTab.REMOTE -> if (signedIn) remoteHistoryItems else emptyList()
     }
 
     val grouped = remember(activeItems) {
         PlaybackHistoryManager.groupHistory(activeItems)
     }
 
-    androidx.compose.runtime.LaunchedEffect(selectedTab) {
-        if (selectedTab == HistorySourceTab.REMOTE) {
+    androidx.compose.runtime.LaunchedEffect(selectedTab, signedIn) {
+        if (selectedTab == HistorySourceTab.REMOTE && signedIn) {
             onRefresh()
         }
     }
@@ -105,7 +108,7 @@ fun HistoryScreen(
     Box(modifier = modifier.fillMaxSize()) {
         PullToRefresh(
             refreshing = refreshing,
-            onRefresh = onRefresh,
+            onRefresh = { if (signedIn) onRefresh() },
             state = pullState,
             modifier = Modifier.fillMaxSize(),
         ) {
@@ -122,12 +125,27 @@ fun HistoryScreen(
                     HistoryHeaderCard(
                         selectedTab = selectedTab,
                         localCount = localHistoryItems.size,
-                        remoteCount = remoteHistoryItems.size,
+                        remoteCount = if (signedIn) remoteHistoryItems.size else 0,
+                        signedIn = signedIn,
                         onTabSelected = { selectedTab = it },
                     )
                 }
 
-                if (activeItems.isEmpty()) {
+                if (selectedTab == HistorySourceTab.REMOTE && !signedIn) {
+                    item(key = "history_signin_prompt", contentType = "signin") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 24.dp, bottom = 24.dp),
+                        ) {
+                            MessageState(
+                                message = "Sign in to your Google account to see and sync your YouTube Music cloud listening history.",
+                                actionLabel = "Sign in",
+                                onAction = onSignIn,
+                            )
+                        }
+                    }
+                } else if (activeItems.isEmpty()) {
                     item(key = "history_empty_state", contentType = "empty") {
                         EmptyHistoryView(
                             isRemote = selectedTab == HistorySourceTab.REMOTE,
@@ -237,6 +255,7 @@ private fun HistoryHeaderCard(
     selectedTab: HistorySourceTab,
     localCount: Int,
     remoteCount: Int,
+    signedIn: Boolean,
     onTabSelected: (HistorySourceTab) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -244,8 +263,8 @@ private fun HistoryHeaderCard(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = PAGE_GUTTER, vertical = 4.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Row(
@@ -256,7 +275,7 @@ private fun HistoryHeaderCard(
                 modifier = Modifier
                     .size(46.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                    .background(Color.White.copy(alpha = 0.10f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -285,7 +304,11 @@ private fun HistoryHeaderCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = if (selectedTab == HistorySourceTab.LOCAL) "$localCount songs" else "$remoteCount songs",
+                    text = when {
+                        selectedTab == HistorySourceTab.LOCAL -> "$localCount songs"
+                        !signedIn -> "Sign in to view"
+                        else -> "$remoteCount songs"
+                    },
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -298,8 +321,8 @@ private fun HistoryHeaderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.Black.copy(alpha = 0.25f))
                 .padding(3.dp),
         ) {
             SegmentedPill(
@@ -326,17 +349,17 @@ private fun SegmentedPill(
     modifier: Modifier = Modifier,
 ) {
     val bgColor by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        targetValue = if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent,
         label = "pill_bg",
     )
     val textColor by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        targetValue = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
         label = "pill_text",
     )
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(9.dp))
+            .clip(RoundedCornerShape(11.dp))
             .background(bgColor)
             .clickable(onClick = onClick)
             .padding(vertical = 7.dp),

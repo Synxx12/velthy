@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.sources
+package com.velthy.client.data.sources
 
 import android.net.Uri
 import android.util.Log
@@ -145,6 +145,7 @@ object SourceResolver {
      */
     suspend fun substituteForYouTube(target: TrackMatcher.Target): SourceStream? {
         if (target.title.isBlank()) return null
+        if (!AppSettings.isLosslessAllowedNow) return null
         val active = SourceRegistry.active()
         val youtube = active.firstOrNull { it.kind == SourceKind.YOUTUBE } ?: return null
         val request = requestForNow()
@@ -338,7 +339,8 @@ object SourceResolver {
      * a YouTube id before anyone has asked a source for it.
      */
     fun canSubstituteForYouTube(): Boolean =
-        SourceRegistry.active().indexOfFirst { it.kind == SourceKind.YOUTUBE } > 0
+        AppSettings.isLosslessAllowedNow &&
+            SourceRegistry.active().indexOfFirst { it.kind == SourceKind.YOUTUBE } > 0
 
     /**
      * The sources ranked above [configId], in order.

@@ -2,6 +2,7 @@ package com.velthy.client.playback
 
 import android.content.ComponentName
 import android.net.Uri
+import android.os.Bundle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -17,12 +18,14 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.velthy.client.data.model.NOTIFICATION_ART_PX
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.sources.TrackMatcher
+import com.velthy.client.download.Downloads
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -68,6 +71,14 @@ fun rememberMediaController(): MediaController? {
     return controller
 }
 
+/** Routes the player-screen AutoPlay button through the playback service. */
+fun MediaController.toggleAutoplay() {
+    sendCustomCommand(
+        SessionCommand(PlaybackService.ACTION_TOGGLE_AUTOPLAY, Bundle.EMPTY),
+        Bundle.EMPTY,
+    )
+}
+
 /** Mirrors the controller into Compose state, polling position while playing. */
 @Composable
 fun rememberPlayerState(controller: MediaController?): PlayerState {
@@ -80,7 +91,7 @@ fun rememberPlayerState(controller: MediaController?): PlayerState {
             val item = player.currentMediaItem
             state = state.copy(
                 song = item?.toSong(),
-                isPlaying = player.isPlaying,
+                isPlaying = player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING),
                 // Sync position here too, so seeking while paused or buffering
                 // still moves the scrubber (the poll loop only runs on play).
                 positionMs = player.currentPosition.coerceAtLeast(0L),
@@ -213,8 +224,11 @@ private fun resolvePlaybackUri(uriString: String, localPath: String?): String {
     if (localPath.isNullOrBlank() || !uriString.startsWith("content://")) return uriString
     val ext = localPath.substringAfterLast('.', "").lowercase()
     if (ext !in DIRECT_FILE_URI_EXTENSIONS) return uriString
-    val file = File(localPath)
-    return if (file.exists() && file.canRead()) Uri.fromFile(file).toString() else uriString
+    val file = java.io.File(localPath)
+    if (file.exists() && file.canRead()) {
+        return "file://$localPath"
+    }
+    return uriString
 }
 
 /**
@@ -234,21 +248,11 @@ private fun Song.matchQuery(): String = buildString {
 
 fun Song.toMediaItem(): MediaItem {
     val sourceTrack = SourceRegistry.parseTrackKey(videoId)
-    val uriString = localUri ?: when {
+    val offlineUri = localUri ?: Downloads.saved.value[videoId]
+    val uriString = offlineUri ?: when {
         videoId.startsWith("content://") || videoId.startsWith("file://") -> videoId
-        // Title, artist and runtime ride along in the URI because they are what
-        // a cross-source match is made on, and the resolver runs on ExoPlayer's
-        // loader thread with nothing but a DataSpec in hand — see
-        // [SourceResolver.resolve]. Read-ahead resolves tracks that aren't the
-        // current item, so reaching back for the session's metadata isn't an
-        // option either.
         sourceTrack != null -> SourceRegistry.trackUri(sourceTrack.first, sourceTrack.second)
             .let { "$it${matchQuery()}" }
-        // The same three fields, for the same reason, on the YouTube path: a
-        // source ranked above YouTube gets offered this track before YouTube
-        // resolves it — see [SourceResolver.substituteForYouTube] — and that
-        // match is made on them, which the loader thread has no other way to
-        // reach.
         else -> "velthy://watch?v=$videoId${matchQuery()}"
     }
     return MediaItem.Builder()
@@ -258,37 +262,16 @@ fun Song.toMediaItem(): MediaItem {
         MediaMetadata.Builder()
             .setTitle(title)
             .setArtist(artist)
-            // Sized here rather than left as stored: this is what the lock
-            // screen, the notification and Android Auto draw, all of them
-            // large, and none of them go back for a better copy later.
             .setArtworkUri(artworkAt(NOTIFICATION_ART_PX)?.toUri())
-            // System media surfaces (One UI's Now Bar, Android Auto, Assistant)
-            // classify a session by its media type; untyped sessions get treated
-            // as generic audio and lose the music-specific card.
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .setIsPlayable(true)
             .setIsBrowsable(false)
-            // What a queue entry has to carry about itself: which section of
-            // the queue it belongs to, whether it is playing off the device,
-            // and how long the row that queued it said it runs. The uri two
-            // lines up answers the second question but does not survive the
-            // trip back out — Media3 leaves a MediaItem's localConfiguration
-            // out of the bundle it sends to a MediaController — so without this
-            // a track playing from a file reaches the UI looking like any other
-            // YouTube track, and the player's menu offers to rate, download and
-            // share it.
-            //
-            // Set for every track rather than only the local and AutoPlay ones,
-            // because the runtime applies to all of them: gated on those two, a
-            // plain YouTube track carried no extras at all, so [toSong] read
-            // back a null duration, [LastPlayed] stored a null, and the restored
-            // queue lost the `&d=` its matching depends on.
             .apply {
-                if (fromAutoplay || localUri != null || durationText != null) {
+                if (fromAutoplay || offlineUri != null || durationText != null) {
                     setExtras(
                         bundleOf(
                             EXTRA_FROM_AUTOPLAY to fromAutoplay,
-                            EXTRA_LOCAL_URI to localUri,
+                            EXTRA_LOCAL_URI to offlineUri,
                             EXTRA_LOCAL_PATH to localPath,
                             EXTRA_DURATION to durationText,
                         ),

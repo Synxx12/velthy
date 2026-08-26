@@ -56,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -83,7 +85,7 @@ fun FloatingBottomBar(
 ) {
     val container = MaterialTheme.colorScheme.surface
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    val haptics = LocalHapticFeedback.current
+    val haptics = rememberHaptics()
     val density = LocalDensity.current
 
     val mainTabs = if (tabs.size > 1) tabs.dropLast(1) else tabs
@@ -224,7 +226,7 @@ fun FloatingBottomBar(
                                         .coerceIn(0f, mainTabs.lastIndex.toFloat())
                                         .roundToInt()
                                 tag@ if (approxTab != lastHapticTab) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    haptics.play(Haptic.Tick)
                                     lastHapticTab = approxTab
                                 }
                             },
@@ -238,7 +240,7 @@ fun FloatingBottomBar(
                         tab = tab,
                         selected = index == selectedIndex,
                         onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            haptics.play(Haptic.Select)
                             onTabSelected(index)
                         },
                         modifier = Modifier.weight(1f),
@@ -287,7 +289,7 @@ fun FloatingBottomBar(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            haptics.play(Haptic.Select)
                             onTabSelected(searchTabIndex)
                         },
                     ),

@@ -9,9 +9,16 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.content.pm.PackageManager
+import android.view.View
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
+import androidx.compose.ui.platform.LocalView
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -518,6 +525,7 @@ fun NowPlayingScreen(
         canvas = CanvasRepository.canvasFor(song) ?: canvas
     }
 
+    val haptics = rememberHaptics()
     var scrubbing by remember { mutableStateOf(false) }
     var scrubValue by remember { mutableFloatStateOf(0f) }
     // The queue lives inside the player, Apple-style, rather than in a sheet.
@@ -535,6 +543,28 @@ fun NowPlayingScreen(
         }
     }
     LaunchedEffect(song.videoId) { lyricsOpen = false }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val view = LocalView.current
+        val hasOverlay = lyricsOpen || queueOpen || showSleepTimerSheet || showAudioOutputSheet
+        DisposableEffect(view, hasOverlay) {
+            val callback = if (hasOverlay) {
+                OverlayBack.register(view) {
+                    if (showSleepTimerSheet) {
+                        showSleepTimerSheet = false
+                    } else if (showAudioOutputSheet) {
+                        showAudioOutputSheet = false
+                    } else {
+                        lyricsOpen = false
+                        queueOpen = false
+                    }
+                }
+            } else {
+                null
+            }
+            onDispose { OverlayBack.unregister(view, callback) }
+        }
+    }
 
     BackHandler(enabled = lyricsOpen || queueOpen || showSleepTimerSheet || showAudioOutputSheet) {
         if (showSleepTimerSheet) {
@@ -1301,6 +1331,7 @@ fun NowPlayingScreen(
                     scrubValue = it
                 },
                 onValueChangeFinished = {
+                    haptics.play(Haptic.Select)
                     pendingSeek = scrubValue
                     onSeekFraction(scrubValue)
                     scrubbing = false
@@ -1316,6 +1347,7 @@ fun NowPlayingScreen(
                 transitionWindow = transitionWindow
                     ?.takeIf { !scrubbing && it.end > it.start }
                     ?.let { it.start..it.end },
+                isLoading = isLoading && !scrubbing,
             )
             val losslessOn by AppSettings.losslessAudio.collectAsStateWithLifecycle()
             val wifiQuality by AppSettings.audioQualityWifi.collectAsStateWithLifecycle()
@@ -1386,36 +1418,31 @@ fun NowPlayingScreen(
                     icon = Icons.Rounded.FastRewind,
                     contentDescription = "Previous",
                     size = 46.dp,
-                    onClick = onPrevious,
+                    onClick = {
+                        haptics.play(Haptic.SkipPrevious)
+                        onPrevious()
+                    },
                     // Lit whenever back has something to do — either a track to
                     // step to, or enough elapsed for it to restart this one.
                     enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
                 )
-                // While the stream URL resolves and buffers, the play glyph
-                // would be a lie — show progress instead.
-                if (isLoading) {
-                    // Same footprint as TransportGlyph(62.dp) — a smaller box
-                    // here would shunt everything below it on every load.
-                    Box(Modifier.size(74.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(38.dp),
-                        )
-                    }
-                } else {
-                    TransportGlyph(
-                        icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        size = 62.dp,
-                        onClick = onPlayPause,
-                    )
-                }
+                TransportGlyph(
+                    icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    size = 62.dp,
+                    onClick = {
+                        haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
+                        onPlayPause()
+                    },
+                )
                 TransportGlyph(
                     icon = Icons.Rounded.FastForward,
                     contentDescription = "Next",
                     size = 46.dp,
-                    onClick = onNext,
+                    onClick = {
+                        haptics.play(Haptic.SkipNext)
+                        onNext()
+                    },
                     enabled = hasNext,
                 )
             }
@@ -1485,6 +1512,7 @@ fun NowPlayingScreen(
                     icon = VelthyIcons.LyricsQuote,
                     contentDescription = "Lyrics",
                     onClick = {
+                        haptics.play(if (!lyricsOpen) Haptic.ToggleOn else Haptic.ToggleOff)
                         queueOpen = false
                         lyricsOpen = !lyricsOpen
                     },
@@ -1516,7 +1544,10 @@ fun NowPlayingScreen(
                 BottomGlyph(
                     icon = VelthyIcons.Moon,
                     contentDescription = "Sleep Timer",
-                    onClick = { showSleepTimerSheet = true },
+                    onClick = {
+                        haptics.play(Haptic.Tap)
+                        showSleepTimerSheet = true
+                    },
                     highlighted = isSleepActive,
                     badgeText = sleepBadge,
                 )
@@ -1525,7 +1556,10 @@ fun NowPlayingScreen(
                 BottomGlyph(
                     icon = activeDevice.icon,
                     contentDescription = "Audio Output (${activeDevice.name})",
-                    onClick = { showAudioOutputSheet = true },
+                    onClick = {
+                        haptics.play(Haptic.Tap)
+                        showAudioOutputSheet = true
+                    },
                     highlighted = activeDevice.isExternal,
                     label = activeDevice.name,
                 )
@@ -1535,6 +1569,7 @@ fun NowPlayingScreen(
                     icon = Icons.AutoMirrored.Rounded.QueueMusic,
                     contentDescription = "Queue",
                     onClick = {
+                        haptics.play(if (!queueOpen) Haptic.ToggleOn else Haptic.ToggleOff)
                         lyricsOpen = false
                         queueOpen = !queueOpen
                     },
@@ -3695,4 +3730,26 @@ private fun TrackAnalysisState.label(): String = when (this) {
     TrackAnalysisState.ANALYSING -> "analysing…"
     TrackAnalysisState.WAITING -> "waiting"
     TrackAnalysisState.FAILED -> "failed"
+}
+
+/**
+ * Android 13+ back callback for modal overlays.
+ */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private object OverlayBack {
+    /** The registered callback, to hand back to [unregister]; null if it couldn't be. */
+    fun register(view: View, onBack: () -> Unit): Any? {
+        val dispatcher = view.findOnBackInvokedDispatcher() ?: return null
+        val callback = OnBackInvokedCallback { onBack() }
+        dispatcher.registerOnBackInvokedCallback(
+            OnBackInvokedDispatcher.PRIORITY_OVERLAY,
+            callback,
+        )
+        return callback
+    }
+
+    fun unregister(view: View, callback: Any?) {
+        if (callback !is OnBackInvokedCallback) return
+        view.findOnBackInvokedDispatcher()?.unregisterOnBackInvokedCallback(callback)
+    }
 }

@@ -1,4 +1,4 @@
-﻿package com.velthy.client.auth
+package com.velthy.client.auth
 
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
@@ -49,9 +49,8 @@ fun YtMusicLoginScreen(
                 }
 
                 loadUrl(
-                    "https://accounts.google.com/ServiceLogin" +
-                        "?ltmpl=music&service=youtube&passive=true" +
-                        "&continue=https%3A%2F%2Fmusic.youtube.com%2F",
+                    "https://accounts.google.com/AccountChooser" +
+                        "?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F",
                 )
             }
         },

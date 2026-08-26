@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.screens
+package com.velthy.client.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -41,11 +41,13 @@ import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -56,17 +58,85 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.velthy.client.data.model.Song
+import com.velthy.client.ui.components.MessageState
 import com.velthy.client.ui.components.PAGE_GUTTER
 import com.velthy.client.ui.components.ROW_DIVIDER_INSET
 import com.velthy.client.ui.components.SongRow
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 
-private const val LOCAL_TAB_SONGS = 0
-private const val LOCAL_TAB_ARTISTS = 1
-private const val LOCAL_TAB_ALBUMS = 2
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+
+const val LOCAL_TAB_SONGS = 0
+const val LOCAL_TAB_ARTISTS = 1
+const val LOCAL_TAB_ALBUMS = 2
+
+/**
+ * Pinned Top Bar Segmented Control hosted right inside FrostedTopBar.
+ */
+@Composable
+fun LocalTopBarSegmentedControl(
+    selectedTab: Int,
+    onSelectTab: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val haptics = rememberHaptics()
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .padding(2.5.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LocalSegmentedTab(
+            icon = Icons.Rounded.MusicNote,
+            label = "Songs",
+            selected = selectedTab == LOCAL_TAB_SONGS,
+            onClick = {
+                if (selectedTab != LOCAL_TAB_SONGS) {
+                    haptics.play(Haptic.Select)
+                    onSelectTab(LOCAL_TAB_SONGS)
+                }
+            },
+            modifier = Modifier.weight(1f),
+        )
+        LocalSegmentedTab(
+            icon = Icons.Rounded.Person,
+            label = "Artists",
+            selected = selectedTab == LOCAL_TAB_ARTISTS,
+            onClick = {
+                if (selectedTab != LOCAL_TAB_ARTISTS) {
+                    haptics.play(Haptic.Select)
+                    onSelectTab(LOCAL_TAB_ARTISTS)
+                }
+            },
+            modifier = Modifier.weight(1f),
+        )
+        LocalSegmentedTab(
+            icon = Icons.Rounded.Album,
+            label = "Albums",
+            selected = selectedTab == LOCAL_TAB_ALBUMS,
+            onClick = {
+                if (selectedTab != LOCAL_TAB_ALBUMS) {
+                    haptics.play(Haptic.Select)
+                    onSelectTab(LOCAL_TAB_ALBUMS)
+                }
+            },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
 
 /**
  * Local Music folder view with three tabs: Songs (default), Artists, Albums.
@@ -78,111 +148,72 @@ private const val LOCAL_TAB_ALBUMS = 2
 @Composable
 fun LocalMusicScreen(
     songs: List<Song>,
+    selectedTab: Int = LOCAL_TAB_SONGS,
+    drillDownLabel: String? = null,
+    onDrillDownChange: (label: String?, songs: List<Song>) -> Unit = { _, _ -> },
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onSongSwipe: (Song) -> Unit,
     onShuffle: (List<Song>) -> Unit,
     contentPadding: PaddingValues,
+    emptyMessage: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    // Which top-level tab is selected.
-    var selectedTab by rememberSaveable { mutableIntStateOf(LOCAL_TAB_SONGS) }
-
     // When non-null, we are showing a drill-down list for that artist or album.
-    var drillDownLabel by remember { mutableStateOf<String?>(null) }
-    var drillDownSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var internalDrillDownSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
 
     val inDrillDown = drillDownLabel != null
 
     BackHandler(enabled = inDrillDown) {
-        drillDownLabel = null
-        drillDownSongs = emptyList()
+        onDrillDownChange(null, emptyList())
     }
 
-    // The tab row is fixed above the scrolling content, so its own top
-    // padding has to clear the frosted top bar / status bar that the
-    // LazyColumns beneath it would otherwise scroll under.
-    val bodyContentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding())
-
-    // contentPadding.top carries extra breathing room meant for scrolling
-    // content resting under the glass bar; the tab row is fixed and sits
-    // right below the bar, so it only needs to clear the bar itself
-    // (status bar inset + the bar's own 52dp) — see FrostedTopBar.
-    val topBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 52.dp
-
-    Column(modifier = modifier.fillMaxSize()) {
-        // ── Tab row ──────────────────────────────────────────────────────────
-        TabRow(
-            selectedTabIndex = selectedTab,
-            containerColor = MaterialTheme.colorScheme.background,
-            contentColor = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(top = topBarHeight),
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            },
-        ) {
-            LocalTab(
-                icon = Icons.Rounded.MusicNote,
-                label = "Songs",
-                selected = selectedTab == LOCAL_TAB_SONGS,
-                onClick = {
-                    selectedTab = LOCAL_TAB_SONGS
-                    drillDownLabel = null
-                },
-            )
-            LocalTab(
-                icon = Icons.Rounded.Person,
-                label = "Artists",
-                selected = selectedTab == LOCAL_TAB_ARTISTS,
-                onClick = {
-                    selectedTab = LOCAL_TAB_ARTISTS
-                    drillDownLabel = null
-                },
-            )
-            LocalTab(
-                icon = Icons.Rounded.Album,
-                label = "Albums",
-                selected = selectedTab == LOCAL_TAB_ALBUMS,
-                onClick = {
-                    selectedTab = LOCAL_TAB_ALBUMS
-                    drillDownLabel = null
-                },
-            )
-        }
-
-        // ── Content ──────────────────────────────────────────────────────────
+    Box(modifier = modifier.fillMaxSize()) {
         AnimatedContent(
             targetState = if (inDrillDown) "drill:$drillDownLabel" else "tab:$selectedTab",
             transitionSpec = {
-                if (targetState.startsWith("drill:")) {
-                    (slideInHorizontally { it } + fadeIn()) togetherWith
-                        (slideOutHorizontally { -it / 3 } + fadeOut())
+                val isDrillEntering = targetState.startsWith("drill:")
+                val isDrillExiting = initialState.startsWith("drill:") && !targetState.startsWith("drill:")
+                val initialTabIndex = initialState.substringAfter("tab:").toIntOrNull() ?: 0
+                val targetTabIndex = targetState.substringAfter("tab:").toIntOrNull() ?: 0
+                val goingForward = isDrillEntering || (!isDrillExiting && targetTabIndex > initialTabIndex)
+
+                if (goingForward) {
+                    (slideInHorizontally(tween(280, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(200))) togetherWith
+                        (slideOutHorizontally(tween(280, easing = FastOutSlowInEasing)) { -it / 3 } + fadeOut(tween(180)))
                 } else {
-                    (slideInHorizontally { -it / 3 } + fadeIn()) togetherWith
-                        (slideOutHorizontally { it } + fadeOut())
+                    (slideInHorizontally(tween(280, easing = FastOutSlowInEasing)) { -it } + fadeIn(tween(200))) togetherWith
+                        (slideOutHorizontally(tween(280, easing = FastOutSlowInEasing)) { it / 3 } + fadeOut(tween(180)))
                 }
             },
             label = "local_music_content",
             modifier = Modifier.fillMaxSize(),
         ) { key ->
             when {
+                // Nothing to tab through.
+                songs.isEmpty() && emptyMessage != null -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(contentPadding),
+                    ) {
+                        MessageState(message = emptyMessage)
+                    }
+                }
+
                 key.startsWith("drill:") -> {
                     // Drill-down song list for artist / album
                     DrillDownSongList(
                         label = drillDownLabel ?: "",
-                        songs = drillDownSongs,
+                        songs = internalDrillDownSongs,
                         onSongClick = onSongClick,
                         onSongLongPress = onSongLongPress,
                         onSongSwipe = onSongSwipe,
                         onShuffle = onShuffle,
                         onBack = {
-                            drillDownLabel = null
-                            drillDownSongs = emptyList()
+                            onDrillDownChange(null, emptyList())
                         },
-                        contentPadding = bodyContentPadding,
+                        contentPadding = contentPadding,
                     )
                 }
 
@@ -192,7 +223,7 @@ fun LocalMusicScreen(
                         onSongClick = onSongClick,
                         onSongLongPress = onSongLongPress,
                         onSongSwipe = onSongSwipe,
-                        contentPadding = bodyContentPadding,
+                        contentPadding = contentPadding,
                     )
                 }
 
@@ -205,10 +236,10 @@ fun LocalMusicScreen(
                     ArtistsTab(
                         artists = artists,
                         onArtistClick = { artist, artistSongs ->
-                            drillDownLabel = artist
-                            drillDownSongs = artistSongs
+                            internalDrillDownSongs = artistSongs
+                            onDrillDownChange(artist, artistSongs)
                         },
-                        contentPadding = bodyContentPadding,
+                        contentPadding = contentPadding,
                     )
                 }
 
@@ -223,10 +254,10 @@ fun LocalMusicScreen(
                     AlbumsTab(
                         albums = albums,
                         onAlbumClick = { album, albumSongs ->
-                            drillDownLabel = album
-                            drillDownSongs = albumSongs
+                            internalDrillDownSongs = albumSongs
+                            onDrillDownChange(album, albumSongs)
                         },
-                        contentPadding = bodyContentPadding,
+                        contentPadding = contentPadding,
                     )
                 }
             }
@@ -250,18 +281,23 @@ private fun SongsTab(
         modifier = Modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
-        item {
+        item(key = "songs_header", contentType = "header") {
             SectionHeader(
                 icon = Icons.Rounded.LibraryMusic,
                 title = "${songs.size} songs",
             )
         }
-        itemsIndexed(songs) { index, song ->
+        itemsIndexed(
+            items = songs,
+            key = { index, song -> if (song.videoId.isNotEmpty()) song.videoId else "song_${index}_${song.title}" },
+            contentType = { _, _ -> "song_row" },
+        ) { index, song ->
             SongRow(
                 song = song,
                 onClick = { onSongClick(songs, index) },
                 onLongPress = { onSongLongPress(song) },
                 onSwipeToQueue = { onSongSwipe(song) },
+                downloadedTint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (index < songs.lastIndex) {
                 HorizontalDivider(
@@ -288,13 +324,17 @@ private fun ArtistsTab(
         modifier = Modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
-        item {
+        item(key = "artists_header", contentType = "header") {
             SectionHeader(
                 icon = Icons.Rounded.Person,
                 title = "${artists.size} artists",
             )
         }
-        items(artists) { (artist, artistSongs) ->
+        items(
+            items = artists,
+            key = { "artist_${it.key}" },
+            contentType = { "artist_row" },
+        ) { (artist, artistSongs) ->
             ArtistRow(
                 name = artist,
                 songCount = artistSongs.size,
@@ -323,14 +363,14 @@ private fun ArtistRow(name: String, songCount: Int, onClick: () -> Unit) {
             modifier = Modifier
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(Color.White.copy(alpha = 0.10f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Rounded.Person,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(26.dp),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
             )
         }
         Spacer(Modifier.width(14.dp))
@@ -371,13 +411,23 @@ private fun AlbumsTab(
         modifier = Modifier.fillMaxSize(),
         contentPadding = contentPadding,
     ) {
-        item {
+        item(key = "albums_header", contentType = "header") {
             SectionHeader(
                 icon = Icons.Rounded.Album,
                 title = "${albums.size} albums",
             )
         }
-        items(albums) { (album, albumSongs) ->
+        // Songs but no albums: nothing here carries an album tag.
+        if (albums.isEmpty()) {
+            item(key = "albums_empty", contentType = "empty") {
+                MessageState(message = "None of these tracks say what album they're from.")
+            }
+        }
+        items(
+            items = albums,
+            key = { "album_${it.key}" },
+            contentType = { "album_row" },
+        ) { (album, albumSongs) ->
             AlbumRow(
                 name = album,
                 artist = albumSongs.firstOrNull()?.artist ?: "",
@@ -406,15 +456,15 @@ private fun AlbumRow(name: String, artist: String, songCount: Int, onClick: () -
         Box(
             modifier = Modifier
                 .size(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.secondaryContainer),
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.White.copy(alpha = 0.10f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Rounded.Album,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(26.dp),
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
             )
         }
         Spacer(Modifier.width(14.dp))
@@ -466,7 +516,7 @@ private fun DrillDownSongList(
         contentPadding = contentPadding,
     ) {
         // Back + title header
-        item {
+        item(key = "drill_header", contentType = "header") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -499,7 +549,7 @@ private fun DrillDownSongList(
         }
 
         // Play / Shuffle action row
-        item {
+        item(key = "drill_actions", contentType = "actions") {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -537,7 +587,7 @@ private fun DrillDownSongList(
                         .weight(1f)
                         .height(44.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                         .clickable { if (songs.isNotEmpty()) onShuffle(songs) }
                         .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -546,14 +596,14 @@ private fun DrillDownSongList(
                     Icon(
                         Icons.Rounded.Shuffle,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        tint = Color.White,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         text = "Shuffle",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        color = Color.White,
                     )
                 }
             }
@@ -561,7 +611,11 @@ private fun DrillDownSongList(
         }
 
         // Song rows
-        itemsIndexed(songs) { index, song ->
+        itemsIndexed(
+            items = songs,
+            key = { index, song -> if (song.videoId.isNotEmpty()) "drill_${song.videoId}" else "drill_${index}_${song.title}" },
+            contentType = { _, _ -> "song_row" },
+        ) { index, song ->
             SongRow(
                 song = song,
                 onClick = { onSongClick(songs, index) },
@@ -582,27 +636,60 @@ private fun DrillDownSongList(
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 @Composable
-private fun LocalTab(
+private fun LocalSegmentedTab(
     icon: ImageVector,
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Tab(
-        selected = selected,
-        onClick = onClick,
-        selectedContentColor = MaterialTheme.colorScheme.primary,
-        unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    val haptics = rememberHaptics()
+    val bgColor by animateColorAsState(
+        targetValue = if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "tab_bg",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "tab_color",
+    )
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = bgColor,
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = true),
+                onClick = {
+                    if (!selected) haptics.play(Haptic.Select)
+                    onClick()
+                },
+            ),
     ) {
         Row(
-            modifier = Modifier.padding(vertical = 12.dp, horizontal = 4.dp),
+            modifier = Modifier.padding(vertical = 9.dp, horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.Center,
         ) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(17.dp),
+            )
+            Spacer(Modifier.width(6.dp))
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    fontSize = 13.5.sp,
+                ),
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

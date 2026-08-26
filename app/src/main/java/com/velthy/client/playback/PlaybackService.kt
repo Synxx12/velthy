@@ -30,18 +30,28 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import android.os.Bundle
+import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import com.velthy.client.MainActivity
 import com.velthy.client.R
 import com.velthy.client.data.Http
+import com.velthy.client.data.LikeState
 import com.velthy.client.data.NerdStats
 import com.velthy.client.data.TrackLog
+import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.data.discord.DiscordRPC
 import com.velthy.client.data.innertube.PlaybackTracker
 import com.velthy.client.data.innertube.PlayerClient
 import com.velthy.client.data.innertube.StreamResolver
+import com.velthy.client.data.model.LikeStatus
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.scrobbling.LastFM
 import com.velthy.client.data.scrobbling.ListenBrainzManager
@@ -51,6 +61,8 @@ import com.velthy.client.data.sources.SourceResolver
 import com.velthy.client.data.sources.SourceStream
 import com.velthy.client.data.sources.StreamFormat
 import com.velthy.client.data.sources.TrackMatcher
+import com.velthy.client.widget.MediaWidget
+import com.velthy.client.widget.MediaWidgetSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -138,6 +150,53 @@ class PlaybackService : MediaSessionService() {
     private val ghostSpatialAudioProcessor = SpatialAudioProcessor()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    private val favoriteCommand =
+        SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY)
+    private val autoplayCommand =
+        SessionCommand(ACTION_TOGGLE_AUTOPLAY, Bundle.EMPTY)
+    private val shuffleCommand =
+        SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY)
+
+    private var favoriteActionJob: Job? = null
+    private var autoplayLoadJob: Job? = null
+    private var autoplaySeed: String? = null
+
+    private val sessionCallback = object : MediaSession.Callback {
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(favoriteCommand)
+                .add(autoplayCommand)
+                .add(shuffleCommand)
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(commands)
+                .setCustomLayout(notificationButtons())
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            when (customCommand.customAction) {
+                ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
+                ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromNotification()
+                ACTION_TOGGLE_FAVORITE -> session.player.currentMediaItem?.mediaId?.let {
+                    toggleFavoriteFromNotification(it)
+                }
+                else -> return Futures.immediateFuture(
+                    SessionResult(SessionError.ERROR_NOT_SUPPORTED),
+                )
+            }
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -160,6 +219,21 @@ class PlaybackService : MediaSessionService() {
                 .build()
                 .apply { setSmallIcon(R.drawable.ic_notification_logo) },
         )
+
+        // The player screen toggles QueueShuffle directly on its MediaController.
+        // Observe the shared state here so the notification's Shuffle icon and
+        // label follow that toggle immediately as well.
+        scope.launch {
+            QueueShuffle.enabled
+                .collectLatest {
+                    mediaSession?.setCustomLayout(notificationButtons())
+                }
+        }
+        scope.launch {
+            LikeState.overrides.collectLatest {
+                mediaSession?.setCustomLayout(notificationButtons())
+            }
+        }
 
         // No user agent on the factory: the right one depends on which client
         // minted the URL, so it is set per request below. Setting it here as
@@ -356,6 +430,7 @@ class PlaybackService : MediaSessionService() {
                 if (isPlaying) prefetchAround(exoPlayer) else AudioCache.cancel()
                 if (isPlaying) lookForBetterCopy(exoPlayer)
                 saveQueue()
+                publishWidgetState()
 
                 val song = exoPlayer.currentMediaItem?.toSong()
                 val durationMs = exoPlayer.duration.takeIf { it > 0 }
@@ -385,6 +460,10 @@ class PlaybackService : MediaSessionService() {
                 } else {
                     clearDiscordPresence()
                 }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                publishWidgetState(playing = playWhenReady)
             }
 
             override fun onPositionDiscontinuity(
@@ -499,6 +578,12 @@ class PlaybackService : MediaSessionService() {
                 upgradeJob?.cancel()
                 lookForBetterCopy(exoPlayer)
                 saveQueue()
+                autoplayLoadJob?.cancel()
+                autoplayLoadJob = null
+                autoplaySeed = null
+                loadAutoplayForCurrentTrack()
+                publishWidgetState()
+                mediaSession?.setCustomLayout(notificationButtons())
                 // Cleared rather than re-published. The renderer is still
                 // configured for the track that just ended at this point, so
                 // reading the format here reports the *previous* song — which
@@ -537,16 +622,24 @@ class PlaybackService : MediaSessionService() {
                     // The last track finished with nothing after it, so no
                     // transition will ever close it out. Scrobble it now.
                     val lastSong = listenBrainzSong
-                    if (lastSong != null) {
+                    if (lastSong != null && listenBrainzStartMs > 0L) {
                         val lastStart = listenBrainzStartMs
                         val lastDuration = listenBrainzDurationMs
                             ?: exoPlayer.duration.takeIf { it > 0 }
                         submitListenBrainzFinished(lastSong, lastStart, lastDuration)
-                        listenBrainzSong = null
                     }
+                    listenBrainzSong = null
+                    listenBrainzStartMs = 0L
+                    listenBrainzDurationMs = null
                 } else if (state == Player.STATE_READY && exoPlayer.isPlaying) {
                     pushDiscordPresence(exoPlayer)
                 }
+            }
+
+            override fun onRepeatModeChanged(repeatMode: Int) {
+                // Turning repeat-all back off can leave the current item at the end
+                // of the queue, which is the same trigger as a normal transition.
+                loadAutoplayForCurrentTrack()
             }
 
             /**
@@ -556,6 +649,9 @@ class PlaybackService : MediaSessionService() {
              */
             override fun onTimelineChanged(timeline: Timeline, reason: Int) {
                 if (exoPlayer.isPlaying) prefetchAround(exoPlayer)
+                if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) {
+                    mediaSession?.setCustomLayout(notificationButtons())
+                }
             }
         })
 
@@ -670,7 +766,9 @@ class PlaybackService : MediaSessionService() {
         mediaSession = MediaSession.Builder(this, SessionPlayer(exoPlayer, controller))
             .setId(SESSION_ID)
             .setSessionActivity(sessionActivity())
+            .setCallback(sessionCallback)
             .build()
+        mediaSession?.setCustomLayout(notificationButtons())
     }
 
     /**
@@ -2101,27 +2199,40 @@ class PlaybackService : MediaSessionService() {
                     delaySeconds = values[9] as Int,
                 )
             }.collectLatest { snapshot ->
-                scrobbleManager?.destroy()
-                scrobbleManager = null
+                val shouldEnable = AppSettings.scrobblingAvailable &&
+                    snapshot.lastfmEnabled &&
+                    snapshot.scrobbleEnabled &&
+                    snapshot.sessionKey.isNotBlank() &&
+                    snapshot.apiKey.isNotBlank() &&
+                    snapshot.secret.isNotBlank()
 
-                if (snapshot.lastfmEnabled && snapshot.sessionKey.isNotBlank()) {
-                    // Configure LastFM client
-                    val endpoint = snapshot.endpoint.ifBlank { LastFM.DEFAULT_API_ENDPOINT }
-                    val apiKey = snapshot.apiKey.ifBlank { LastFM.FALLBACK_COMPAT_API_KEY }
-                    val secret = snapshot.secret.ifBlank { LastFM.FALLBACK_COMPAT_SECRET }
-                    LastFM.configure(
-                        endpoint = endpoint,
-                        apiKey = apiKey,
-                        secret = secret,
-                        sessionKey = snapshot.sessionKey,
-                    )
-                    scrobbleManager = ScrobbleManager(
-                        scope = scope,
-                        minSongDuration = snapshot.minDuration,
-                        scrobbleDelayPercent = snapshot.delayPercent,
-                        scrobbleDelaySeconds = snapshot.delaySeconds,
-                    ).apply {
-                        useNowPlaying = snapshot.nowPlaying
+                if (!shouldEnable) {
+                    scrobbleManager?.destroy()
+                    scrobbleManager = null
+                    return@collectLatest
+                }
+
+                LastFM.configure(
+                    endpoint = snapshot.endpoint.ifBlank { LastFM.DEFAULT_API_ENDPOINT },
+                    apiKey = snapshot.apiKey,
+                    secret = snapshot.secret,
+                    sessionKey = snapshot.sessionKey,
+                )
+                val manager = scrobbleManager ?: ScrobbleManager(scope).also {
+                    scrobbleManager = it
+                }
+                manager.minSongDuration = snapshot.minDuration
+                manager.scrobbleDelayPercent = snapshot.delayPercent
+                manager.scrobbleDelaySeconds = snapshot.delaySeconds
+                manager.useNowPlaying = snapshot.nowPlaying
+
+                player?.let { exoPlayer ->
+                    if (exoPlayer.isPlaying) {
+                        manager.onPlayerStateChanged(
+                            isPlaying = true,
+                            song = exoPlayer.currentMediaItem?.toSong(),
+                            durationMs = exoPlayer.duration.takeIf { it > 0 },
+                        )
                     }
                 }
             }
@@ -2359,10 +2470,138 @@ class PlaybackService : MediaSessionService() {
         lookForBetterCopy(player)
     }
 
+    private fun publishWidgetState(playing: Boolean? = null) {
+        val exoPlayer = player ?: return
+        val song = exoPlayer.currentMediaItem?.toSong() ?: return
+        MediaWidgetSnapshot.save(
+            this,
+            MediaWidgetSnapshot(
+                mediaId = song.videoId,
+                title = song.title,
+                artist = song.artist,
+                artworkUrl = song.thumbnailUrl,
+                isPlaying = playing ?: exoPlayer.playWhenReady,
+                hasPrevious = exoPlayer.hasPreviousMediaItem(),
+                hasNext = exoPlayer.hasNextMediaItem(),
+            ),
+        )
+        MediaWidget.refresh(this)
+    }
+
+    private fun notificationButtons(): List<CommandButton> {
+        val favorite = CommandButton.Builder(
+            if (LikeState.overrides.value[player?.currentMediaItem?.mediaId] == LikeStatus.LIKE) {
+                CommandButton.ICON_HEART_FILLED
+            } else {
+                CommandButton.ICON_HEART_UNFILLED
+            },
+        )
+            .setSessionCommand(favoriteCommand)
+            .setDisplayName("Favorite")
+            .build()
+        val shuffleEnabled = QueueShuffle.enabled.value
+        val shuffle = CommandButton.Builder(
+            if (shuffleEnabled) {
+                CommandButton.ICON_SHUFFLE_ON
+            } else {
+                CommandButton.ICON_SHUFFLE_OFF
+            },
+        )
+            .setSessionCommand(shuffleCommand)
+            .setDisplayName(if (shuffleEnabled) "Shuffle off" else "Shuffle on")
+            .build()
+        return listOf(favorite, shuffle)
+    }
+
+    private fun toggleShuffleFromNotification() {
+        player?.let(QueueShuffle::toggle)
+        mediaSession?.setCustomLayout(notificationButtons())
+    }
+
+    private fun toggleAutoplayFromNotification() {
+        val enabled = !AppSettings.autoplay.value
+        AppSettings.setAutoplay(enabled)
+        if (enabled) {
+            autoplayLoadJob?.cancel()
+            autoplayLoadJob = null
+            autoplaySeed = null
+            loadAutoplayForCurrentTrack()
+        } else {
+            autoplayLoadJob?.cancel()
+            autoplayLoadJob = null
+            autoplaySeed = null
+            dropAutoplayTracksFromQueue()
+        }
+        mediaSession?.setCustomLayout(notificationButtons())
+    }
+
+    private fun dropAutoplayTracksFromQueue() {
+        val exoPlayer = player ?: return
+        for (index in exoPlayer.mediaItemCount - 1 downTo exoPlayer.currentMediaItemIndex + 1) {
+            if (exoPlayer.getMediaItemAt(index).fromAutoplay) {
+                exoPlayer.removeMediaItem(index)
+            }
+        }
+    }
+
+    private fun toggleFavoriteFromNotification(videoId: String) {
+        favoriteActionJob?.cancel()
+        val previous = LikeState.overrides.value[videoId] ?: LikeStatus.INDIFFERENT
+        val target = if (previous == LikeStatus.LIKE) {
+            LikeStatus.INDIFFERENT
+        } else {
+            LikeStatus.LIKE
+        }
+
+        LikeState.set(videoId, target)
+        mediaSession?.setCustomLayout(notificationButtons())
+        favoriteActionJob = scope.launch {
+            YtMusicRepository.rate(videoId, target)
+                .onFailure {
+                    LikeState.set(videoId, previous)
+                    mediaSession?.setCustomLayout(notificationButtons())
+                    TrackLog.w("Musique", "notification favorite failed: ${it.message}")
+                }
+        }
+    }
+
+    private fun loadAutoplayForCurrentTrack() {
+        val exoPlayer = player ?: return
+        if (!AppSettings.autoplay.value ||
+            exoPlayer.repeatMode == Player.REPEAT_MODE_ALL ||
+            exoPlayer.hasNextMediaItem()
+        ) {
+            return
+        }
+        val current = exoPlayer.currentMediaItem?.toSong() ?: return
+        if (autoplaySeed == current.videoId) return
+        autoplaySeed = current.videoId
+        autoplayLoadJob = scope.launch {
+            val existing = (0 until exoPlayer.mediaItemCount)
+                .map { exoPlayer.getMediaItemAt(it).toSong() }
+            loadAutoplayTracks(existing, current)
+                .onSuccess { resolved ->
+                    val stillPlaying = player ?: return@onSuccess
+                    if (!AppSettings.autoplay.value ||
+                        stillPlaying.currentMediaItem?.mediaId != current.videoId ||
+                        stillPlaying.hasNextMediaItem()
+                    ) {
+                        return@onSuccess
+                    }
+                    stillPlaying.addMediaItems(
+                        resolved.map { it.toMediaItem() },
+                    )
+                    saveQueue()
+                    publishWidgetState()
+                }
+        }
+    }
+
     override fun onDestroy() {
         if (instance == this) instance = null
         // Last chance to record the resume point, while the player still exists.
         saveQueue()
+        publishWidgetState(playing = false)
         AudioCache.cancel()
         trackAnalyzer.release()
         // Also the last chance to close out the track that was playing — a
@@ -2371,7 +2610,7 @@ class PlaybackService : MediaSessionService() {
         // service scope: it is cancelled a few lines down, and the request
         // should still reach ListenBrainz.
         val lastSong = listenBrainzSong
-        if (lastSong != null) {
+        if (lastSong != null && listenBrainzStartMs > 0L) {
             val lbEnabled = AppSettings.listenBrainzEnabled.value
             val lbToken = AppSettings.listenBrainzToken.value
             if (lbEnabled && lbToken.isNotBlank()) {
@@ -2456,6 +2695,9 @@ class PlaybackService : MediaSessionService() {
     companion object {
         const val CHANNEL_ID = "musique_playback"
         const val SESSION_ID = "MusiquePlayback"
+        const val ACTION_TOGGLE_FAVORITE = "com.velthy.client.action.TOGGLE_FAVORITE"
+        const val ACTION_TOGGLE_AUTOPLAY = "com.velthy.client.action.TOGGLE_AUTOPLAY"
+        const val ACTION_TOGGLE_SHUFFLE = "com.velthy.client.action.TOGGLE_SHUFFLE"
 
         /** How often played-seconds are sampled off the player. */
         const val PROGRESS_SAMPLE_MS = 1_000L

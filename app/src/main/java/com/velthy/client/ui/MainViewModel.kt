@@ -1146,6 +1146,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onSignedIn(cookie: String) {
+        com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
         authStore.cookie = cookie
         Innertube.cookie = cookie
         _signedIn.value = true
@@ -1193,6 +1194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun switchAccount(saved: com.velthy.client.auth.SavedAccount) {
+        com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
         onSignedIn(saved.cookie)
         _account.value = Account(
             name = saved.name,
@@ -1220,11 +1222,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _signedIn.value = false
         _account.value = null
         _library.value = UiState.Loading
-        // Ratings and playlists belong to the account that just left; keeping
-        // them would show the next signed-in user someone else's hearts.
+        // Ratings, playlists, and remote cloud history belong to the account that
+        // just left; keeping them would leak private listening data.
         _likeOverrides.value = emptyMap()
         _playlists.value = emptyList()
         _songMenu.value = null
+        com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
+        runCatching {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+            android.webkit.CookieManager.getInstance().flush()
+        }
         loadHome()
     }
 

@@ -45,12 +45,14 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.SystemUpdate
+import com.velthy.client.ui.screens.DownloadSettingsSheet
 import com.velthy.client.ui.screens.NotificationsSheet
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,6 +69,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -101,6 +105,8 @@ import com.velthy.client.ui.screens.AccountAndScrobblingScreen
 import com.velthy.client.ui.screens.DiscordDialog
 import com.velthy.client.ui.screens.DiscordDialogHost
 import com.velthy.client.ui.screens.DiscordScreen
+import com.velthy.client.ui.screens.LocalMusicScreen
+import com.velthy.client.ui.screens.LocalTopBarSegmentedControl
 import com.velthy.client.ui.screens.SettingsScreen
 import com.velthy.client.playback.QueueBuilder
 import com.velthy.client.playback.QueueShuffle
@@ -127,6 +133,8 @@ import com.velthy.client.ui.components.MusicRecognitionSheet
 import com.velthy.client.ui.components.TopFadeBlur
 import com.velthy.client.ui.components.LyricsSourcesDialog
 import com.velthy.client.ui.components.UpdateAvailableDialog
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.icons.VelthyIcons
 import androidx.media3.common.Player
 import com.velthy.client.data.YtMusicRepository
@@ -147,6 +155,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.velthy.client.data.model.Account
+import com.velthy.client.playback.PlayerDeepLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -156,6 +165,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        PlayerDeepLink.consume(intent)
         handleIntent(intent)
         setContent {
             val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
@@ -173,6 +183,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        PlayerDeepLink.consume(intent)
         handleIntent(intent)
     }
 
@@ -231,6 +242,14 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     var showDiscord by remember { mutableStateOf(false) }
     var showDiscordLogin by remember { mutableStateOf(false) }
     var discordDialog by remember { mutableStateOf<DiscordDialog?>(null) }
+
+    val playerDeepLinkPending by PlayerDeepLink.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(playerDeepLinkPending) {
+        if (playerDeepLinkPending) {
+            PlayerDeepLink.handled()
+            showNowPlaying = true
+        }
+    }
 
     // Incremented each time the search tab is re-tapped while already selected,
     // which SearchScreen uses as a signal to focus the input field.
@@ -292,6 +311,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val historyItems by com.velthy.client.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showRecognitionSheet by remember { mutableStateOf(false) }
+    var showDownloadSettingsSheet by remember { mutableStateOf(false) }
     val hasCompletedOnboarding by AppSettings.hasCompletedOnboarding.collectAsStateWithLifecycle()
     var isSplashVisible by remember { mutableStateOf(true) }
 
@@ -330,6 +350,13 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         }
     }
     LaunchedEffect(showSettings) { if (!showSettings) showAccountScrobbling = false }
+
+    val savedDownloads by Downloads.saved.collectAsStateWithLifecycle()
+    LaunchedEffect(savedDownloads, detail?.browseId) {
+        if (detail?.browseId == "local:downloads") {
+            viewModel.reloadLocalDetail("local:downloads")
+        }
+    }
 
     val controller = rememberMediaController()
     val player = rememberPlayerState(controller)
@@ -401,6 +428,8 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val libraryPull = rememberPullToRefreshState()
     val historyPull = rememberPullToRefreshState()
     var historyRefreshing by remember { mutableStateOf(false) }
+    var localSelectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var localDrillDownLabel by rememberSaveable { mutableStateOf<String?>(null) }
 
     val currentFeed = when {
         showSettings || showAccountScrobbling || detail != null -> null
@@ -480,28 +509,32 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val play: (List<Song>, Int) -> Unit = { songs, index ->
         if (songs.isNotEmpty() && index in songs.indices) {
             scope.launch {
-                runCatching {
+                try {
+                    showNowPlaying = true
                     val starting = YtMusicRepository.resolveAudio(songs[index])
                     val queued = songs.toMutableList().also { it[index] = starting }
                     controller?.playSongs(queued, index)
-                    showNowPlaying = true
                     // Starting playback only waits on the track about to play; the
                     // rest of a long album/playlist resolves in the background and
                     // is patched into the queue well before it's reached.
                     queued.forEachIndexed { i, song ->
                         if (i == index || !song.isVideo) return@forEachIndexed
-                        launch {
+                        launch(Dispatchers.IO) {
                             runCatching {
                                 val resolved = YtMusicRepository.resolveAudio(song)
                                 if (resolved.videoId == song.videoId) return@launch
-                                val c = controller ?: return@launch
-                                val at = (0 until c.mediaItemCount)
-                                    .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
-                                    ?: return@launch
-                                c.replaceMediaItem(at, resolved.toMediaItem())
+                                withContext(Dispatchers.Main) {
+                                    val c = controller ?: return@withContext
+                                    val at = (0 until c.mediaItemCount)
+                                        .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
+                                        ?: return@withContext
+                                    c.replaceMediaItem(at, resolved.toMediaItem())
+                                }
                             }
                         }
                     }
+                } catch (e: Exception) {
+                    com.velthy.client.data.DebugLog.w("MainActivity", "play failed: ${e.message}", e)
                 }
             }
         }
@@ -558,6 +591,11 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 )
             }
         }
+    }
+    val haptics = rememberHaptics()
+    val onSongSwipe: (Song) -> Unit = { song ->
+        haptics.play(Haptic.Tick)
+        if (AppSettings.swipeToPlayNext.value) playNext(song) else addToQueue(song)
     }
 
     // ---- Downloads ----
@@ -764,16 +802,22 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 val localHistoryItems by com.velthy.client.data.history.PlaybackHistoryManager.localHistory.collectAsStateWithLifecycle()
                 val remoteHistoryItems by com.velthy.client.data.history.PlaybackHistoryManager.remoteHistory.collectAsStateWithLifecycle()
                 val syncHistory: () -> Unit = {
-                    scope.launch {
-                        historyRefreshing = true
-                        com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
-                        historyRefreshing = false
+                    if (signedIn) {
+                        scope.launch {
+                            historyRefreshing = true
+                            com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
+                            historyRefreshing = false
+                        }
                     }
                 }
-                LaunchedEffect(Unit) {
-                    syncHistory()
+                LaunchedEffect(signedIn) {
+                    if (signedIn) {
+                        syncHistory()
+                    }
                 }
                 com.velthy.client.ui.screens.HistoryScreen(
+                    signedIn = signedIn,
+                    onSignIn = { showLogin = true },
                     localHistoryItems = localHistoryItems,
                     remoteHistoryItems = remoteHistoryItems,
                     currentSong = player.song,
@@ -793,13 +837,35 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     },
                     contentPadding = listPadding,
                 )
+            } else if (page != null && page.browseId.startsWith("local:")) {
+                // Local Music and Downloads — both the tabbed Songs / Artists /
+                // Albums view. Two folders of tracks already on the device, so
+                // there is nothing to tell them apart on screen beyond what is
+                // in them and what to say when that is nothing.
+                val localState = page.songs
+                val localSongs = (localState as? UiState.Success)?.data.orEmpty()
+                LocalMusicScreen(
+                    songs = localSongs,
+                    selectedTab = localSelectedTab,
+                    drillDownLabel = localDrillDownLabel,
+                    onDrillDownChange = { label, _ -> localDrillDownLabel = label },
+                    onSongClick = play,
+                    onSongLongPress = { songActions = it },
+                    onSongSwipe = onSongSwipe,
+                    onShuffle = { songs ->
+                        QueueShuffle.enableForNextQueue()
+                        play(songs, songs.indices.random())
+                    },
+                    emptyMessage = (localState as? UiState.Error)?.message,
+                    contentPadding = listPadding,
+                )
             } else if (page != null) {
                 DetailScreen(
                     page = page,
                     listState = detailListState,
                     onSongClick = play,
                     onSongLongPress = { songActions = it },
-                    onSongSwipe = addToQueue,
+                    onSongSwipe = onSongSwipe,
                     onShuffle = { songs ->
                         // Shuffle goes on first so the queue is built shuffled
                         // as it is set — the random pick here only decides
@@ -818,7 +884,14 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                             )
                         }
                     },
-                    onDownloadAll = startDownload,
+                    onDownloadAll = { songs ->
+                        val withAlbum = if (page.type == BrowseType.ALBUM) {
+                            songs.map { it.copy(albumName = it.albumName ?: page.title) }
+                        } else {
+                            songs
+                        }
+                        startDownload(withAlbum)
+                    },
                     onArtistClick = { id, name ->
                         viewModel.openDetail(id, name, "Artist", null, BrowseType.ARTIST)
                     },
@@ -970,7 +1043,8 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         // A detail page's artwork runs up under the status bar, so the bar
         // there is a fade rather than a pane — see [TopFadeBlur]. Drawn before
         // the bar so the bar's own content sits on top of it.
-        val isDetailVisible = detail != null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications
+        val isLocalDetail = detail?.browseId?.startsWith("local:") == true || detail?.browseId == "app:history"
+        val isDetailVisible = detail != null && !isLocalDetail && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications
         if (isDetailVisible) {
             TopFadeBlur(
                 hazeState = hazeState,
@@ -985,6 +1059,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showAccountScrobbling -> "Account & scrobbling"
                 showSettings -> "Settings"
                 showNotifications -> "Notifications"
+                localDrillDownLabel != null -> localDrillDownLabel ?: ""
                 detail != null -> detail.title
                 else -> tabs[selectedTab].let {
                     if (it.label == "New") "Explore" else it.label
@@ -1009,13 +1084,25 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         focusRequester = searchFocusRequester,
                     )
                 }
+            } else if (detail?.browseId?.startsWith("local:") == true && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && localDrillDownLabel == null) {
+                {
+                    LocalTopBarSegmentedControl(
+                        selectedTab = localSelectedTab,
+                        onSelectTab = { localSelectedTab = it },
+                    )
+                }
             } else null,
             onBack = when {
                 showDiscord -> ({ showDiscord = false })
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSettings -> ({ showSettings = false })
                 showNotifications -> ({ showNotifications = false })
-                detail != null -> ({ viewModel.closeDetail(); Unit })
+                localDrillDownLabel != null -> ({ localDrillDownLabel = null })
+                detail != null -> ({
+                    viewModel.closeDetail()
+                    localDrillDownLabel = null
+                    Unit
+                })
                 selectedTab == TAB_SEARCH && (query.isNotEmpty() || results != null) -> ({
                     viewModel.onQueryChange("")
                 })
@@ -1043,6 +1130,14 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         Icon(
                             Icons.Rounded.DeleteOutline,
                             contentDescription = "Clear History",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                } else if (detail?.browseId == "local:downloads") {
+                    IconButton(onClick = { showDownloadSettingsSheet = true }) {
+                        Icon(
+                            Icons.Rounded.MoreVert,
+                            contentDescription = "Download settings",
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
@@ -1114,7 +1209,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     isLoading = player.isLoading,
                     hazeState = hazeState,
                     onPlayPause = {
-                        controller?.let { if (it.isPlaying) it.pause() else it.play() }
+                        controller?.let { if (it.playWhenReady || it.isPlaying) it.pause() else it.play() }
                     },
                     onNext = { controller?.seekToNextMediaItem() },
                     onExpand = { showNowPlaying = true },
@@ -1192,7 +1287,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     positionMs = player.positionMs,
                     durationMs = player.durationMs,
                     onPlayPause = {
-                        controller?.let { if (it.isPlaying) it.pause() else it.play() }
+                        controller?.let { if (it.playWhenReady || it.isPlaying) it.pause() else it.play() }
                     },
                     onNext = { controller?.seekToNextMediaItem() },
                     onPrevious = { controller?.seekToPrevious() },
@@ -1463,6 +1558,19 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 onSearchSong = { songQuery ->
                     viewModel.onQueryChange(songQuery)
                     viewModel.recordSearch()
+                },
+            )
+        }
+
+        if (showDownloadSettingsSheet) {
+            DownloadSettingsSheet(
+                onDismissRequest = { showDownloadSettingsSheet = false },
+                onShuffleAll = {
+                    val localSongs = (detail?.songs as? UiState.Success)?.data.orEmpty()
+                    if (localSongs.isNotEmpty()) {
+                        QueueShuffle.enableForNextQueue()
+                        play(localSongs, localSongs.indices.random())
+                    }
                 },
             )
         }

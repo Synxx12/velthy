@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,6 +36,8 @@ import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.ui.components.thumbnailBorder
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -70,6 +72,7 @@ fun MiniPlayer(
     onExpand: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptics = rememberHaptics()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val shape = RoundedCornerShape(BAR_CORNER)
     Box(
@@ -84,7 +87,12 @@ fun MiniPlayer(
                 },
             )
             .border(0.5.dp, Color.White.copy(alpha = 0.10f), shape)
-            .clickable(onClick = onExpand),
+            .clickable(
+                onClick = {
+                    haptics.play(Haptic.Expand)
+                    onExpand()
+                },
+            ),
     ) {
         Row(
             modifier = Modifier
@@ -127,7 +135,13 @@ fun MiniPlayer(
                     )
                 }
             } else {
-                IconButton(onClick = onPlayPause, modifier = Modifier.size(GLYPH_SLOT)) {
+                IconButton(
+                    onClick = {
+                        haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
+                        onPlayPause()
+                    },
+                    modifier = Modifier.size(GLYPH_SLOT),
+                ) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
@@ -136,7 +150,13 @@ fun MiniPlayer(
                     )
                 }
             }
-            IconButton(onClick = onNext, modifier = Modifier.size(GLYPH_SLOT)) {
+            IconButton(
+                onClick = {
+                    haptics.play(Haptic.SkipNext)
+                    onNext()
+                },
+                modifier = Modifier.size(GLYPH_SLOT),
+            ) {
                 Icon(
                     Icons.Rounded.SkipNext,
                     contentDescription = "Next",

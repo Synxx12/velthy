@@ -46,12 +46,14 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.MusicOff
 import androidx.compose.material.icons.rounded.MotionPhotosOff
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SurroundSound
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Waves
 import androidx.compose.material.icons.rounded.Wifi
@@ -167,6 +169,7 @@ fun SettingsScreen(
     val stopOnTaskRemoved by AppSettings.stopOnTaskRemoved.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
     val swipeToPlayNext by AppSettings.swipeToPlayNext.collectAsStateWithLifecycle()
+    val hapticFeedback by AppSettings.hapticFeedback.collectAsStateWithLifecycle()
     val shareLiveStats by AppSettings.shareLiveStats.collectAsStateWithLifecycle()
 
     // Whether the module index URL is baked into this build.
@@ -189,6 +192,7 @@ fun SettingsScreen(
     var picking by remember { mutableStateOf<QualityTarget?>(null) }
     var showListenBrainzTokenDialog by remember { mutableStateOf(false) }
     var showLastfmLoginDialog by remember { mutableStateOf(false) }
+    var showStorageSettingsSheet by remember { mutableStateOf(false) }
     val scrobbleScope = rememberCoroutineScope()
 
     // Coming back from the system Atmos panel is the one moment the answer is
@@ -558,7 +562,22 @@ fun SettingsScreen(
         }
 
         val cacheLimitMb = (cacheLimitBytes / (1024 * 1024)).toInt()
-        SettingsGroup(header = "Storage") {
+        SettingsGroup(header = "Storage & Downloads") {
+            SettingsRow(
+                icon = Icons.Rounded.PieChart,
+                title = "Storage & Cache Management",
+                subtitle = "Download format, storage location, and cache analysis",
+                trailing = {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                },
+                onClick = { showStorageSettingsSheet = true },
+            )
+            RowDivider()
             SliderRow(
                 icon = Icons.Rounded.Storage,
                 title = "Song cache limit",
@@ -606,6 +625,27 @@ fun SettingsScreen(
             header = "Miscellaneous",
             footer = "When enabled, closing the app from the recent apps screen will also stop music playback.",
         ) {
+            SettingsRow(
+                icon = Icons.Rounded.Vibration,
+                title = "Haptic feedback",
+                subtitle = if (hapticFeedback) {
+                    "Vibrates on button taps, player gestures, and tab navigation"
+                } else {
+                    "Haptic feedback disabled"
+                },
+                trailing = {
+                    Switch(
+                        checked = hapticFeedback,
+                        onCheckedChange = AppSettings::setHapticFeedback,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setHapticFeedback(!hapticFeedback) },
+            )
+            RowDivider()
             SettingsRow(
                 icon = Icons.Rounded.PlaylistPlay,
                 title = "Play next on swipe",
@@ -903,6 +943,12 @@ fun SettingsScreen(
                     Text("Cancel")
                 }
             },
+        )
+    }
+
+    if (showStorageSettingsSheet) {
+        StorageSettingsSheet(
+            onDismissRequest = { showStorageSettingsSheet = false },
         )
     }
 }

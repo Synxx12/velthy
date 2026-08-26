@@ -1,10 +1,11 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.PlaylistPlay
@@ -22,6 +23,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.download.Downloads
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import kotlin.math.abs
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -127,7 +131,9 @@ fun SongRow(
      * wash it stops being legible as a second line and starts disappearing.
      */
     subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    downloadedTint: Color? = null,
 ) {
+    val haptics = rememberHaptics()
     val swipeStateHolder = remember { mutableStateOf<SwipeToDismissBoxState?>(null) }
     var boxWidth by remember { mutableFloatStateOf(0f) }
 
@@ -137,6 +143,7 @@ fun SongRow(
                 val offset = try { swipeStateHolder.value?.requireOffset() ?: 0f } catch (e: Exception) { 0f }
                 // Only queue if the physical drag reached half the box width, ignoring short accidental flings.
                 if (abs(offset) >= boxWidth * 0.45f) {
+                    haptics.play(Haptic.Select)
                     onSwipeToQueue()
                 }
             }
@@ -147,7 +154,7 @@ fun SongRow(
     swipeStateHolder.value = swipeState
 
     if (onSwipeToQueue == null) {
-        SongRowContent(song, onClick, onLongPress, modifier, trackNumber, subtitleColor)
+        SongRowContent(song, onClick, onLongPress, modifier, trackNumber, subtitleColor, downloadedTint)
         return
     }
 
@@ -163,6 +170,7 @@ fun SongRow(
             modifier = Modifier.background(rowBackground),
             trackNumber = trackNumber,
             subtitleColor = subtitleColor,
+            downloadedTint = downloadedTint,
         )
     }
 }
@@ -223,6 +231,7 @@ private fun SongRowContent(
     modifier: Modifier = Modifier,
     trackNumber: Int? = null,
     subtitleColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    downloadedTint: Color? = null,
 ) {
     Row(
         modifier = modifier
@@ -270,6 +279,9 @@ private fun SongRowContent(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        if (downloadedTint != null) {
+            DownloadedBadge(song.videoId, downloadedTint)
+        }
         song.durationText?.let {
             Spacer(Modifier.width(8.dp))
             Text(
@@ -296,6 +308,22 @@ private fun SongRowContent(
             }
         }
     }
+}
+
+/**
+ * Tick shown next to a track's runtime when it is already in Downloads.
+ */
+@Composable
+fun DownloadedBadge(videoId: String, tint: Color, modifier: Modifier = Modifier) {
+    val saved by Downloads.saved.collectAsStateWithLifecycle()
+    if (videoId !in saved) return
+    Spacer(Modifier.width(8.dp))
+    Icon(
+        Icons.Rounded.DownloadDone,
+        contentDescription = "Downloaded",
+        tint = tint,
+        modifier = modifier.size(16.dp),
+    )
 }
 
 /**

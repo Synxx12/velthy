@@ -23,6 +23,7 @@ import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.sources.SourceResolver
+import com.velthy.client.download.Downloads
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -202,11 +203,19 @@ object AudioCache {
         }
     }
 
+    /** Returns total bytes used by cached audio on disk. */
+    fun sizeBytes(): Long = runCatching { if (::cache.isInitialized) cache.cacheSpace else 0L }.getOrDefault(0L)
+
+    /** Returns count of distinct tracks/renditions currently cached. */
+    fun cachedCount(): Int = runCatching { if (::cache.isInitialized) cache.keys.size else 0 }.getOrDefault(0)
+
     /** Drops everything on disk. The listener asked; no grace period. */
     fun clear(onComplete: () -> Unit = {}) {
         cancel()
         scope.launch {
-            cache.keys.toList().forEach { cache.removeResource(it) }
+            if (::cache.isInitialized) {
+                cache.keys.toList().forEach { cache.removeResource(it) }
+            }
             withContext(Dispatchers.Main) { onComplete() }
         }
     }
@@ -451,6 +460,7 @@ object AudioCache {
         // typically a good deal closer than googlevideo anyway.
         //
         val videoIds = mediaIds.filter { SourceRegistry.parseTrackKey(it) == null }
+            .filter { it !in Downloads.saved.value }
         // With substitution possible, only the *bytes* half drops out. Read-
         // ahead builds its own spec below from an id alone and carries none of
         // the title and artist a substitution is matched on — so it resolves

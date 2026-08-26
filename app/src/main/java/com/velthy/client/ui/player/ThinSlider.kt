@@ -1,11 +1,13 @@
-﻿package com.velthy.client.ui.player
+package com.velthy.client.ui.player
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,9 +40,8 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Apple Music's scrubber: a hairline capsule with no thumb knob, which
- * thickens under your finger and settles back when you let go. Material's
- * Slider can't be shaped like this — it always draws a thumb and a tall
- * track — so this is drawn directly.
+ * thickens under your finger and settles back when you let go.
+ * Features an Apple Music luminous loading shimmer during audio buffering.
  */
 @Composable
 fun ThinSlider(
@@ -59,12 +61,17 @@ fun ThinSlider(
      * unplayed bar so the mix is visible before it arrives.
      */
     transitionWindow: ClosedFloatingPointRange<Float>? = null,
-    idleHeight: Dp = 7.dp,
-    activeHeight: Dp = 12.dp,
+    idleHeight: Dp = 6.dp,
+    activeHeight: Dp = 11.dp,
     activeColor: Color = Color.White.copy(alpha = 0.92f),
     inactiveColor: Color = Color.White.copy(alpha = 0.26f),
     /** Halfway between the two track colours: visible against unplayed, invisible under played. */
     markerColor: Color = Color.White.copy(alpha = 0.5f),
+    /**
+     * True while audio stream is buffering/loading in ExoPlayer.
+     * Displays Apple Music's flat, smooth sliding capsule across the hairline track.
+     */
+    isLoading: Boolean = false,
 ) {
     var dragging by remember { mutableStateOf(false) }
     val height by animateDpAsState(
@@ -76,14 +83,33 @@ fun ThinSlider(
         label = "sliderHeight",
     )
 
+    val infiniteTransition = rememberInfiniteTransition(label = "thinSliderLoading")
+    val loadingPhase by if (isLoading) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_150, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "loadingPhase",
+        )
+    } else {
+        remember { mutableFloatStateOf(0f) }
+    }
+
+    val loadingAlpha by animateFloatAsState(
+        targetValue = if (isLoading && !dragging) 1f else 0f,
+        animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        label = "loadingAlpha",
+    )
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            // Generous invisible touch target — the visible bar is only ~7dp.
+            // Generous invisible touch target — the visible bar is ~6dp.
             .height(activeHeight + 22.dp)
-            // One gesture loop for both taps and drags. Two separate detectors
-            // — a drag one plus a tap one — meant taps never landed: the drag
-            // detector took the pointer and a tap has no drag to report.
+            // One gesture loop for both taps and drags.
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -116,10 +142,8 @@ fun ThinSlider(
         ) {
             val radius = CornerRadius(size.height / 2f)
             drawRoundRect(color = inactiveColor, cornerRadius = radius)
+
             // Between the two track colours, and drawn *under* the played fill:
-            // once the playhead reaches the window the transition is no longer
-            // upcoming, and the ordinary progress colour taking it over is what
-            // says so.
             transitionWindow?.let { window ->
                 val from = size.width * window.start.coerceIn(0f, 1f)
                 val to = size.width * window.endInclusive.coerceIn(0f, 1f)
@@ -132,21 +156,32 @@ fun ThinSlider(
                     )
                 }
             }
+
+            // Normal filled progress bar (fades in smoothly as loading ends)
             val filled = size.width * value.coerceIn(0f, 1f)
             if (filled > 0f) {
                 drawRoundRect(
-                    color = activeColor,
+                    color = activeColor.copy(alpha = activeColor.alpha * (1f - loadingAlpha * 0.45f)),
                     size = Size(filled.coerceAtLeast(size.height), size.height),
                     cornerRadius = radius,
                 )
             }
+
+            // Apple Music flat continuous ping-pong loading pill
+            if (loadingAlpha > 0.01f) {
+                val pillWidth = (size.width * 0.28f).coerceAtLeast(size.height * 2f)
+                val travelDistance = (size.width - pillWidth).coerceAtLeast(0f)
+                val startX = travelDistance * loadingPhase
+                drawRoundRect(
+                    color = activeColor.copy(alpha = activeColor.alpha * loadingAlpha),
+                    topLeft = Offset(startX, 0f),
+                    size = Size(pillWidth, size.height),
+                    cornerRadius = radius,
+                )
+            }
         }
-        // Composed only while mixing, rather than drawn conditionally inside the
-        // Canvas above: an infinite transition keeps requesting frames for as
-        // long as it exists, so the cheap way to stop it costing anything is for
-        // it not to exist. AnimatedVisibility keeps it alive through the exit
-        // fade, so the sheen dies away with the transition instead of vanishing
-        // on the frame the mix ends.
+
+        // Smart Mix Sheen
         AnimatedVisibility(
             visible = mixing,
             enter = fadeIn(tween(durationMillis = 420)),
