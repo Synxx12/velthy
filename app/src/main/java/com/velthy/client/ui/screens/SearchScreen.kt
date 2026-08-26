@@ -142,6 +142,7 @@ fun SearchScreen(
                             },
                             onLongPress = { onSongLongPress(row.song) },
                             onSwipeToQueue = { onSongSwipe(row.song) },
+                            downloadedTint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         is SearchResult.Browse -> BrowseRow(
                             item = row.item,
@@ -179,7 +180,7 @@ fun SearchTopBarField(
             .fillMaxWidth()
             .height(44.dp)
             .clip(RoundedCornerShape(24.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .background(Color.White.copy(alpha = 0.10f))
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -6,7 +6,76 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
-### [Unreleased]
+### [native-v1.4.2] — 2026-08-26
+
+#### ✨ Fitur Baru & Tampilan
+- **Mesin Migrasi Unduhan Otomatis dari Musique Flutter (*Flutter Legacy Downloads Migration Engine*)**:
+  - Menambahkan mesin migrasi cerdas yang secara otomatis mendeteksi dan mengimpor seluruh berkas unduhan audio, metadata, dan riwayat unduhan dari aplikasi **Musique versi Flutter lama** (`FlutterSharedPreferences` dan direktori `/Music/Musique`, `/Download/Musique`, serta storage privat internal).
+  - Berkas unduhan dari versi Flutter sebelumnya langsung terbaca sebagai lagu unduhan offline asli (*Native Offline Downloads*) lengkap dengan cover album dan tag ID3/iTunes tanpa perlu mengunduh ulang.
+  - Tombol manual **Migrate Flutter Musique Downloads** pada menu Setelan Penyimpanan untuk memicu pemindaian dan impor ulang kapan saja.
+- **Pusat Manajemen Penyimpanan & Unduhan Apple Music Style (*Storage & Cache Control Center*)**:
+  - Menghadirkan antarmuka pengelolaan penyimpanan komprehensif berdesain *Apple Music Frosted Dark Glass* yang menampilkan rincian memori aplikasi secara visual (Cache Lagu Streaming, Cache Gambar & Temporary, dan Lagu Offline Unduhan).
+  - Opsi kustomisasi **Format Audio Unduhan** fleksibel: `M4A (AAC)` universal berkualitas tinggi dengan ID3 tag lengkap, `Opus (WebM)` efisiensi tinggi asli YouTube, dan `FLAC (Lossless)` jika tersedia.
+  - Pilihan **Lokasi Penyimpanan Unduhan**: *Penyimpanan Internal Aplikasi (Privat)*, *Folder Musik HP (/Music/Musique)*, atau *Folder Download HP (/Download/Velthy)*.
+  - Pengaturan **Susunan Folder Unduhan**: *Satu Folder Datar (Artis - Judul)*, *Berdasarkan Artis & Album (/Artis/Album/Judul)*, atau *Berdasarkan Koleksi Unduhan*.
+  - Tombol menu 3-titik (*More Actions*) pada bilah navigasi atas berkas unduhan untuk akses cepat pengaturan lokasi unduhan, susunan folder, acak putar semua lagu (*Shuffle All*), ekspor ke File Manager HP, dan pembersihan lagu offline.
+- **Widget Layar Utama Interaktif & Elegan (*Home Screen Media Widgets*)**:
+  - Menghadirkan widget pemutar musik layar utama dalam format *Compact* (2x2) dan *Wide* (4x2) yang adaptif mengikuti ukuran grid layar Anda.
+  - Dilengkapi efek blur cover album berkecepatan tinggi dengan sudut membulat modern serta tombol kontrol transpor instan (*Play/Pause*, *Next*, *Previous*).
+  - Mengetuk cover album pada widget akan langsung membuka layar pemutar utama (*Now Playing Full Screen*) secara mulus.
+- **Umpan Balik Getaran Haptik yang Hidup & Opsi Pengaturan (*Dynamic Haptic Feedback Engine & Settings Toggle*)**:
+  - Mengintegrasikan sensasi getaran haptik premium menggunakan standar komposisi Android 11+ / Pixel / Samsung saat menyentuh tombol kontrol pemutar, navigasi bilah bawah, dan interaksi gestur antrean lagu.
+  - Menambahkan sakelar pengaturan **Haptic Feedback** pada menu Setelan (*Settings > Miscellaneous*) sehingga getaran sentuhan dapat diaktifkan atau dinonaktifkan sesuai kenyamanan Anda.
+- **Badge Status Unduhan Lagu (*Offline Download Badges*)**:
+  - Menampilkan ikon centang unduhan di samping durasi lagu pada daftar pencarian, riwayat, dan halaman detail untuk memudahkan mengetahui lagu yang telah tersimpan secara offline.
+
+- **Animasi Loading Bar Durasi Mulus (*Continuous Ping-Pong Loop & Seamless Playback Morphing*)**:
+  - Animasi loading bar durasi kini bergerak secara kontinu dan berulang bolak-balik (*ping-pong loop*) dengan kurva deselerasi lembut (*FastOutSlowInEasing*), tanpa loncatan tiba-tiba antar ujung bar.
+  - Saat audio selesai di-buffer dan mulai diputar, bar durasi menyambung dan bertransisi secara mulus (*seamless alpha crossfade morphing*) ke posisi progress lagu yang sebenarnya tanpa membebani performa CPU/GPU perangkat.
+  - Bar durasi tetap interaktif dan menebal responsif (`11.dp`) di bawah jari pengguna saat disentuh atau digeser.
+- **Kontrol Tombol Putar/Jeda Bersih Saat Memuat Audio (*Reliable Loading Play/Pause Controls*)**:
+  - Menghilangkan spinner loading putar pada tombol utama *Play/Pause*, menjaga tombol tetap sebagai ikon *Play* dan *Pause* yang bersih dan konsisten.
+  - Pengguna kini dapat menjeda (*pause*) atau melanjutkan (*play*) proses pemutaran saat lagu sedang dalam status loading/buffering tanpa memicu konflik, crash, atau pembatalan stream yang rusak.
+- **Bilah Tab Kapsul Apple Music Menyatu Langsung di Navbar Atas (*Embedded Top Bar Segmented Control & Directional Animations*)**:
+  - Mengintegrasikan bilah tab navigasi berkas lokal (*Songs*, *Artists*, *Albums*) **langsung ke dalam bilah navigasi atas kaca frosted (*FrostedTopBar*)**, menghilangkan tumpukan bilah ganda (*double bar*) yang memakan ruang layar.
+  - Menghadirkan transisi animasi geser halaman dua arah (*directional natural slide animation*): perpindahan tab ke kanan meluncur masuk dari sisi kanan, dan perpindahan ke kiri meluncur masuk dari sisi kiri dengan kurva deselerasi *FastOutSlowInEasing* yang sangat mulus.
+- **Tampilan Berjenjang File Lokal & Unduhan (*Tabbed Local Music & Downloads View*)**:
+  - Menyempurnakan tampilan berkas lokal pada menu Koleksi (*Library > On Device*) dengan 3 tab navigasi interaktif (*Songs*, *Artists*, *Albums*).
+  - Mengetuk artis atau album membuka sub-daftar lagu secara langsung (*inline drill-down list*), lengkap dengan tombol *Play* dan *Shuffle* cepat.
+
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Proteksi Kuota & Stabilitas Playback Data Seluler (*Strict Cellular Lossless Guard*)**:
+  - Memperbaiki penguncian stream saat opsi Lossless pada data seluler dimatikan (`losslessOnCellular = false`), memastikan pemutaran lagu pertama langsung menggunakan stream YouTube yang responsif dan hemat kuota tanpa memicu resolusi FLAC eksternal yang tidak diperlukan.
+- **Tombol Aksi Cepat pada Notifikasi Media (*Media Notification Favorite & Shuffle Actions*)**:
+  - Notifikasi kontrol media sistem kini dilengkapi tombol aksi cepat *Favorite (Love)* dan *Shuffle* yang tersinkronisasi langsung dengan status lagu dan antrean putar.
+- **Pemutaran Berkelanjutan Otomatis (*AutoPlay Queue Continuation*)**:
+  - Saat antrean musik yang Anda putar habis, aplikasi akan secara otomatis menyambung dan menambahkan rekomendasi lagu serupa tanpa henti.
+- **Pemutaran Instan Lagu Offline Bebas Buffer**:
+  - Lagu yang telah terunduh ke perangkat kini otomatis diputar langsung dari penyimpanan lokal tanpa perlu melakukan pengunduhan ulang atau *network prefetching*, menghemat kuota dan mempercepat respon playback.
+- **Integrasi Scrobbler Last.fm & ListenBrainz**:
+#### ⚡ Peningkatan Kualitas & Performa
+- **Akselerasi Pemutaran Berkas Lokal Ringan & Instan (*Ultra-Fast 120 FPS Local Playback*)**:
+  - Mengoptimalkan konversi antrean pemutaran berkas lokal (`MediaItem mapping`) ke thread latar belakang (*background dispatcher*), menghilangkan *frame drop* dan *UI stutter* saat membuka pemutar dari daftar ratusan lagu lokal.
+  - Mengeliminasi pemeriksaan *I/O disk* pemblokir pada *main thread* dan menambahkan *stable keys* pada seluruh daftar lagu, artis, dan album untuk pengalaman *scrolling* dan pemutaran yang sangat ringan, mulus, dan responsif.
+
+#### 🐛 Perbaikan Masalah & Privasi
+- **Penyempurnaan Ekstraksi Metadata & Cover Art Unduhan Migrasi (*Complete Metadata Extraction & Album Cover Decoding*)**:
+  - Memperbaiki parsing indeks Flutter (`thumbnailUrl`, `durationMs`, dan `album`) serta menambahkan ekstraksi otomatis cover album gambar depan (*embedded picture*) dari berkas MP4/ID3 audio fisik menggunakan `MediaMetadataRetriever`.
+  - Memastikan seluruh informasi judul, artis, nama album, durasi lagu, dan cover album tampil utuh, tajam, dan lengkap tanpa ada metadata yang hilang atau rusak.
+- **Perbaikan Pemutaran Berkas Lokal & Pembersihan Opsi Unduhan (*Local Playback & Actions Cleanup*)**:
+  - Memperbaiki kegagalan pemutaran saat mengetuk berkas lagu lokal (*On Device / Local Music*) yang sebelumnya tertahan di thread background dan membuka lagu lama, kini langsung memutar lagu lokal yang diketuk secara instan di main thread.
+  - Membatasi tombol aksi menu 3-titik (*Download Settings*) pada bilah atas hanya untuk halaman *Downloaded songs* (`local:downloads`), serta menghilangkan opsi *Download* yang tidak relevan pada sheet tindakan lagu berkas lokal di perangkat.
+- **Perbaikan Masalah Unduhan Audio (*Unsupported MIME type audio/webm Fix*)**:
+  - Mengatasi galat `Unsupported MIME type audio/webm` pada sistem `MediaStore` Android dengan menambahkan pemetaan MIME type universal yang kompatibel (`audio/mp4`, `audio/flac`, `audio/mpeg`, dan `audio/ogg`), serta otomatis menyediakan format `M4A (AAC)` ber-metadata lengkap sebagai format bawaan.
+  - Penambahan mekanisme cadangan cerdas (*automatic fallback*) ke direktori privat aplikasi jika MediaStore perangkat menolak ekstensi tertentu, menjamin unduhan lagu tidak akan pernah gagal atau terhenti di tengah jalan.
+- **Penyempurnaan Keluar Akun & Pemulihan Sesi Bersih (*Persistent Logout & Clean Session Invalidation*)**:
+  - Memperbaiki bug migrasi sesi lama pada `AuthStore` yang secara tidak sengaja memulihkan cookie akun sebelumnya saat aplikasi dibuka ulang setelah logout.
+  - Membersihkan *CookieManager* WebView secara menyeluruh saat pengguna keluar (*Sign Out*), memastikan aplikasi benar-benar dalam keadaan belum masuk saat dibuka kembali.
+- **Dukungan Penuh Masuk Multi-Akun (*Google AccountChooser Support*)**:
+  - Mengintegrasikan antarmuka *Google AccountChooser* pada formulir login dalam aplikasi, memudahkan pengguna untuk beralih akun atau menambahkan akun Google lain secara langsung tanpa hambatan.
+- **Pembersihan Bersih Riwayat Cloud Saat Keluar Akun (*Remote History Logout & Switch Cleanup*)**:
+  - Memastikan seluruh data riwayat putar cloud YouTube Music (`remote_listening_history.json`) dan cache memori langsung dihapus bersih seketika saat pengguna keluar (*Sign Out*) atau berganti akun Google.
+  - Tab riwayat *Remote* kini menampilkan formulir masuk yang aman saat pengguna tidak dalam kondisi login, mencegah data riwayat akun sebelumnya tertinggal atau bocor.
 
 
 ### [1.4.1] - 2026-08-25

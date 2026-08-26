@@ -33,6 +33,7 @@ Enjoy high-fidelity audio, synchronized lyrics, offline downloads, seamless cros
 | **Configurable Background Playback** | ✅ Keep / Stop on Close | ❌ Always Kills / Premium | ❌ Limited |
 | **Dolby Atmos / Spatial Audio Widening** | ✅ Custom AudioProcessor | ❌ No | ❌ No |
 | **Last.fm & ListenBrainz Scrobbling** | ✅ Built-in | ❌ No | ⚠️ Third-party |
+| **Legacy Flutter Downloads Migration** | ✅ Auto-import with covers | ❌ No | ❌ No |
 
 ---
 
@@ -54,9 +55,10 @@ Enjoy high-fidelity audio, synchronized lyrics, offline downloads, seamless cros
 - **Fluid Queue Reordering**: Spring-physics drag-and-drop queue management with touch-optimized handles.
 
 ### 📥 Offline & Downloads
-- **Direct Device Downloads**: Saves high-quality audio directly to `Downloads/Musique`.
+- **Direct Device Downloads**: Saves high-quality audio directly to `Downloads/Velthy` with selectable format (M4A, Opus, FLAC).
 - **Embedded Metadata**: In-house MP4/WebM muxers embed artist, album, title, and HD cover art directly into the file without external tagging tools.
 - **Integrated Local Media**: Scans and plays existing local music alongside streaming tracks.
+- **Legacy Migration Engine**: Automatically imports all offline songs downloaded by the previous Flutter edition — covers, metadata, and all — without re-downloading.
 
 ### 🔒 Privacy & Account Freedom
 - **No Backend Required**: All requests are made directly from your phone to public endpoints.
@@ -68,11 +70,11 @@ Enjoy high-fidelity audio, synchronized lyrics, offline downloads, seamless cros
 
 ## 🏛️ Client-Side Architecture
 
-Musique Android is engineered to be **completely autonomous** and serverless:
+Velthy Android is engineered to be **completely autonomous** and serverless:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       Musique Android                       │
+│                        Velthy Android                       │
 │                                                             │
 │   ┌─────────────────────────────────────────────────────┐   │
 │   │                 Jetpack Compose UI                  │   │
@@ -87,6 +89,7 @@ Musique Android is engineered to be **completely autonomous** and serverless:
 │   │   [ Stream Resolver ]     ──► In-Memory Extractor   │   │
 │   │   [ LRCLIB Client ]       ──► Synced Lyrics API     │   │
 │   │   [ Local Media Tagger ]  ──► Embedded ID3/Vorbis   │   │
+│   │   [ Flutter Migrator ]    ──► Legacy Import Engine  │   │
 │   │   [ Media3 Session ]      ──► ExoPlayer + Spatial   │   │
 │   └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
@@ -103,7 +106,7 @@ Musique Android is engineered to be **completely autonomous** and serverless:
 You can download the compiled APK directly from:
 
 1. **[GitHub Releases Page](https://github.com/Synxx12/musique-app-releases/releases)**
-2. **Musique Web Portal**: Directly downloadable from the downloads section of the Musique web application.
+2. **Velthy Web Portal**: Directly downloadable from the downloads section at [velthy.my.id](https://velthy.my.id).
 
 > [!NOTE]
 > When installing for the first time, allow your browser or file manager permission to *"Install unknown apps"*.
@@ -140,10 +143,9 @@ The compiled APK will be output to:
 This repository includes automated GitHub Actions workflows located in [`.github/workflows/build_release_apk.yml`](.github/workflows/build_release_apk.yml).
 
 - **Automated Releases**:
-  - Automatically triggered on push tags (e.g. `v1.3.0`) or on-demand via `workflow_dispatch`.
-  - Auto-increments version numbers.
-  - Automatically compiles and signs APKs (`Velthy-v1.3.8.apk` and `Velthy-latest.apk`).
-  - Publishes releases to [`Synxx12/musique-app-releases`](https://github.com/Synxx12/musique-app-releases) (with fallback to current repository).
+  - Automatically triggered on push tags (e.g. `native-v1.4.2`) or on-demand via `workflow_dispatch`.
+  - Automatically compiles and signs APKs (`Velthy-native-v1.4.2.apk` and `Velthy-latest.apk`).
+  - Publishes releases to [`Synxx12/musique-app-releases`](https://github.com/Synxx12/musique-app-releases).
   - Automatically sends release webhook triggers to `https://velthy.my.id/api/webhooks/github-release`.
 
 ---

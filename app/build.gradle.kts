@@ -20,6 +20,16 @@ val localProps = Properties().apply {
 val moduleIndexUrl: String = System.getenv("MODULE_INDEX_URL")
     ?: localProps.getProperty("MODULE_INDEX_URL")
     ?: "https://monochrome.rickyaddons.dpdns.org/8spine-source.json"
+val lastfmApiKey: String = (
+    localProps.getProperty("LASTFM_API_KEY")
+        ?: System.getenv("LASTFM_API_KEY")
+        ?: ""
+    ).trim()
+val lastfmSecret: String = (
+    localProps.getProperty("LASTFM_SECRET")
+        ?: System.getenv("LASTFM_SECRET")
+        ?: ""
+    ).trim()
 
 val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
@@ -36,13 +46,14 @@ android {
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.4.1"
+        versionCode = 17
+        versionName = "1.4.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "MODULE_INDEX_URL", "\"${moduleIndexUrl}\"")
-
+        buildConfigField("String", "LASTFM_API_KEY", "\"${lastfmApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "LASTFM_SECRET", "\"${lastfmSecret.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     splits {

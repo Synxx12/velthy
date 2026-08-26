@@ -1,4 +1,4 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
 
 import android.content.Context
 import android.content.Intent
@@ -13,16 +13,22 @@ import com.velthy.client.data.sources.SourceResolver
 import com.velthy.client.data.sources.SourceStream
 import com.velthy.client.data.sources.TrackMatcher
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import android.media.MediaScannerConnection
+import android.os.Environment
+import com.velthy.client.playback.AudioCache
+import java.io.File
 import java.io.OutputStream
 
 /** Where a track is between "not on this device" and "on it". */
@@ -95,6 +101,16 @@ object Downloads {
         _savedMetadata.value = runCatching {
             json.decodeFromString(metadataSerializer, prefs.getString(KEY_SAVED_METADATA, null) ?: "{}")
         }.getOrDefault(emptyMap())
+
+        // Automatic one-time background migration for legacy Flutter downloads
+        val appContext = context.applicationContext
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                if (!FlutterMigrationEngine.isMigrationDone(appContext)) {
+                    FlutterMigrationEngine.migrate(appContext, force = false)
+                }
+            }
+        }
     }
 
     // ---- Asking -------------------------------------------------------------
@@ -210,6 +226,10 @@ object Downloads {
         record(newSaved, newMeta)
     }
 
+    internal fun importMigrated(savedMap: Map<String, String>, metaMap: Map<String, SavedSongMetadata>) {
+        record(savedMap, metaMap)
+    }
+
     private fun record(savedMap: Map<String, String>, metaMap: Map<String, SavedSongMetadata>) {
         _saved.value = savedMap
         _savedMetadata.value = metaMap
@@ -238,6 +258,7 @@ object Downloads {
                             artist = meta.artist,
                             thumbnailUrl = meta.thumbnailUrl,
                             durationText = meta.durationText,
+                            albumName = meta.albumName,
                             localUri = meta.uri,
                         )
                     )
@@ -327,7 +348,8 @@ object Downloads {
                 return@withContext
             }
 
-            val destination = DownloadStore.begin(context, name, route.mimeType)
+            val subfolder = subfolderFor(track)
+            val destination = DownloadStore.begin(context, name, route.mimeType, subfolder)
             pending = destination
             destination.openStream().use { sink ->
                 route.write(sink) { written, total ->
@@ -426,7 +448,127 @@ object Downloads {
     }
 
     private const val KEY_SAVED = "downloaded_tracks"
+
+    fun subfolderFor(track: Song): String = when (com.velthy.client.data.settings.AppSettings.downloadFolderStructure.value) {
+        com.velthy.client.data.settings.DownloadFolderStructure.FLAT -> ""
+        com.velthy.client.data.settings.DownloadFolderStructure.ARTIST_ALBUM -> {
+            val artist = DownloadStore.sanitise(track.artist).ifBlank { "Unknown Artist" }
+            val album = DownloadStore.sanitise(track.albumName ?: "Singles").ifBlank { "Singles" }
+            "$artist/$album"
+        }
+        com.velthy.client.data.settings.DownloadFolderStructure.PLAYLIST -> "Downloaded"
+    }
+
+    suspend fun exportAllToMusicFolder(context: Context): Int = withContext(Dispatchers.IO) {
+        val targetDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Musique")
+        if (!targetDir.exists()) targetDir.mkdirs()
+        var count = 0
+        val scannedPaths = mutableListOf<String>()
+        _savedMetadata.value.values.forEach { meta ->
+            runCatching {
+                val uri = Uri.parse(meta.uri)
+                val ext = meta.uri.substringAfterLast('.', "m4a").substringBefore('?')
+                val name = DownloadStore.fileNameFor(
+                    Song(
+                        videoId = meta.videoId,
+                        title = meta.title,
+                        artist = meta.artist,
+                        thumbnailUrl = meta.thumbnailUrl,
+                        albumName = meta.albumName,
+                    ),
+                    ext,
+                )
+                val destFile = File(targetDir, name)
+                if (uri.scheme == "file") {
+                    val src = File(uri.path ?: return@forEach)
+                    if (src.exists()) {
+                        src.copyTo(destFile, overwrite = true)
+                        scannedPaths.add(destFile.absolutePath)
+                        count++
+                    }
+                } else {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        destFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                        scannedPaths.add(destFile.absolutePath)
+                        count++
+                    }
+                }
+            }
+        }
+        if (scannedPaths.isNotEmpty()) {
+            MediaScannerConnection.scanFile(
+                context,
+                scannedPaths.toTypedArray(),
+                null,
+                null,
+            )
+        }
+        count
+    }
+
+    suspend fun deleteAllDownloads(context: Context): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        _saved.value.forEach { (_, uriStr) ->
+            runCatching {
+                val uri = Uri.parse(uriStr)
+                if (DownloadStore.delete(context, uri)) {
+                    count++
+                }
+            }
+        }
+        _saved.value = emptyMap()
+        _savedMetadata.value = emptyMap()
+        prefs.edit().remove(KEY_SAVED).remove(KEY_SAVED_METADATA).apply()
+        count
+    }
+
+    suspend fun calculateStorageStats(context: Context): StorageStats = withContext(Dispatchers.IO) {
+        val audioBytes = AudioCache.sizeBytes()
+        val audioCount = AudioCache.cachedCount()
+
+        val tempBytes = runCatching {
+            context.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("musique_audio") }.sumOf { it.length() }
+        }.getOrDefault(0L)
+
+        var dlBytes = 0L
+        var dlCount = 0
+        _saved.value.values.forEach { uriStr ->
+            runCatching {
+                val uri = Uri.parse(uriStr)
+                if (uri.scheme == "file") {
+                    val f = File(uri.path ?: "")
+                    if (f.exists()) {
+                        dlBytes += f.length()
+                        dlCount++
+                    }
+                } else {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        dlBytes += pfd.statSize
+                        dlCount++
+                    }
+                }
+            }
+        }
+
+        StorageStats(
+            streamingCacheBytes = audioBytes,
+            streamingCacheSongs = audioCount,
+            imageTempCacheBytes = tempBytes,
+            downloadedSongsBytes = dlBytes,
+            downloadedSongsCount = dlCount,
+        )
+    }
 }
+
+data class StorageStats(
+    val streamingCacheBytes: Long = 0L,
+    val streamingCacheSongs: Int = 0,
+    val imageTempCacheBytes: Long = 0L,
+    val downloadedSongsBytes: Long = 0L,
+    val downloadedSongsCount: Int = 0,
+)
 
 @kotlinx.serialization.Serializable
 internal data class SavedSongMetadata(

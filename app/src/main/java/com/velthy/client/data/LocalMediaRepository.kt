@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data
+package com.velthy.client.data
 
 import android.Manifest
 import android.content.ContentUris
@@ -181,18 +181,41 @@ object LocalMediaRepository {
     private fun buildSongFromUri(context: Context, uriStr: String, fileName: String): Song {
         var title = fileName.substringBeforeLast(".")
         var artist = "Unknown Artist"
+        var albumName: String? = null
         var durationText: String? = null
+        var artworkUrl: String? = null
+
+        if (title.contains(" - ")) {
+            artist = title.substringBefore(" - ").trim()
+            title = title.substringAfter(" - ").trim()
+        }
 
         runCatching {
             val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(context, Uri.parse(uriStr))
+            if (uriStr.startsWith("file://")) {
+                retriever.setDataSource(Uri.parse(uriStr).path)
+            } else {
+                retriever.setDataSource(context, Uri.parse(uriStr))
+            }
             val metaTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
             val metaArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            val metaAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
             val metaDur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
 
             if (!metaTitle.isNullOrBlank()) title = metaTitle
             if (!metaArtist.isNullOrBlank()) artist = metaArtist
+            if (!metaAlbum.isNullOrBlank()) albumName = metaAlbum
             if (metaDur != null && metaDur > 0) durationText = formatDuration(metaDur)
+
+            val artBytes = retriever.embeddedPicture
+            if (artBytes != null && artBytes.isNotEmpty()) {
+                val coversDir = File(context.cacheDir, "covers").apply { if (!exists()) mkdirs() }
+                val artFile = File(coversDir, "art_${fileName.hashCode().toString(16)}.jpg")
+                if (!artFile.exists() || artFile.length() == 0L) {
+                    artFile.writeBytes(artBytes)
+                }
+                artworkUrl = Uri.fromFile(artFile).toString()
+            }
             retriever.release()
         }
 
@@ -200,8 +223,9 @@ object LocalMediaRepository {
             videoId = uriStr,
             title = title,
             artist = artist,
-            thumbnailUrl = null,
+            thumbnailUrl = artworkUrl,
             durationText = durationText,
+            albumName = albumName,
             localUri = uriStr,
         )
     }
