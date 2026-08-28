@@ -15,8 +15,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -578,7 +584,10 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             val resolved = YtMusicRepository.resolveAudio(song)
             // The end of what the user queued, not the end of the queue: a song
             // asked for by name outranks whatever AutoPlay lined up behind it.
-            controller?.let { it.addMediaItem(it.autoplaySectionStart(), resolved.toMediaItem()) }
+            controller?.let {
+                it.addMediaItem(it.autoplaySectionStart(), resolved.toMediaItem())
+                Toast.makeText(context, "\"${song.title}\" added to queue", Toast.LENGTH_SHORT).show()
+            }
         }
     }
     val playNext: (Song) -> Unit = { song ->
@@ -589,6 +598,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     (it.currentMediaItemIndex + 1).coerceAtMost(it.mediaItemCount),
                     resolved.toMediaItem(),
                 )
+                Toast.makeText(context, "\"${song.title}\" will play next", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -874,13 +884,26 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         play(songs, songs.indices.random())
                     },
                     onSectionItemClick = { item ->
-                        item.browseId?.let { id ->
-                            viewModel.openDetail(
-                                browseId = id,
+                        when {
+                            item.videoId != null -> playRadio(
+                                Song(
+                                    videoId = item.videoId,
+                                    title = item.title,
+                                    artist = item.subtitle,
+                                    thumbnailUrl = item.thumbnailUrl,
+                                ),
+                            )
+                            item.browseId != null -> viewModel.openDetail(
+                                browseId = item.browseId,
                                 title = item.title,
                                 subtitle = item.subtitle,
                                 thumbnailUrl = item.thumbnailUrl,
-                                type = BrowseType.ALBUM,
+                                type = when {
+                                    item.browseId.startsWith("MPREb_") -> BrowseType.ALBUM
+                                    item.browseId.startsWith("VL") || item.browseId.startsWith("PL") -> BrowseType.PLAYLIST
+                                    item.browseId.startsWith("UC") || item.browseId.startsWith("FEmusic_library_privately_owned_artist_") -> BrowseType.ARTIST
+                                    else -> BrowseType.OTHER
+                                },
                             )
                         }
                     },
@@ -895,7 +918,18 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onArtistClick = { id, name ->
                         viewModel.openDetail(id, name, "Artist", null, BrowseType.ARTIST)
                     },
-                    onAddSuggested = { song -> viewModel.addSuggestedSong(page.browseId, song) },
+                    onAddSuggested = { song ->
+                        viewModel.addSuggestedSong(page.browseId, song) { result ->
+                            result.fold(
+                                onSuccess = {
+                                    Toast.makeText(context, "Added \"${song.title}\" to playlist", Toast.LENGTH_SHORT).show()
+                                },
+                                onFailure = {
+                                    Toast.makeText(context, "Failed to add song: ${it.message ?: "Unknown error"}", Toast.LENGTH_SHORT).show()
+                                },
+                            )
+                        }
+                    },
                     contentPadding = listPadding,
                 )
             } else when (selectedTab) {
@@ -929,11 +963,12 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     contentPadding = listPadding,
                     onLoadMore = viewModel::loadMoreHome,
                     loadingMore = homeLoadingMore,
+                    onSongLongPress = { songActions = it },
                 )
                 TAB_EXPLORE -> HomeScreen(
                     state = exploreState,
                     listState = exploreListState,
-                    title = "Explore",
+                    title = "New",
                     onItemClick = { item ->
                         when {
                             item.videoId != null -> playRadio(
@@ -957,6 +992,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onRefresh = { viewModel.refresh(MainViewModel.Feed.EXPLORE) },
                     pullState = explorePull,
                     contentPadding = listPadding,
+                    onSongLongPress = { songActions = it },
+                    onCategoryClick = { browseId, title ->
+                        viewModel.openDetail(
+                            browseId = browseId,
+                            title = title,
+                            subtitle = "Explore",
+                            thumbnailUrl = null,
+                            type = BrowseType.PLAYLIST,
+                        )
+                    },
                 )
                 TAB_SEARCH -> SearchScreen(
                     filter = filter,
@@ -973,7 +1018,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         }
                     },
                     onSongLongPress = { songActions = it },
-                    onSongSwipe = addToQueue,
+                    onSongSwipe = onSongSwipe,
                     onBrowseClick = { item ->
                         viewModel.recordSearch()
                         viewModel.openDetail(
@@ -1061,9 +1106,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showNotifications -> "Notifications"
                 localDrillDownLabel != null -> localDrillDownLabel ?: ""
                 detail != null -> detail.title
-                else -> tabs[selectedTab].let {
-                    if (it.label == "New") "Explore" else it.label
-                }
+                else -> tabs[selectedTab].label
             },
             hazeState = hazeState,
             ownBackdrop = detail == null || isLocalDetail,
@@ -1440,7 +1483,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onRemoveFromPlaylist = editable?.let {
                         {
                             songActions = null
-                            viewModel.removeFromPlaylist(it.browseId, song)
+                            viewModel.removeFromPlaylist(it.browseId, song) { result ->
+                                result.fold(
+                                    onSuccess = {
+                                        Toast.makeText(context, "Removed \"${song.title}\" from playlist", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onFailure = {
+                                        Toast.makeText(context, "Failed to remove: ${it.message ?: "Unknown error"}", Toast.LENGTH_SHORT).show()
+                                    },
+                                )
+                            }
                         }
                     },
                     onOpenAlbum = { id ->
@@ -1484,11 +1536,32 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     song = target,
                     startCreating = target == null,
                     onPick = { playlist ->
-                        target?.let { viewModel.addToPlaylist(playlist, it) }
+                        target?.let { song ->
+                            viewModel.addToPlaylist(playlist, song) { result ->
+                                result.fold(
+                                    onSuccess = {
+                                        Toast.makeText(context, "Added \"${song.title}\" to ${playlist.title}", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onFailure = {
+                                        Toast.makeText(context, "Failed to add to playlist: ${it.message ?: "Unknown error"}", Toast.LENGTH_SHORT).show()
+                                    },
+                                )
+                            }
+                        }
                         dismiss()
                     },
                     onCreate = { title, privacy ->
-                        viewModel.createPlaylist(title, privacy, target)
+                        viewModel.createPlaylist(title, privacy, target) { result ->
+                            result.fold(
+                                onSuccess = {
+                                    val msg = if (target != null) "Created \"$title\" and added \"${target.title}\"" else "Created playlist \"$title\""
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                },
+                                onFailure = {
+                                    Toast.makeText(context, "Failed to create playlist: ${it.message ?: "Unknown error"}", Toast.LENGTH_SHORT).show()
+                                },
+                            )
+                        }
                         dismiss()
                     },
                 )

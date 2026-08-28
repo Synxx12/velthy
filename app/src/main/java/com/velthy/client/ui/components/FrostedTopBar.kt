@@ -91,8 +91,13 @@ fun FrostedTopBar(
         animationSpec = tween(220),
         label = "topBarTitleAlpha",
     )
+    val backdropAlpha by animateFloatAsState(
+        targetValue = if (scrolled) 1f else 0f,
+        animationSpec = tween(220),
+        label = "topBarBackdropAlpha",
+    )
     val dividerColor by animateColorAsState(
-        targetValue = MaterialTheme.colorScheme.outline.copy(alpha = if (scrolled && ownBackdrop) 0.4f else 0f),
+        targetValue = MaterialTheme.colorScheme.outline.copy(alpha = if (scrolled && ownBackdrop) 0.35f else 0f),
         animationSpec = tween(220),
         label = "topBarDivider",
     )
@@ -107,11 +112,21 @@ fun FrostedTopBar(
             .then(
                 when {
                     !ownBackdrop -> Modifier
-                    reduceDynamicBlur -> Modifier.background(MaterialTheme.colorScheme.surface)
-                    else -> Modifier.hazeEffect(
-                        state = hazeState,
-                        style = HazeMaterials.ultraThin(MaterialTheme.colorScheme.surface),
+                    reduceDynamicBlur -> Modifier.background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = backdropAlpha)
                     )
+                    else -> Modifier
+                        .background(
+                            MaterialTheme.colorScheme.surface.copy(
+                                alpha = 0.85f * backdropAlpha,
+                            )
+                        )
+                        .hazeEffect(
+                            state = hazeState,
+                            style = HazeMaterials.regular(MaterialTheme.colorScheme.surface),
+                        ) {
+                            alpha = backdropAlpha
+                        }
                 },
             ),
     ) {

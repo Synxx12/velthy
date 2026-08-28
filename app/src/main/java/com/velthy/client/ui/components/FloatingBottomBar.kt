@@ -2,6 +2,7 @@ package com.velthy.client.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -41,14 +42,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -71,8 +72,10 @@ data class BottomTab(
 
 /**
  * Apple Music / Cider-Style Dual-Island Floating Bottom Bar.
- * - Left/Center Island: Primary navigation capsule with fluid sliding pill indicator and horizontal swipe gestures
+ * - Left Island: Primary navigation capsule (Home, New, Library)
  * - Right Island: Dedicated Search circular floating button
+ * - Fluid Liquid Glass Sliding Pill: Emerges unclipped out of the 3-item capsule,
+ *   glides across the gap, and docks directly into the Search button with spring physics.
  */
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
@@ -95,42 +98,92 @@ fun FloatingBottomBar(
     val barHeight = 60.dp
     val capsuleShape = RoundedCornerShape(30.dp)
     val circleShape = CircleShape
+    val islandGapDp = 8.dp
+    val innerHorizontalPadDp = 6.dp
+    val innerVerticalPadDp = 5.dp
 
-    // ─── Gesture Swiping & Fluid Sliding Pill Engine ───
+    // ─── Gesture Swiping & Fluid Sliding Pill Coordinates Engine ───
     var dragOffset by remember { mutableFloatStateOf(0f) }
     val currentSelectedIndex by rememberUpdatedState(selectedIndex)
 
-    var rowSize by remember { mutableStateOf(IntSize.Zero) }
-    val gapPx = with(density) { 6.dp.toPx() }
+    var leftIslandSize by remember { mutableStateOf(IntSize.Zero) }
     val n = mainTabs.size
 
-    val tabWidthPx = if (rowSize.width > 0 && n > 0) {
-        (rowSize.width - gapPx * (n - 1)) / n
+    val innerPadPx = with(density) { innerHorizontalPadDp.toPx() }
+    val gapMainPx = with(density) { 6.dp.toPx() }
+    val islandGapPx = with(density) { islandGapDp.toPx() }
+    val barHeightPx = with(density) { barHeight.toPx() }
+    val pillHeightDp = barHeight - (innerVerticalPadDp * 2)
+
+    val leftInnerWidthPx = (leftIslandSize.width - innerPadPx * 2).coerceAtLeast(0f)
+    val tabWidthPx = if (leftInnerWidthPx > 0f && n > 0) {
+        (leftInnerWidthPx - gapMainPx * (n - 1)) / n
     } else 0f
-    val tabStepPx = if (rowSize.width > 0 && n > 0) {
-        (rowSize.width + gapPx) / n
+    val tabStepPx = if (leftInnerWidthPx > 0f && n > 0) {
+        tabWidthPx + gapMainPx
     } else 0f
 
-    val isMainTabActive = selectedIndex in 0 until n
-    val activeMainIndex = if (isMainTabActive) selectedIndex else 0
+    val tab0X = innerPadPx
+    val tab1X = tab0X + tabStepPx
+    val tab2X = tab0X + 2 * tabStepPx
 
-    val pillTargetPx = if (tabStepPx > 0f) {
-        activeMainIndex * tabStepPx + dragOffset
+    val searchPillSizeDp = 48.dp
+    val searchPillWidthPx = with(density) { searchPillSizeDp.toPx() }
+    val searchPillXPx = if (leftIslandSize.width > 0) {
+        leftIslandSize.width + islandGapPx + (barHeightPx - searchPillWidthPx) / 2f
     } else 0f
 
-    val animatedPillOffset by animateFloatAsState(
-        targetValue = pillTargetPx,
+    val safeIndex = selectedIndex.coerceIn(0, tabs.lastIndex)
+
+    val targetBaseXPx = when (safeIndex) {
+        0 -> tab0X
+        1 -> tab1X
+        2 -> tab2X
+        else -> searchPillXPx
+    }
+
+    val pillTargetXPx = if (leftIslandSize.width > 0) {
+        val rawX = targetBaseXPx + dragOffset
+        val minX = tab0X
+        val maxX = searchPillXPx
+        rawX.coerceIn(minX, maxX)
+    } else 0f
+
+    val isSearchOrNearSearch = safeIndex == 3 || (safeIndex == 2 && dragOffset > (searchPillXPx - tab2X) * 0.45f)
+
+    val targetWidthPx = if (isSearchOrNearSearch && searchPillWidthPx > 0f) {
+        searchPillWidthPx
+    } else {
+        tabWidthPx
+    }
+
+    val targetRadiusDp = if (isSearchOrNearSearch) 24.dp else 25.dp
+
+    val animatedPillX by animateFloatAsState(
+        targetValue = pillTargetXPx,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = 0.78f,
             stiffness = Spring.StiffnessMediumLow,
         ),
-        label = "pillOffset",
+        label = "liquidPillX",
     )
 
-    val pillAlpha by animateFloatAsState(
-        targetValue = if (isMainTabActive) 1f else 0f,
-        animationSpec = tween(220),
-        label = "pillAlpha",
+    val animatedPillWidth by animateFloatAsState(
+        targetValue = targetWidthPx,
+        animationSpec = spring(
+            dampingRatio = 0.80f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "liquidPillWidth",
+    )
+
+    val animatedPillRadius by animateDpAsState(
+        targetValue = targetRadiusDp,
+        animationSpec = spring(
+            dampingRatio = 0.80f,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "liquidPillRadius",
     )
 
     var lastHapticTab by remember { mutableIntStateOf(selectedIndex) }
@@ -139,57 +192,125 @@ fun FloatingBottomBar(
         dragOffset = 0f
     }
 
-    Row(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .pointerInput(Unit) {
-                detectTapGestures { /* Absorb any taps in gutters/gaps so they don't click items behind */ }
+                detectTapGestures { /* Absorb empty space taps around navbar */ }
             }
             .navigationBarsPadding()
             .padding(horizontal = PAGE_GUTTER)
             .padding(bottom = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.CenterStart,
     ) {
-        // ─── 1. Main Navigation Capsule (Left Island with Swipe & Sliding Pill) ───
-        Box(
+        // ─── 1. Dual-Island Background Layer (Left Capsule + Right Circle) ───
+        Row(
             modifier = Modifier
-                .weight(1f)
-                .height(barHeight)
-                .clip(capsuleShape)
-                .then(
-                    if (reduceDynamicBlur) {
-                        Modifier.background(container)
-                    } else {
-                        Modifier.hazeEffect(
-                            state = hazeState,
-                            style = HazeMaterials.regular(container),
-                        )
-                    },
-                )
-                .border(0.5.dp, Color.White.copy(alpha = 0.12f), capsuleShape)
-                .padding(horizontal = 6.dp, vertical = 5.dp),
+                .fillMaxWidth()
+                .height(barHeight),
+            horizontalArrangement = Arrangement.spacedBy(islandGapDp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Fluid Sliding Pill Background Indicator
-            if (tabWidthPx > 0f && pillAlpha > 0.01f) {
+            // Left Island Background Capsule (Home, New, Library)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(capsuleShape)
+                    .then(
+                        if (reduceDynamicBlur) {
+                            Modifier.background(container)
+                        } else {
+                            Modifier.hazeEffect(
+                                state = hazeState,
+                                style = HazeMaterials.regular(container),
+                            )
+                        },
+                    )
+                    .border(0.5.dp, Color.White.copy(alpha = 0.14f), capsuleShape)
+                    .onSizeChanged { leftIslandSize = it },
+            )
+
+            // Right Island Background Circle (Search)
+            if (searchTab != null && searchTabIndex >= 0) {
                 Box(
                     modifier = Modifier
-                        .width(with(density) { tabWidthPx.toDp() })
-                        .height(with(density) { rowSize.height.toDp() })
-                        .graphicsLayer {
-                            translationX = animatedPillOffset
-                            alpha = pillAlpha
-                        }
-                        .clip(capsuleShape)
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                        .size(barHeight)
+                        .clip(circleShape)
+                        .then(
+                            if (reduceDynamicBlur) {
+                                Modifier.background(container)
+                            } else {
+                                Modifier.hazeEffect(
+                                    state = hazeState,
+                                    style = HazeMaterials.regular(container),
+                                )
+                            },
+                        )
+                        .border(0.5.dp, Color.White.copy(alpha = 0.14f), circleShape),
                 )
             }
+        }
 
-            // Interactive Tab Row with Horizontal Drag Detection
+        // ─── 2. Continuous Liquid Frosted Rainbow Glass Sliding Pill Layer (UNCLIPPED ACROSS GAP!) ───
+        if (tabWidthPx > 0f && leftIslandSize.width > 0) {
+            Box(
+                modifier = Modifier
+                    .padding(vertical = innerVerticalPadDp)
+                    .graphicsLayer {
+                        translationX = animatedPillX
+                    }
+                    .width(with(density) { animatedPillWidth.toDp() })
+                    .height(pillHeightDp)
+                    .clip(RoundedCornerShape(animatedPillRadius))
+                    // Base Frosted Glass + Soft Iridescent Prism Rainbow Shimmer
+                    .background(
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.16f),
+                                Color(0xFF8CE8FF).copy(alpha = 0.14f), // Soft Prismatic Cyan
+                                Color(0xFFE8B5FF).copy(alpha = 0.14f), // Soft Prismatic Violet
+                                Color(0xFFFFC085).copy(alpha = 0.12f), // Soft Prismatic Peach/Amber
+                                Color.White.copy(alpha = 0.10f),
+                            ),
+                            start = Offset(0f, 0f),
+                            end = Offset(
+                                with(density) { animatedPillWidth.toDp().toPx() },
+                                with(density) { pillHeightDp.toPx() },
+                            ),
+                        ),
+                    )
+                    // Prismatic Chromatic Hairline Border
+                    .border(
+                        width = 0.75.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.38f),
+                                Color(0xFF8CE8FF).copy(alpha = 0.30f), // Prismatic Cyan sheen
+                                Color(0xFFE8B5FF).copy(alpha = 0.30f), // Prismatic Violet sheen
+                                Color(0xFFFFD59E).copy(alpha = 0.25f), // Prismatic Gold sheen
+                                Color.White.copy(alpha = 0.35f),
+                            ),
+                        ),
+                        shape = RoundedCornerShape(animatedPillRadius),
+                    ),
+            )
+        }
+
+        // ─── 3. Interactive Content & Gesture Layer (Icons, Text, Drag Gestures) ───
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(barHeight),
+            horizontalArrangement = Arrangement.spacedBy(islandGapDp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Left Island Content (Home, New, Library with Horizontal Drag)
             Row(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .onSizeChanged { rowSize = it }
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(horizontal = innerHorizontalPadDp, vertical = innerVerticalPadDp)
                     .pointerInput(Unit) {
                         var totalDrag = 0f
                         detectHorizontalDragGestures(
@@ -197,15 +318,22 @@ fun FloatingBottomBar(
                             onDragCancel = { dragOffset = 0f },
                             onDragEnd = {
                                 if (tabStepPx > 0f) {
-                                    val ratio = totalDrag / tabStepPx
+                                    val distToSearch = (searchPillXPx - tab2X).coerceAtLeast(tabStepPx)
+                                    val ratio = if (currentSelectedIndex == 2 && totalDrag > 0) {
+                                        totalDrag / distToSearch
+                                    } else {
+                                        totalDrag / tabStepPx
+                                    }
                                     val shift = when {
-                                        ratio > 0.35f -> kotlin.math.max(1, ratio.roundToInt())
-                                        ratio < -0.35f -> kotlin.math.min(-1, ratio.roundToInt())
+                                        ratio > 0.32f -> kotlin.math.max(1, ratio.roundToInt())
+                                        ratio < -0.32f -> kotlin.math.min(-1, ratio.roundToInt())
                                         else -> 0
                                     }
                                     val currentBase = if (currentSelectedIndex in 0 until n) currentSelectedIndex else 0
-                                    val newIndex = (currentBase + shift).coerceIn(0, mainTabs.lastIndex)
+                                    val maxIndex = if (searchTabIndex >= 0) tabs.lastIndex else mainTabs.lastIndex
+                                    val newIndex = (currentBase + shift).coerceIn(0, maxIndex)
                                     if (newIndex != currentSelectedIndex) {
+                                        haptics.play(Haptic.Select)
                                         onTabSelected(newIndex)
                                     }
                                 }
@@ -214,18 +342,27 @@ fun FloatingBottomBar(
                             onHorizontalDrag = { _, delta ->
                                 totalDrag += delta
                                 val currentBase = if (currentSelectedIndex in 0 until n) currentSelectedIndex else 0
+                                val maxRightPx = if (currentBase == 2 && searchTabIndex >= 0) {
+                                    searchPillXPx - tab2X
+                                } else {
+                                    (mainTabs.lastIndex - currentBase) * tabStepPx
+                                }
+
                                 val rawPx = when {
-                                    totalDrag > 0 && currentBase == mainTabs.lastIndex -> totalDrag * 0.25f
-                                    totalDrag < 0 && currentBase == 0 -> totalDrag * 0.25f
+                                    totalDrag > maxRightPx -> maxRightPx + (totalDrag - maxRightPx) * 0.22f
+                                    totalDrag < 0 && currentBase == 0 -> totalDrag * 0.22f
                                     else -> totalDrag
                                 }
                                 dragOffset = rawPx
 
-                                val approxTab =
+                                val approxTab = if (currentBase == 2 && dragOffset > (searchPillXPx - tab2X) * 0.5f) {
+                                    3
+                                } else {
                                     (currentBase + dragOffset / tabStepPx)
                                         .coerceIn(0f, mainTabs.lastIndex.toFloat())
                                         .roundToInt()
-                                tag@ if (approxTab != lastHapticTab) {
+                                }
+                                if (approxTab != lastHapticTab) {
                                     haptics.play(Haptic.Tick)
                                     lastHapticTab = approxTab
                                 }
@@ -247,64 +384,60 @@ fun FloatingBottomBar(
                     )
                 }
             }
-        }
 
-        // ─── 2. Dedicated Search Button (Right Island) ───
-        if (searchTab != null && searchTabIndex >= 0) {
-            val isSearchSelected = selectedIndex == searchTabIndex
-            val searchScale by animateFloatAsState(
-                targetValue = if (isSearchSelected) 1.08f else 1f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
-                label = "searchTabScale",
-            )
-            val searchTint by animateColorAsState(
-                targetValue = if (isSearchSelected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                animationSpec = tween(200),
-                label = "searchTabTint",
-            )
-
-            Box(
-                modifier = Modifier
-                    .size(barHeight)
-                    .clip(circleShape)
-                    .then(
-                        if (reduceDynamicBlur) {
-                            Modifier.background(container)
-                        } else {
-                            Modifier.hazeEffect(
-                                state = hazeState,
-                                style = HazeMaterials.regular(container),
-                            )
-                        },
-                    )
-                    .border(0.5.dp, Color.White.copy(alpha = 0.12f), circleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {
-                            haptics.play(Haptic.Select)
-                            onTabSelected(searchTabIndex)
-                        },
+            // Right Island Content (Search Button with Left Drag to Library)
+            if (searchTab != null && searchTabIndex >= 0) {
+                val isSearchSelected = selectedIndex == searchTabIndex
+                val searchScale by animateFloatAsState(
+                    targetValue = if (isSearchSelected) 1.06f else 1f,
+                    animationSpec = spring(
+                        dampingRatio = 0.80f,
+                        stiffness = Spring.StiffnessMediumLow,
                     ),
-                contentAlignment = Alignment.Center,
-            ) {
-                // Subtle circular indicator when search is active
+                    label = "searchTabScale",
+                )
+                val searchTint by animateColorAsState(
+                    targetValue = if (isSearchSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                    },
+                    animationSpec = tween(180),
+                    label = "searchTabTint",
+                )
+
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isSearchSelected) {
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                            } else {
-                                Color.Transparent
+                        .size(barHeight)
+                        .clip(circleShape)
+                        .pointerInput(Unit) {
+                            var searchDrag = 0f
+                            detectHorizontalDragGestures(
+                                onDragStart = { searchDrag = 0f },
+                                onDragCancel = {
+                                    dragOffset = 0f
+                                    searchDrag = 0f
+                                },
+                                onDragEnd = {
+                                    if (searchDrag < -25f) {
+                                        haptics.play(Haptic.Select)
+                                        onTabSelected(mainTabs.lastIndex)
+                                    }
+                                    dragOffset = 0f
+                                    searchDrag = 0f
+                                },
+                                onHorizontalDrag = { _, delta ->
+                                    searchDrag += delta
+                                    dragOffset = searchDrag
+                                },
+                            )
+                        }
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {
+                                haptics.play(Haptic.Select)
+                                onTabSelected(searchTabIndex)
                             },
                         ),
                     contentAlignment = Alignment.Center,
@@ -337,9 +470,9 @@ private fun AppleMusicTabItem(
     modifier: Modifier = Modifier,
 ) {
     val scale by animateFloatAsState(
-        targetValue = if (selected) 1.08f else 1f,
+        targetValue = if (selected) 1.06f else 1f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = 0.80f,
             stiffness = Spring.StiffnessMediumLow,
         ),
         label = "tabScale",
@@ -348,9 +481,9 @@ private fun AppleMusicTabItem(
         targetValue = if (selected) {
             MaterialTheme.colorScheme.primary
         } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.70f)
         },
-        animationSpec = tween(200),
+        animationSpec = tween(180),
         label = "tabTint",
     )
 
@@ -359,24 +492,23 @@ private fun AppleMusicTabItem(
         verticalArrangement = Arrangement.Center,
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
             )
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .padding(vertical = 4.dp),
     ) {
         Icon(
             imageVector = tab.icon,
             contentDescription = tab.label,
             tint = tint,
-            modifier = Modifier
-                .size(22.dp)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                },
+            modifier = Modifier.size(22.dp),
         )
 
         Spacer(Modifier.height(2.dp))

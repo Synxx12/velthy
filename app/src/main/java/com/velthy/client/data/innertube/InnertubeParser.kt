@@ -134,6 +134,7 @@ object InnertubeParser {
         return sections.mapNotNull { section ->
             section.o("musicCarouselShelfRenderer")?.let(::carouselShelf)
                 ?: section.o("musicShelfRenderer")?.let(::plainShelf)
+                ?: section.o("gridRenderer")?.let(::gridShelf)
         }
     }
 
@@ -155,6 +156,8 @@ object InnertubeParser {
                         ?.let(::carouselShelf)?.let(out::add)
                     (node["musicShelfRenderer"] as? JsonObject)
                         ?.let(::plainShelf)?.let(out::add)
+                    (node["gridRenderer"] as? JsonObject)
+                        ?.let(::gridShelf)?.let(out::add)
                     node.values.forEach(::walk)
                 }
                 is JsonArray -> node.forEach(::walk)
@@ -189,6 +192,36 @@ object InnertubeParser {
         }.let { list -> if (AppSettings.accountMoreContent.value) list else list.filterNot { it.isVideo } }
             .map { ShelfItem(it.title, it.artist, it.thumbnailUrl, it.videoId, null) }
         return if (items.isEmpty()) null else HomeShelf(title.ifBlank { "For you" }, items)
+    }
+
+    private fun gridShelf(grid: JsonObject): HomeShelf? {
+        val header = grid.o("header")
+        val title = header.o("gridHeaderRenderer").o("title").runs()
+            .ifBlank { grid.o("title").runs() }
+            .ifBlank { header.o("musicCarouselShelfBasicHeaderRenderer").o("title").runs() }
+        val items = grid.a("items").orEmpty().mapNotNull { item ->
+            val navButton = item.o("musicNavigationButtonRenderer")
+            if (navButton != null) {
+                val buttonText = navButton.o("buttonText").runs()
+                val browseId = navButton.o("clickCommand").o("browseEndpoint").s("browseId")
+                    ?: navButton.o("navigationEndpoint").o("browseEndpoint").s("browseId")
+                if (buttonText.isNotBlank() && browseId != null) {
+                    ShelfItem(
+                        title = buttonText,
+                        subtitle = "Explore",
+                        thumbnailUrl = null,
+                        videoId = null,
+                        browseId = browseId,
+                    )
+                } else null
+            } else {
+                parseTwoRowItem(item.o("musicTwoRowItemRenderer"))
+                    ?: parseResponsiveListItem(item.o("musicResponsiveListItemRenderer"))?.let { song ->
+                        ShelfItem(song.title, song.artist, song.thumbnailUrl, song.videoId, null)
+                    }
+            }
+        }
+        return if (items.isEmpty()) null else HomeShelf(title.ifBlank { "Explore" }, items)
     }
 
     /**

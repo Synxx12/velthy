@@ -136,7 +136,7 @@ object YtMusicRepository {
      */
     suspend fun explore(): Result<List<HomeShelf>> = call("explore") {
         coroutineScope {
-            val feeds = listOf("FEmusic_explore", "FEmusic_charts")
+            val feeds = listOf("FEmusic_explore", "FEmusic_charts", "FEmusic_new_releases")
                 .map { id -> async { runCatching { shelvesOf(id) }.getOrDefault(emptyList()) } }
                 .awaitAll()
             val seen = mutableSetOf<String>()
@@ -149,58 +149,7 @@ object YtMusicRepository {
             InnertubeParser.parseSearch(Innertube.search(query, filter?.params))
         }
 
-    /**
-     * The catalogue (audio-only) release of a music-video upload, found the
-     * same way the "Switch to audio" toggle in the real app would land on
-     * it: searching the title and artist and taking the closest song match.
-     * Called before a video-tagged [Song] ever reaches the queue, so
-     * playback, the mini player/notification, and YouTube's own history all
-     * see the audio track — never the video upload's title, art or id.
-     *
-     * Returns [song] unchanged when it isn't a video, or when nothing better
-     * turns up — playing the video's own audio track beats failing playback
-     * outright, and [song] is what a queue restore or offline retry falls
-     * back to as well.
-     *
-     * [search] already drops video rows from its results (see
-     * [InnertubeParser.parseSearch]), so every candidate here is audio-only
-     * without a second check.
-     */
-    suspend fun resolveAudio(song: Song): Song {
-        if (!song.isVideo) return song
-
-        val lowerTitle = song.title.lowercase()
-        // If it's a mix, compilation, DJ set, live performance, or full album, keep the original video audio!
-        if (lowerTitle.contains("full album") ||
-            lowerTitle.contains("mix") ||
-            lowerTitle.contains("remix") ||
-            lowerTitle.contains("nonstop") ||
-            lowerTitle.contains("jedag jedug") ||
-            lowerTitle.contains("dj ") ||
-            lowerTitle.contains("kompilasi") ||
-            lowerTitle.contains("acoustic") ||
-            lowerTitle.contains("akustik") ||
-            lowerTitle.contains("live") ||
-            lowerTitle.contains("cover")
-        ) {
-            return song
-        }
-
-        val candidates = search("${song.title} ${song.artist}", SearchFilter.SONGS)
-            .getOrNull()
-            ?.filterIsInstance<SearchResult.Track>()
-            ?.map { it.song }
-            .orEmpty()
-        val normalizedTitle = normalizeTitle(song.title)
-        return candidates.firstOrNull { 
-            val normCandidate = normalizeTitle(it.title)
-            normCandidate == normalizedTitle || normCandidate.contains(normalizedTitle) || normalizedTitle.contains(normCandidate)
-        } ?: song
-    }
-
-    /** Strips the "(Official Video)" / "(Lyrical)" noise a title match would trip on. */
-    private fun normalizeTitle(title: String): String =
-        title.lowercase().replace(Regex("""[(\[][^)\]]*[)\]]"""), "").trim()
+    suspend fun resolveAudio(song: Song): Song = song
 
     /** Signed-in profile for the settings header. Null when signed out. */
     suspend fun account(): Result<Account> = call("account") {
@@ -290,6 +239,10 @@ object YtMusicRepository {
      */
     suspend fun browseSongs(browseId: String): Result<SongPage> = call("browse:$browseId") {
         pageOf(Innertube.browse(browseId))
+    }
+
+    suspend fun browseShelves(browseId: String): Result<List<HomeShelf>> = call("shelves:$browseId") {
+        shelvesOf(browseId)
     }
 
     /** The page [SongPage.continuation] points at. */

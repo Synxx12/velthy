@@ -45,6 +45,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.velthy.client.data.Http
 import com.velthy.client.data.canvas.CanvasArtwork
 
@@ -161,7 +164,22 @@ fun CanvasArtworkPlayer(
         player.prepare()
     }
 
-    LaunchedEffect(isPlaying) { player.playWhenReady = isPlaying }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isAppVisible by remember {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            isAppVisible = event.targetState.isAtLeast(Lifecycle.State.STARTED)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(isPlaying, isAppVisible) {
+        player.playWhenReady = isPlaying && isAppVisible
+    }
 
     LaunchedEffect(rendered) {
         onRenderedChanged(rendered)

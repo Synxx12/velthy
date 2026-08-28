@@ -6,6 +6,48 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
+### [Unreleased]
+
+### [native-v1.4.3] — 2026-08-28
+
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Akurasi Pemutaran Hasil Pencarian 100% Presisi**:
+  - Memastikan lagu atau video musik yang diketuk pada daftar pencarian terputar dengan tepat dan presisi tanpa tertukar atau tergantikan oleh versi lain.
+- **Penyelarasan Gestur Geser Antrean & Putar Berikutnya (*Swipe to Queue / Play Next*)**:
+  - Mengintegrasikan gestur geser pada baris lagu di halaman pencarian agar konsisten mengikuti preferensi antrean (*Putar Berikutnya* atau *Masukkan ke Antrean*) dengan umpan balik getaran haptik dan konfirmasi notifikasi instan.
+
+#### ✨ Fitur Baru & Tampilan
+- **Bilah Navigasi Dual-Island Apple Glass dengan Efek Kaca Pelangi Prisma (*Iridescent Rainbow Glass Navigation*)**:
+  - Menghadirkan tata letak navigasi dua pulau (*Dual-Island*): Kapsul utama untuk *Home, New, Library* dan tombol lingkaran apung khusus untuk *Search*.
+  - Menghadirkan indikator seleksi kaca cair pelangi (*iridescent prismatic rainbow glass pill*) yang meluncur bebas melintasi celah antar pulau:
+    - Gradien refraksi prisma kaca optik (*subtle chromatic sheen*: cyan, violet, peach, white) dengan garis tepi prisma berkilau (*chromatic hairline border*).
+    - Berjalan dengan akselerasi GPU murni (*hardware shader gradient*) yang super ringan dan bebas beban performa (*60–120 FPS buttery smooth*).
+    - Saat digeser ke kanan mentok atau berpindah ke *Search*, pil kaca pelangi mengalir keluar menyeberangi celah udara dan melebur mulus (*docking*) ke dalam tombol Pencarian tanpa terpotong radius border.
+- **Tampilan Bersih & Minimalis Tanpa Judul Besar di Feed (*Clean Header & Dynamic Top Bar Title*)**:
+  - Menghilangkan tulisan judul besar (*"Listen Now"*, *"New"*, *"Library"*) yang memakan ruang di dalam feed daftar, sehingga konten musik langsung tampil rapi dari atas dan judul halaman hanya muncul secara elegan di bilah navigasi atas saat layar digulirkan (*on scroll*).
+- **Mesin Eksplorasi Genre, Tangga Lagu & Kategori Lengkap (*Browse by Genre & Category Hub Engine*)**:
+  - Menghadirkan dukungan menyeluruh untuk membuka dan menjelajahi seluruh kategori musik (*Browse by Genre, Top Charts, New Releases, Decades, Moods & Activities, Worldwide Charts*):
+    - Parsing cerdas untuk rak carousel, kartu playlist/album, dan tombol grid navigasi genre.
+    - Tampilan halaman detail yang adaptif dengan kartu gradien interaktif untuk kategori tanpa sampul dan delegasi pemutaran otomatis (*smart section item click*).
+- **Desain & Tata Letak Eksplorasi Baru ala Apple Music (*Apple Music New Tab Overhaul*)**:
+  - Merancang ulang antarmuka tab **"New"** dengan hierarki visual Apple Music yang elegan:
+    - **Hero Featured Banner**: Kartu banner lanskap berformat lebar dengan overline kategori, judul tebal, kurator, dan overlay deskripsi bergradien halus di atas cover album.
+    - **Rak Kolom 4 Lagu (*Best New Songs & Viral Hits*)**: Kolom 4 lagu vertikal yang digulirkan secara horizontal (*snap paging*), lengkap dengan cover art 50dp, artis, dan menu 3-titik.
+    - **Rak 2 Baris (*Updated Playlists & Moods*)**: Tata letak grid 2-tingkat untuk playlist terbarui dan kategori aktivitas yang bergulir horizontal secara berpasangan.
+    - **Rak Kartu 1 Baris (*Trending Now & Recent Releases*)**: Rak album dan rilisan terkini dengan visual persegi beresolusi tinggi.
+    - **Indikator Navigasi Chevron (`>`)**: Penambahan panah navigasi pada seluruh judul section untuk kejelasan aksi eksplorasi.
+    - **Bagian "More to Explore"**: Daftar tautan navigasi beraksen warna primer di bagian bawah untuk akses instan ke genre, tangga lagu, rilisan baru, dan era musik.
+- **Bilah Pencarian Transparan Dinamis (*Dynamic Transparent to Frosted Top Bar*)**:
+  - Memastikan bilah pencarian atas tampil 100% bersih dan transparan tanpa kotak abu-abu di belakang pill input saat berada di posisi teratas, dan secara dinamis memudarkan efek kaca frosted (*frosted glass blur & divider*) hanya saat daftar mulai digulirkan.
+- **Umpan Balik Notifikasi Tambah & Kelola Playlist (*Interactive Playlist Feedback*)**:
+  - Menghadirkan notifikasi konfirmasi instan yang elegan saat menambahkan lagu ke playlist, membuat playlist baru bersama lagu pilihan, maupun menghapus lagu dari koleksi playlist.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Efisiensi Baterai & Penghentian Otomatis Video Artwork di Latar Belakang (*Lifecycle-Aware Video Decoder Optimization*)**:
+  - Mengintegrasikan pengamat siklus hidup aplikasi (*LifecycleEventObserver*) pada pemutar *Motion Artwork / Canvas*, sehingga decoding video MP4 dihentikan secara instan saat aplikasi berjalan di latar belakang (*background*) atau saat layar ponsel terkunci. Hal ini secara drastis menurunkan penggunaan CPU/GPU, menghemat daya baterai, dan mencegah perangkat menjadi panas saat memutar musik di latar belakang.
+- **Optimasi Stabilitas Daftar Pencarian & Zero-Lag Item Keys**:
+  - Memberikan identifikasi unik dan stabil pada seluruh baris hasil pencarian lagu dan kategori untuk scrolling yang mulus, stabil, dan bebas konflik indeks saat hasil pencarian diperbarui.
+
 ### [native-v1.4.2] — 2026-08-26
 
 #### ✨ Fitur Baru & Tampilan

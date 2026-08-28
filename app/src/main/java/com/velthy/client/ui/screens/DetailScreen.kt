@@ -38,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -942,16 +943,45 @@ private fun SectionCard(item: ShelfItem, palette: ArtworkPalette, onClick: () ->
             .width(SHELF_CARD_WIDTH)
             .clickable(onClick = onClick),
     ) {
-        AsyncImage(
-            model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
-            contentDescription = null,
-            modifier = Modifier
-                .width(SHELF_CARD_WIDTH)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(10.dp))
-                .thumbnailBorder(RoundedCornerShape(10.dp))
-                .background(palette.elevated),
-        )
+        if (item.thumbnailUrl != null) {
+            AsyncImage(
+                model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
+                contentDescription = null,
+                modifier = Modifier
+                    .width(SHELF_CARD_WIDTH)
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .thumbnailBorder(RoundedCornerShape(10.dp))
+                    .background(palette.elevated),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .width(SHELF_CARD_WIDTH)
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .thumbnailBorder(RoundedCornerShape(10.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                palette.accent.copy(alpha = 0.75f),
+                                palette.elevated,
+                            ),
+                        ),
+                    )
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             text = item.title,

@@ -399,12 +399,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * ahead of the answer, and a "Added to X" that turns out to be untrue is
      * worse than one that arrives a moment late.
      */
-    fun addToPlaylist(playlist: UserPlaylist, song: Song) {
-        if (!requireSignIn()) return
+    fun addToPlaylist(playlist: UserPlaylist, song: Song, onResult: ((Result<Unit>) -> Unit)? = null) {
+        if (!requireSignIn()) {
+            onResult?.invoke(Result.failure(IllegalStateException("Not signed in")))
+            return
+        }
         val rawPlaylistId = playlist.playlistId.removePrefix("VL")
         val targetBrowseId = if (playlist.playlistId.startsWith("VL")) playlist.playlistId else "VL${playlist.playlistId}"
         viewModelScope.launch {
-            YtMusicRepository.addToPlaylist(rawPlaylistId, listOf(song.videoId)).fold(
+            val result = YtMusicRepository.addToPlaylist(rawPlaylistId, listOf(song.videoId))
+            result.fold(
                 onSuccess = {
                     libraryStale = true
                     _detailStack.value = _detailStack.value.map { page ->
@@ -419,8 +423,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     loadPlaylists()
                     refresh(Feed.LIBRARY)
+                    onResult?.invoke(Result.success(Unit))
                 },
-                onFailure = {},
+                onFailure = { error ->
+                    onResult?.invoke(Result.failure(error))
+                },
             )
         }
     }
@@ -430,38 +437,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * track's menu — one request, so it can't half-succeed into an empty
      * playlist the user has to add to again.
      */
-    fun createPlaylist(title: String, privacy: PlaylistPrivacy, song: Song? = null) {
-        if (!requireSignIn()) return
+    fun createPlaylist(title: String, privacy: PlaylistPrivacy, song: Song? = null, onResult: ((Result<Unit>) -> Unit)? = null) {
+        if (!requireSignIn()) {
+            onResult?.invoke(Result.failure(IllegalStateException("Not signed in")))
+            return
+        }
         val name = title.trim().ifBlank { "New playlist" }
         viewModelScope.launch {
-            YtMusicRepository.createPlaylist(
+            val result = YtMusicRepository.createPlaylist(
                 title = name,
                 privacy = privacy,
                 videoIds = listOfNotNull(song?.videoId),
-            ).fold(
+            )
+            result.fold(
                 onSuccess = {
                     libraryStale = true
                     loadPlaylists()
                     refresh(Feed.LIBRARY)
+                    onResult?.invoke(Result.success(Unit))
                 },
-                onFailure = {},
+                onFailure = { error ->
+                    onResult?.invoke(Result.failure(error))
+                },
             )
         }
     }
 
-    /**
-     * Drops [song] from the playlist page it is being read on, and takes the
-     * row out from under the reader rather than waiting for a re-fetch.
-     */
-    fun removeFromPlaylist(browseId: String, song: Song) {
+    fun removeFromPlaylist(browseId: String, song: Song, onResult: ((Result<Unit>) -> Unit)? = null) {
         val setVideoId = song.setVideoId ?: return
-        if (!requireSignIn()) return
+        if (!requireSignIn()) {
+            onResult?.invoke(Result.failure(IllegalStateException("Not signed in")))
+            return
+        }
         val playlistId = browseId.removePrefix("VL")
         viewModelScope.launch {
-            YtMusicRepository.removeFromPlaylist(
+            val result = YtMusicRepository.removeFromPlaylist(
                 playlistId,
                 listOf(setVideoId to song.videoId),
-            ).fold(
+            )
+            result.fold(
                 onSuccess = {
                     libraryStale = true
                     _detailStack.value = _detailStack.value.map { page ->
@@ -477,8 +491,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     loadPlaylists()
                     refresh(Feed.LIBRARY)
+                    onResult?.invoke(Result.success(Unit))
                 },
-                onFailure = {},
+                onFailure = { error ->
+                    onResult?.invoke(Result.failure(error))
+                },
             )
         }
     }
@@ -487,12 +504,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Adds one of [DetailPage.suggestedSongs] to the playlist it was
      * suggested for, and updates both the track list and suggested list immediately.
      */
-    fun addSuggestedSong(browseId: String, song: Song) {
-        if (!requireSignIn()) return
+    fun addSuggestedSong(browseId: String, song: Song, onResult: ((Result<Unit>) -> Unit)? = null) {
+        if (!requireSignIn()) {
+            onResult?.invoke(Result.failure(IllegalStateException("Not signed in")))
+            return
+        }
         val playlistId = browseId.removePrefix("VL")
         val targetBrowseId = if (browseId.startsWith("VL")) browseId else "VL$browseId"
         viewModelScope.launch {
-            YtMusicRepository.addToPlaylist(playlistId, listOf(song.videoId)).fold(
+            val result = YtMusicRepository.addToPlaylist(playlistId, listOf(song.videoId))
+            result.fold(
                 onSuccess = {
                     libraryStale = true
                     _detailStack.value = _detailStack.value.map { page ->
@@ -509,8 +530,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     loadPlaylists()
                     refresh(Feed.LIBRARY)
+                    onResult?.invoke(Result.success(Unit))
                 },
-                onFailure = {},
+                onFailure = { error ->
+                    onResult?.invoke(Result.failure(error))
+                },
             )
         }
     }
@@ -998,18 +1022,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 else -> {
-                    YtMusicRepository.browseSongs(browseId).fold(
-                        onSuccess = { page ->
-                            if (page.songs.isEmpty()) {
-                                UiState.Error("No tracks here")
-                            } else {
-                                more = page.continuation
-                                suggested = page.suggested.withArtwork(thumbnailUrl)
-                                UiState.Success(page.songs.withArtwork(thumbnailUrl))
-                            }
-                        },
-                        onFailure = { UiState.Error(it.friendly()) },
-                    )
+                    val songResult = YtMusicRepository.browseSongs(browseId)
+                    val page = songResult.getOrNull()
+                    if (page != null && page.songs.isNotEmpty()) {
+                        more = page.continuation
+                        suggested = page.suggested.withArtwork(thumbnailUrl)
+                        UiState.Success(page.songs.withArtwork(thumbnailUrl))
+                    } else {
+                        val shelvesResult = YtMusicRepository.browseShelves(browseId)
+                        val parsedShelves = shelvesResult.getOrDefault(emptyList())
+                        if (parsedShelves.isNotEmpty()) {
+                            sections = parsedShelves
+                            UiState.Success(emptyList())
+                        } else if (page != null && page.suggested.isNotEmpty()) {
+                            suggested = page.suggested.withArtwork(thumbnailUrl)
+                            UiState.Success(emptyList())
+                        } else {
+                            UiState.Error(songResult.exceptionOrNull()?.friendly() ?: "No content found")
+                        }
+                    }
                 }
             }
             // Update by id — the user may have pushed another page meanwhile.

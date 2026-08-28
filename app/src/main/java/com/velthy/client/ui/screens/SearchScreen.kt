@@ -133,12 +133,21 @@ fun SearchScreen(
                 val tracks = results.data
                     .filterIsInstance<SearchResult.Track>()
                     .map { it.song }
-                itemsIndexed(results.data) { index, row ->
+                itemsIndexed(
+                    items = results.data,
+                    key = { _, row ->
+                        when (row) {
+                            is SearchResult.Track -> "search_track_${row.song.videoId}"
+                            is SearchResult.Browse -> "search_browse_${row.item.type.name}_${row.item.browseId}"
+                        }
+                    },
+                ) { index, row ->
                     when (row) {
                         is SearchResult.Track -> SongRow(
                             song = row.song,
                             onClick = {
-                                onSongClick(tracks, tracks.indexOf(row.song).coerceAtLeast(0))
+                                val trackIndex = tracks.indexOfFirst { it.videoId == row.song.videoId }.coerceAtLeast(0)
+                                onSongClick(tracks, trackIndex)
                             },
                             onLongPress = { onSongLongPress(row.song) },
                             onSwipeToQueue = { onSongSwipe(row.song) },
@@ -180,7 +189,7 @@ fun SearchTopBarField(
             .fillMaxWidth()
             .height(44.dp)
             .clip(RoundedCornerShape(24.dp))
-            .background(Color.White.copy(alpha = 0.10f))
+            .background(Color.White.copy(alpha = 0.12f))
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

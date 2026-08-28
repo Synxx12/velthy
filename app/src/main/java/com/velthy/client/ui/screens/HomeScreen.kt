@@ -17,15 +17,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,18 +49,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.LibraryMusic
 import com.velthy.client.ui.icons.VelthyIcons
 import coil3.compose.AsyncImage
 import com.velthy.client.data.model.CARD_ART_PX
 import com.velthy.client.data.model.HEADER_ART_PX
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.ShelfItem
+import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.UiState
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.ui.components.MessageState
@@ -80,10 +85,13 @@ fun HomeScreen(
     title: String = "Listen Now",
     signedIn: Boolean = true,
     onSignIn: (() -> Unit)? = null,
-    // Explore doesn't page — only Home has a continuation worth following.
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
+    onSongLongPress: ((Song) -> Unit)? = null,
+    onCategoryClick: ((browseId: String, title: String) -> Unit)? = null,
 ) {
+    val isNewTab = title == "New" || title.equals("explore", ignoreCase = true)
+
     PullToRefresh(
         refreshing = refreshing,
         onRefresh = onRefresh,
@@ -95,14 +103,6 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = contentPadding,
         ) {
-            item {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.displayLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.padding(horizontal = PAGE_GUTTER, vertical = 8.dp),
-                )
-            }
             if (!signedIn && onSignIn != null) {
                 item {
                     SignInBanner(onSignIn = onSignIn, modifier = Modifier.padding(bottom = 8.dp))
@@ -114,7 +114,13 @@ fun HomeScreen(
                     MessageState(state.message, actionLabel = "Retry", onAction = onRetry)
                 }
                 is UiState.Success -> {
-                    itemsIndexedShelves(state.data, onItemClick)
+                    itemsIndexedShelves(
+                        shelves = state.data,
+                        onItemClick = onItemClick,
+                        onSongLongPress = onSongLongPress,
+                        onCategoryClick = onCategoryClick,
+                        isNewTab = isNewTab,
+                    )
                     // Show skeleton at bottom when loading more (always visible when flag is true)
                     if (loadingMore) feedMoreSkeleton()
                     else if (onLoadMore != null) {
@@ -128,8 +134,6 @@ fun HomeScreen(
 
     if (onLoadMore != null && state is UiState.Success) {
         // Trigger load-more when approaching the end of the list.
-        // Uses a wider threshold (5 items) so the skeleton appears
-        // before the user actually hits the bottom — feels instant.
         val nearEnd by remember {
             derivedStateOf {
                 val layout = listState.layoutInfo
@@ -138,105 +142,127 @@ fun HomeScreen(
             }
         }
         LaunchedEffect(nearEnd, loadingMore) {
-            // Guard: only fire when actually near end and not already loading
             if (nearEnd && !loadingMore) onLoadMore()
         }
     }
 }
 
 /**
- * The lead shelf gets Apple's full-bleed treatment — near-page-width cards that
- * page sideways — and the rest fall back to the compact grid of square cards.
+ * Shelves dispatcher matching Apple Music's layout hierarchy:
+ * 1. Index 0 -> Full-bleed Hero Card Carousel (Wide landscape banners with overline & title).
+ * 2. Song Shelves -> 4-Track Vertical Columns Carousel.
+ * 3. Playlists / Moods / Genres -> 2-Row Grid Carousel.
+ * 4. Albums / Releases / Charts -> Standard 1-Row Card Carousel.
+ * 5. Bottom of New tab -> "More to Explore" categorized links.
  */
-private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
+private fun LazyListScope.itemsIndexedShelves(
     shelves: List<HomeShelf>,
     onItemClick: (ShelfItem) -> Unit,
+    onSongLongPress: ((Song) -> Unit)? = null,
+    onCategoryClick: ((browseId: String, title: String) -> Unit)? = null,
+    isNewTab: Boolean = false,
 ) {
     shelves.forEachIndexed { index, shelf ->
         val isSongShelf = shelf.items.any { it.videoId != null }
-        item(key = shelf.title + index) {
-            if (isSongShelf) {
-                QuickPicksShelf(shelf = shelf, onItemClick = onItemClick)
-            } else if (index == 0) {
-                HeroShelf(shelf = shelf, onItemClick = onItemClick)
-            } else {
-                Shelf(shelf = shelf, onItemClick = onItemClick)
+        val titleLower = shelf.title.lowercase()
+        val isTwoRowShelf = !isSongShelf && shelf.items.size >= 6 && (
+            titleLower.contains("playlist") ||
+            titleLower.contains("mood") ||
+            titleLower.contains("genre") ||
+            titleLower.contains("updated")
+        )
+
+        item(key = "${shelf.title}_$index") {
+            when {
+                index == 0 -> HeroShelf(shelf = shelf, onItemClick = onItemClick)
+                isSongShelf -> QuickPicksShelf(
+                    shelf = shelf,
+                    onItemClick = onItemClick,
+                    onSongLongPress = onSongLongPress,
+                )
+                isTwoRowShelf -> TwoRowShelf(
+                    shelf = shelf,
+                    onItemClick = onItemClick,
+                )
+                else -> Shelf(
+                    shelf = shelf,
+                    onItemClick = onItemClick,
+                )
             }
         }
     }
-}
 
-/** Shared by the home feed, Explore and Library so headings line up across tabs. */
-@Composable
-internal fun SectionHeader(title: String, subtitle: String = "") {
-    Column(Modifier.padding(horizontal = PAGE_GUTTER, vertical = 10.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (subtitle.isNotBlank()) {
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+    if (isNewTab && onCategoryClick != null) {
+        item(key = "more_to_explore_section") {
+            MoreToExploreSection(onCategoryClick = onCategoryClick)
         }
     }
 }
 
+/** Shared by the home feed, Explore/New and Library so headings line up across tabs. */
 @Composable
-private fun QuickPicksShelf(
-    shelf: HomeShelf,
-    onItemClick: (ShelfItem) -> Unit,
+internal fun SectionHeader(
+    title: String,
+    subtitle: String = "",
+    onClick: (() -> Unit)? = null,
 ) {
-    Column(Modifier.padding(bottom = 26.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = PAGE_GUTTER, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = PAGE_GUTTER, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = shelf.title,
-                    style = MaterialTheme.typography.headlineMedium,
+                    text = title,
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (shelf.subtitle.isNotBlank()) {
-                    Text(
-                        text = shelf.subtitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(22.dp),
+                )
             }
-            if (shelf.items.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .clickable { onItemClick(shelf.items.first()) }
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "Play all",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
+            if (subtitle.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
+    }
+}
+
+/**
+ * 4-Track Vertical Columns Carousel (Apple Music / YouTube Music style).
+ * Shows columns of 4 songs scrolling horizontally with snap behavior.
+ */
+@Composable
+private fun QuickPicksShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onSongLongPress: ((Song) -> Unit)? = null,
+) {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeader(
+            title = shelf.title,
+            subtitle = shelf.subtitle,
+            onClick = {
+                shelf.items.firstOrNull()?.let(onItemClick)
+            },
+        )
 
         val columns = remember(shelf.items) { shelf.items.chunked(4) }
         val rowState = rememberLazyListState()
@@ -258,6 +284,20 @@ private fun QuickPicksShelf(
                         QuickPickSongRow(
                             item = item,
                             onClick = { onItemClick(item) },
+                            onMoreClick = onSongLongPress?.let { callback ->
+                                {
+                                    item.videoId?.let { id ->
+                                        callback(
+                                            Song(
+                                                videoId = id,
+                                                title = item.title,
+                                                artist = item.subtitle,
+                                                thumbnailUrl = item.thumbnailUrl,
+                                            ),
+                                        )
+                                    }
+                                }
+                            },
                         )
                     }
                 }
@@ -270,6 +310,7 @@ private fun QuickPicksShelf(
 private fun QuickPickSongRow(
     item: ShelfItem,
     onClick: () -> Unit,
+    onMoreClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -293,7 +334,7 @@ private fun QuickPickSongRow(
         Column(Modifier.weight(1f)) {
             Text(
                 text = item.title,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -308,73 +349,119 @@ private fun QuickPickSongRow(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun HeroShelf(shelf: HomeShelf, onItemClick: (ShelfItem) -> Unit) {
-    Column(Modifier.padding(bottom = 26.dp)) {
-        SectionHeader(shelf.title, shelf.subtitle)
-        LazyRow(
-            state = rememberLazyListState(),
-            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            items(
-                items = shelf.items,
-                key = { it.videoId ?: it.browseId ?: it.title },
-            ) { item ->
-                HeroCard(
-                    item = item,
-                    onClick = { onItemClick(item) },
-                    modifier = Modifier.fillParentMaxWidth(0.82f),
+        if (onMoreClick != null) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onMoreClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MoreVert,
+                    contentDescription = "More",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
     }
 }
 
-/** Big card: artwork with the caption laid over a scrim, as on Listen Now. */
+/**
+ * Top Lead Shelf: Apple Music Wide Hero Banner Card Carousel.
+ */
 @Composable
-private fun HeroCard(item: ShelfItem, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .aspectRatio(0.92f)
-            .clip(RoundedCornerShape(18.dp))
-            .thumbnailBorder(RoundedCornerShape(18.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick),
-    ) {
-        AsyncImage(
-            model = item.thumbnailUrl.artworkAt(HEADER_ART_PX),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomStart)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f)),
-                    ),
-                )
-                .padding(start = 16.dp, end = 16.dp, top = 34.dp, bottom = 14.dp),
+private fun HeroShelf(shelf: HomeShelf, onItemClick: (ShelfItem) -> Unit) {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        val rowState = rememberLazyListState()
+        LazyRow(
+            state = rowState,
+            flingBehavior = rememberSnapFlingBehavior(lazyListState = rowState),
+            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            items(
+                items = shelf.items,
+                key = { it.videoId ?: it.browseId ?: it.title },
+            ) { item ->
+                HeroBannerCard(
+                    item = item,
+                    category = shelf.subtitle.ifBlank { "FEATURED" },
+                    onClick = { onItemClick(item) },
+                    modifier = Modifier.fillParentMaxWidth(0.92f),
+                )
+            }
+        }
+    }
+}
+
+/** Apple Music style wide landscape banner card with overline, bold title & overlay */
+@Composable
+private fun HeroBannerCard(
+    item: ShelfItem,
+    category: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.clickable(onClick = onClick),
+    ) {
+        Text(
+            text = category.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (item.subtitle.isNotBlank()) {
             Text(
-                text = item.title,
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White,
+                text = item.subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (item.subtitle.isNotBlank()) {
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.65f)
+                .clip(RoundedCornerShape(16.dp))
+                .thumbnailBorder(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            AsyncImage(
+                model = item.thumbnailUrl.artworkAt(HEADER_ART_PX),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomStart)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f)),
+                        ),
+                    )
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
                 Text(
-                    text = item.subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.72f),
-                    maxLines = 2,
+                    text = item.title,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                    color = Color.White.copy(alpha = 0.92f),
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -383,11 +470,52 @@ private fun HeroCard(item: ShelfItem, onClick: () -> Unit, modifier: Modifier = 
 }
 
 /**
- * [leadingCard] rides at the head of the row, ahead of the content — the
- * Library tab's "New playlist" tile, which belongs among the playlists rather
- * than in a bar somewhere above them. [onItemLongPress] is likewise the
- * Library's: a card is only worth holding where there is something to do to
- * the thing behind it.
+ * 2-Row Grid Carousel (Updated Playlists, Moods & Genres).
+ * Stacks 2 square cards vertically per column, scrolling horizontally in pairs.
+ */
+@Composable
+private fun TwoRowShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: ((ShelfItem) -> Unit)? = null,
+) {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeader(
+            title = shelf.title,
+            subtitle = shelf.subtitle,
+            onClick = {
+                shelf.items.firstOrNull()?.let(onItemClick)
+            },
+        )
+        val columns = remember(shelf.items) { shelf.items.chunked(2) }
+        val rowState = rememberLazyListState()
+        LazyRow(
+            state = rowState,
+            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            items(
+                items = columns,
+                key = { col -> col.firstOrNull()?.let { it.videoId ?: it.browseId ?: it.title } ?: col.hashCode() },
+            ) { pair ->
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    pair.forEach { item ->
+                        ShelfCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onLongPress = onItemLongPress?.let { { it(item) } },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Standard 1-Row Card Carousel (Trending Now, Recent Releases, Indonesian Music, etc.)
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -398,7 +526,13 @@ internal fun Shelf(
     leadingCard: (@Composable () -> Unit)? = null,
 ) {
     Column(Modifier.padding(bottom = 26.dp)) {
-        SectionHeader(shelf.title, shelf.subtitle)
+        SectionHeader(
+            title = shelf.title,
+            subtitle = shelf.subtitle,
+            onClick = {
+                shelf.items.firstOrNull()?.let(onItemClick)
+            },
+        )
         LazyRow(
             contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -419,9 +553,68 @@ internal fun Shelf(
 }
 
 /**
+ * Apple Music "More to Explore" bottom navigation section.
+ */
+@Composable
+private fun MoreToExploreSection(
+    onCategoryClick: (browseId: String, title: String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp, bottom = 32.dp),
+    ) {
+        Text(
+            text = "More to Explore",
+            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(horizontal = PAGE_GUTTER, vertical = 10.dp),
+        )
+
+        val exploreCategories = listOf(
+            "Browse by Genre" to "FEmusic_moods_and_genres",
+            "Top Charts" to "FEmusic_charts",
+            "New Releases" to "FEmusic_new_releases",
+            "Decades" to "FEmusic_moods_and_genres",
+            "Moods and Activities" to "FEmusic_moods_and_genres",
+            "Worldwide Charts" to "FEmusic_charts",
+        )
+
+        exploreCategories.forEachIndexed { index, (name, browseId) ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onCategoryClick(browseId, name) }
+                    .padding(horizontal = PAGE_GUTTER, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            if (index < exploreCategories.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = PAGE_GUTTER),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                )
+            }
+        }
+    }
+}
+
+/**
  * A card that isn't a thing yet — the dashed "New playlist" tile at the head
- * of the Library's playlist row, sized to sit in line with the covers beside
- * it rather than as a button bolted above them.
+ * of the Library's playlist row.
  */
 @Composable
 internal fun NewShelfCard(
@@ -453,7 +646,7 @@ internal fun NewShelfCard(
         Spacer(Modifier.height(10.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -490,8 +683,8 @@ private fun ShelfCard(
                         .thumbnailBorder(RoundedCornerShape(12.dp))
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFF2E7D32), Color(0xFF1B5E20))
-                            )
+                                listOf(Color(0xFF2E7D32), Color(0xFF1B5E20)),
+                            ),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -512,8 +705,8 @@ private fun ShelfCard(
                         .thumbnailBorder(RoundedCornerShape(12.dp))
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFF1565C0), Color(0xFF0D47A1))
-                            )
+                                listOf(Color(0xFF1565C0), Color(0xFF0D47A1)),
+                            ),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -534,8 +727,8 @@ private fun ShelfCard(
                         .thumbnailBorder(RoundedCornerShape(12.dp))
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFFE65100), Color(0xFFBF360C))
-                            )
+                                listOf(Color(0xFFE65100), Color(0xFFBF360C)),
+                            ),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -551,7 +744,7 @@ private fun ShelfCard(
                 AsyncImage(
                     model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
                     contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .width(SHELF_CARD_WIDTH)
                         .aspectRatio(1f)
@@ -564,7 +757,7 @@ private fun ShelfCard(
         Spacer(Modifier.height(10.dp))
         Text(
             text = item.title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
