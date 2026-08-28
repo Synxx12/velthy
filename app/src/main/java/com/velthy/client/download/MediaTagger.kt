@@ -1,4 +1,4 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -35,8 +35,10 @@ object MediaTagger {
 
     private val TAGGABLE = setOf("m4a", "webm", "flac")
 
-    fun embed(context: Context, uri: Uri, track: Song, extension: String) {
-        if (extension !in TAGGABLE) return
+    fun carriesTags(extension: String): Boolean = extension in TAGGABLE
+
+    fun embed(context: Context, uri: Uri, track: Song, extension: String, lyrics: String? = null) {
+        if (!carriesTags(extension)) return
         val original = readAll(context, uri) ?: return
         val cover = fetchCover(track)
 
@@ -47,6 +49,7 @@ object MediaTagger {
                     track.title,
                     track.artist,
                     track.albumName,
+                    lyrics,
                     cover?.bytes,
                     coverIsPng = false,
                 )
@@ -55,6 +58,7 @@ object MediaTagger {
                     track.title,
                     track.artist,
                     track.albumName,
+                    lyrics,
                     cover?.bytes,
                     cover?.mime ?: "image/jpeg",
                 )

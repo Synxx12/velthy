@@ -15,6 +15,7 @@ import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.model.Account
 import com.velthy.client.data.model.BrowseType
 import com.velthy.client.data.model.DetailPage
+import com.velthy.client.data.model.HistorySection
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
 import com.velthy.client.data.model.LikeStatus
@@ -193,6 +194,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _library = MutableStateFlow<UiState<LibraryPage>>(UiState.Loading)
     val library: StateFlow<UiState<LibraryPage>> = _library.asStateFlow()
+    private val _history = MutableStateFlow<UiState<List<HistorySection>>>(UiState.Loading)
+    val history: StateFlow<UiState<List<HistorySection>>> = _history.asStateFlow()
+
+    fun loadHistory() {
+        if (!_signedIn.value) {
+            _history.value = UiState.Error("Sign in to see what you've been listening to")
+            return
+        }
+        _history.value = UiState.Loading
+        viewModelScope.launch {
+            _history.value = YtMusicRepository.historySections().fold(
+                onSuccess = { sections ->
+                    if (sections.isEmpty() || sections.all { it.songs.isEmpty() }) UiState.Error("Nothing played yet")
+                    else UiState.Success(sections)
+                },
+                onFailure = { UiState.Error(it.message ?: "Could not load history") },
+            )
+        }
+    }
 
     /**
      * Album / artist / playlist pages, as a stack — opening an artist from an

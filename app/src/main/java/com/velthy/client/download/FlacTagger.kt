@@ -1,4 +1,4 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
 
 import java.io.ByteArrayOutputStream
 
@@ -36,10 +36,11 @@ object FlacTagger {
         title: String,
         artist: String,
         album: String?,
+        lyrics: String? = null,
         cover: ByteArray?,
         coverMime: String,
     ): ByteArray = runCatching {
-        rewrite(bytes, title, artist, album, cover, coverMime)
+        rewrite(bytes, title, artist, album, lyrics, cover, coverMime)
     }.getOrDefault(bytes)
 
     private fun rewrite(
@@ -47,14 +48,12 @@ object FlacTagger {
         title: String,
         artist: String,
         album: String?,
+        lyrics: String?,
         cover: ByteArray?,
         coverMime: String,
     ): ByteArray {
         if (!bytes.regionMatches(0, MAGIC)) return bytes
 
-        // The block chain. Each header is one byte of flags — bit 7 marks the
-        // last block, bits 0-6 are the type — and three big-endian bytes of
-        // payload length.
         val blocks = mutableListOf<Block>()
         var offset = MAGIC.size
         while (true) {
@@ -69,17 +68,12 @@ object FlacTagger {
             offset = start + length
             if (flags and 0x80 != 0) break
         }
-        // Required to be first by the format itself; a file that doesn't have it
-        // there is not one to guess at.
         if (blocks.firstOrNull()?.type != TYPE_STREAMINFO) return bytes
 
         val additions = listOfNotNull(
-            vorbisComment(title, artist, album)?.let { TYPE_VORBIS_COMMENT to it },
+            vorbisComment(title, artist, album, lyrics)?.let { TYPE_VORBIS_COMMENT to it },
             cover?.takeIf { it.isNotEmpty() }?.let { TYPE_PICTURE to picture(it, coverMime) },
         )
-            // A payload past what three bytes of length can describe costs that
-            // one block and nothing else. Only a cover could ever reach 16MB,
-            // and losing the cover is a better outcome than losing the tags.
             .filter { it.second.size <= MAX_BLOCK_BYTES }
         if (additions.isEmpty()) return bytes
 
@@ -95,29 +89,16 @@ object FlacTagger {
             out.write(payload.size and 0xFF)
             out.write(payload)
         }
-        // The frames, verbatim. [offset] is one past the last metadata block,
-        // which is where they start.
         out.write(bytes, offset, bytes.size - offset)
         return out.toByteArray()
     }
 
-    /**
-     * A `VORBIS_COMMENT` payload, or null when there is nothing to say.
-     *
-     * Every length in here is **little-endian**, which is the one surprise in an
-     * otherwise big-endian format — the block reuses Ogg Vorbis' comment layout
-     * wholesale, and that layout is little-endian.
-     *
-     * It does *not* reuse the trailing framing bit. That byte belongs to the
-     * Vorbis packet, not to the comment structure, and writing one here appends
-     * a stray byte to the block that strict parsers reject. It is the classic
-     * way this gets written wrong, so: no framing bit.
-     */
-    private fun vorbisComment(title: String, artist: String, album: String?): ByteArray? {
+    private fun vorbisComment(title: String, artist: String, album: String?, lyrics: String?): ByteArray? {
         val fields = buildList {
             if (title.isNotBlank()) add("TITLE=$title")
             if (artist.isNotBlank()) add("ARTIST=$artist")
             if (!album.isNullOrBlank()) add("ALBUM=$album")
+            if (!lyrics.isNullOrBlank()) add("LYRICS=$lyrics")
         }
         if (fields.isEmpty()) return null
 

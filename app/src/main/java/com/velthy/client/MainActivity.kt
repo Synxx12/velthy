@@ -108,11 +108,16 @@ import com.velthy.client.data.scrobbling.LastFM
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.settings.ThemeMode
 import com.velthy.client.ui.screens.AccountAndScrobblingScreen
+import com.velthy.client.ui.screens.DetailScreen
 import com.velthy.client.ui.screens.DiscordDialog
 import com.velthy.client.ui.screens.DiscordDialogHost
 import com.velthy.client.ui.screens.DiscordScreen
+import com.velthy.client.ui.screens.HistoryScreen
+import com.velthy.client.ui.screens.HomeScreen
+import com.velthy.client.ui.screens.LibraryScreen
 import com.velthy.client.ui.screens.LocalMusicScreen
 import com.velthy.client.ui.screens.LocalTopBarSegmentedControl
+import com.velthy.client.ui.screens.SearchScreen
 import com.velthy.client.ui.screens.SettingsScreen
 import com.velthy.client.playback.QueueBuilder
 import com.velthy.client.playback.QueueShuffle
@@ -122,6 +127,8 @@ import com.velthy.client.playback.playSongs
 import com.velthy.client.playback.toMediaItem
 import com.velthy.client.download.DownloadStore
 import com.velthy.client.download.Downloads
+import com.velthy.client.ui.components.BrowseActionsSheet
+import com.velthy.client.ui.components.BrowseTarget
 import com.velthy.client.ui.components.PlaylistActionsSheet
 import com.velthy.client.ui.components.PlaylistPickerSheet
 import com.velthy.client.ui.components.SongActionsSheet
@@ -139,6 +146,13 @@ import com.velthy.client.ui.components.MusicRecognitionSheet
 import com.velthy.client.ui.components.TopFadeBlur
 import com.velthy.client.ui.components.LyricsSourcesDialog
 import com.velthy.client.ui.components.UpdateAvailableDialog
+import com.velthy.client.ui.replay.ReplayScreen
+import com.velthy.client.ui.replay.ReplayShareSheet
+import com.velthy.client.ui.replay.ReplayStories
+import com.velthy.client.ui.replay.ReplayStoryPage
+import com.velthy.client.ui.replay.rememberReplayState
+import com.velthy.client.ui.components.DownloadManagerSheet
+import com.velthy.client.ui.components.TopBarDownloadButton
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.icons.VelthyIcons
@@ -224,6 +238,15 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     var showNowPlaying by remember { mutableStateOf(false) }
     var showLogin by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showReplay by remember { mutableStateOf(false) }
+    var replayStory by remember { mutableStateOf<ReplayStoryPage?>(null) }
+    var showReplayShare by remember { mutableStateOf(false) }
+    var replaySharePage by remember { mutableStateOf<ReplayStoryPage?>(null) }
+    var showDownloadManager by remember { mutableStateOf(false) }
+    var browseActions by remember { mutableStateOf<BrowseTarget?>(null) }
+    val replayListState = rememberLazyListState()
+    val (replay, setReplayPeriod) = rememberReplayState(showReplay)
+
     var showNotifications by remember { mutableStateOf(false) }
     var showAccountScrobbling by remember { mutableStateOf(false) }
     var showLyricsSources by remember { mutableStateOf(false) }
@@ -263,7 +286,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
 
     // The player fills the screen with dark artwork whichever theme is on, so
     // it keeps light glyphs; every other surface follows the theme.
-    SystemBarIcons(dark = !darkTheme && !showNowPlaying)
+    SystemBarIcons(dark = !darkTheme && !showNowPlaying && !showReplay && replayStory == null)
 
     val homeState by viewModel.home.collectAsStateWithLifecycle()
     val homeLoadingMore by viewModel.homeLoadingMore.collectAsStateWithLifecycle()
@@ -314,8 +337,9 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
     val savedAccounts by viewModel.savedAccounts.collectAsStateWithLifecycle()
-    val historyItems by com.velthy.client.data.history.PlaybackHistoryManager.history.collectAsStateWithLifecycle()
-    var showClearHistoryDialog by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    val historyState by viewModel.history.collectAsStateWithLifecycle()
+    val historyListState = rememberLazyListState()
     var showRecognitionSheet by remember { mutableStateOf(false) }
     var showDownloadSettingsSheet by remember { mutableStateOf(false) }
     val hasCompletedOnboarding by AppSettings.hasCompletedOnboarding.collectAsStateWithLifecycle()
@@ -707,7 +731,8 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     ) {
         // A pushed album/artist/playlist page replaces the tab content but
         // leaves the tab bar and mini player in place.
-        BackHandler(enabled = detail != null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications) { viewModel.closeDetail() }
+        BackHandler(enabled = detail != null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay) { viewModel.closeDetail() }
+        BackHandler(enabled = showReplay) { showReplay = false }
         BackHandler(enabled = showDiscordLogin) { showDiscordLogin = false }
         BackHandler(enabled = discordDialog != null) { discordDialog = null }
         BackHandler(enabled = showDiscord) {
@@ -716,19 +741,20 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         BackHandler(enabled = showAccountScrobbling && !showDiscord) {
             showAccountScrobbling = false
         }
-        BackHandler(enabled = showNotifications && !showSettings && !showAccountScrobbling && !showDiscord) {
+        BackHandler(enabled = showNotifications && !showSettings && !showAccountScrobbling && !showDiscord && !showReplay) {
             showNotifications = false
         }
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
         // which is what actually closes/minimizes the app.
-        BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord) {
+        BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord && !showReplay && !showHistory) {
             showSettings = false
             if (detail == null) selectedTab = TAB_HOME
         }
-        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && selectedTab != TAB_HOME) {
+        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && selectedTab != TAB_HOME) {
             selectedTab = TAB_HOME
         }
+        BackHandler(enabled = showHistory) { showHistory = false }
         BackHandler(enabled = showUpdateDialog) { showUpdateDialog = false }
         BackHandler(enabled = showListenBrainzLogin) { showListenBrainzLogin = false }
         BackHandler(enabled = showLastfmLogin) { showLastfmLogin = false }
@@ -745,9 +771,11 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             AnimatedContent(
             targetState = when {
                 showDiscord -> "discord"
+                showHistory -> "history"
                 showAccountScrobbling -> "account_scrobbling"
                 showSettings -> "settings"
                 showNotifications -> "notifications"
+                showReplay -> "replay"
                 detail != null -> detail.browseId
                 else -> "tab:$selectedTab"
             },
@@ -755,8 +783,40 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             modifier = Modifier.hazeSource(hazeState),
             label = "content",
         ) { key ->
-            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" }
-            if (key == "discord") {
+            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" }
+            if (key == "history") {
+                HistoryScreen(
+                    state = historyState,
+                    listState = historyListState,
+                    onSongClick = play,
+                    onSongLongPress = { songActions = it },
+                    onSongSwipe = onSongSwipe,
+                    onRetry = viewModel::loadHistory,
+                    contentPadding = listPadding,
+                )
+            } else if (key == "replay") {
+                ReplayScreen(
+                    state = replay,
+                    holder = account?.name.orEmpty(),
+                    onPeriodChange = setReplayPeriod,
+                    onOpenStory = { replayStory = it },
+                    onPlaySong = playRadio,
+                    onOpenArtist = { id, name ->
+                        showReplay = false
+                        viewModel.openDetail(id.orEmpty(), name, "Artist", null, BrowseType.ARTIST)
+                    },
+                    onOpenAlbum = { id, title, artist, art ->
+                        showReplay = false
+                        viewModel.openDetail(id.orEmpty(), title, artist.orEmpty(), art, BrowseType.ALBUM)
+                    },
+                    onShare = {
+                        replaySharePage = null
+                        showReplayShare = true
+                    },
+                    contentPadding = listPadding,
+                    listState = replayListState,
+                )
+            } else if (key == "discord") {
                 DiscordScreen(
                     song = player.song,
                     positionMs = player.positionMs,
@@ -800,51 +860,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onSignOut = { viewModel.signOut() },
                     onAccountScrobbling = { showAccountScrobbling = true },
                     onLyricsSources = { showLyricsSources = true },
+                    onOpenReplay = {
+                        showSettings = false
+                        showReplay = true
+                    },
                     contentPadding = listPadding,
                 )
             } else if (key == "notifications") {
                 NotificationsSheet(
                     onDismiss = { showNotifications = false },
                     updateInfo = updateNotice,
-                    contentPadding = listPadding,
-                )
-            } else if (page != null && (page.browseId == "app:history" || key == "app:history")) {
-                val localHistoryItems by com.velthy.client.data.history.PlaybackHistoryManager.localHistory.collectAsStateWithLifecycle()
-                val remoteHistoryItems by com.velthy.client.data.history.PlaybackHistoryManager.remoteHistory.collectAsStateWithLifecycle()
-                val syncHistory: () -> Unit = {
-                    if (signedIn) {
-                        scope.launch {
-                            historyRefreshing = true
-                            com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
-                            historyRefreshing = false
-                        }
-                    }
-                }
-                LaunchedEffect(signedIn) {
-                    if (signedIn) {
-                        syncHistory()
-                    }
-                }
-                com.velthy.client.ui.screens.HistoryScreen(
-                    signedIn = signedIn,
-                    onSignIn = { showLogin = true },
-                    localHistoryItems = localHistoryItems,
-                    remoteHistoryItems = remoteHistoryItems,
-                    currentSong = player.song,
-                    isPlaying = player.isPlaying,
-                    listState = detailListState,
-                    refreshing = historyRefreshing,
-                    onRefresh = syncHistory,
-                    pullState = historyPull,
-                    onSongClick = play,
-                    onSongLongPress = { songActions = it },
-                    onShuffle = { songs ->
-                        QueueShuffle.enableForNextQueue()
-                        play(songs, songs.indices.random())
-                    },
-                    onRemoveItem = { item, isRemote ->
-                        com.velthy.client.data.history.PlaybackHistoryManager.removeEntry(item, isRemote)
-                    },
                     contentPadding = listPadding,
                 )
             } else if (page != null && page.browseId.startsWith("local:")) {
@@ -914,6 +939,17 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                             songs
                         }
                         startDownload(withAlbum)
+                    },
+                    onMore = {
+                        browseActions = BrowseTarget(
+                            browseId = page.browseId,
+                            title = page.title,
+                            subtitle = page.subtitle,
+                            thumbnailUrl = page.thumbnailUrl,
+                            type = page.type,
+                            songs = (page.songs as? UiState.Success)?.data.orEmpty(),
+                            playlist = viewModel.editablePlaylist(page.browseId),
+                        )
                     },
                     onArtistClick = { id, name ->
                         viewModel.openDetail(id, name, "Artist", null, BrowseType.ARTIST)
@@ -1008,7 +1044,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onFilterChange = viewModel::onFilterChange,
                     results = results,
                     listState = searchListState,
-                    recentSongs = historyItems.map { it.song }.distinctBy { it.videoId },
+                    recentSongs = (historyState as? UiState.Success)?.data?.flatMap { it.songs }?.distinctBy { it.videoId }.orEmpty(),
                     // Search hits are alternatives to each other, not a running
                     // order — play the one tapped and build a station from it.
                     onSongClick = { songs, index ->
@@ -1053,20 +1089,25 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     listState = libraryListState,
                     onShelfItemClick = { item ->
                         item.browseId?.let { id ->
-                            if (id == "local:all" && !LocalMediaRepository.hasStoragePermission(context)) {
-                                val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    Manifest.permission.READ_MEDIA_AUDIO
-                                } else {
-                                    Manifest.permission.READ_EXTERNAL_STORAGE
+                            if (id == "app:history" || id == "history" || id == "local:history") {
+                                showHistory = true
+                                viewModel.loadHistory()
+                            } else {
+                                if (id == "local:all" && !LocalMediaRepository.hasStoragePermission(context)) {
+                                    val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        Manifest.permission.READ_MEDIA_AUDIO
+                                    } else {
+                                        Manifest.permission.READ_EXTERNAL_STORAGE
+                                    }
+                                    mediaPermissionLauncher.launch(perm)
                                 }
-                                mediaPermissionLauncher.launch(perm)
+                                viewModel.openDetail(
+                                    browseId = id,
+                                    title = item.title,
+                                    subtitle = item.subtitle,
+                                    thumbnailUrl = item.thumbnailUrl,
+                                )
                             }
-                            viewModel.openDetail(
-                                browseId = id,
-                                title = item.title,
-                                subtitle = item.subtitle,
-                                thumbnailUrl = item.thumbnailUrl,
-                            )
                         }
                     },
                     // Only the account's own playlists have a menu behind
@@ -1075,6 +1116,8 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         playlistActions = viewModel.editablePlaylist(item.browseId)
                     },
                     onNewPlaylist = { creatingPlaylist = true },
+                    replayCard = replay.heroCard,
+                    onOpenReplay = { showReplay = true },
                     onSignIn = { showLogin = true },
                     onRetry = viewModel::loadLibrary,
                     refreshing = MainViewModel.Feed.LIBRARY in refreshing,
@@ -1085,22 +1128,28 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             }
         }
 
-        // A detail page's artwork runs up under the status bar, so the bar
-        // there is a fade rather than a pane — see [TopFadeBlur]. Drawn before
-        // the bar so the bar's own content sits on top of it.
-        val isLocalDetail = detail?.browseId?.startsWith("local:") == true || detail?.browseId == "app:history"
-        val isDetailVisible = detail != null && !isLocalDetail && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications
-        if (isDetailVisible) {
-            TopFadeBlur(
-                hazeState = hazeState,
-                pageColor = detailPalette.wash,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
-        }
+        val isLocalDetail = detail?.browseId?.startsWith("local:") == true
+        val isDetailVisible = detail != null && !isLocalDetail && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory
+        TopFadeBlur(
+            hazeState = hazeState,
+            pageColor = when {
+                showReplay -> Color.Black
+                isDetailVisible -> detailPalette.wash
+                else -> MaterialTheme.colorScheme.background
+            },
+            scrimColor = when {
+                showReplay -> Color.Black
+                isDetailVisible -> detailPalette.background
+                else -> MaterialTheme.colorScheme.background
+            },
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
 
         FrostedTopBar(
             title = when {
+                showReplay -> "Replay"
                 showDiscord -> "Discord"
+                showHistory -> "History"
                 showAccountScrobbling -> "Account & scrobbling"
                 showSettings -> "Settings"
                 showNotifications -> "Notifications"
@@ -1108,16 +1157,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 detail != null -> detail.title
                 else -> tabs[selectedTab].label
             },
-            hazeState = hazeState,
-            ownBackdrop = detail == null || isLocalDetail,
             scrolled = when {
+                showReplay -> replayListState.firstVisibleItemIndex > 0 || replayListState.firstVisibleItemScrollOffset > 0
+                showHistory -> historyListState.firstVisibleItemIndex > 0 || historyListState.firstVisibleItemScrollOffset > 0
                 showSettings || showAccountScrobbling || showDiscord || showNotifications -> true
                 detail != null -> detailScrolled
                 else -> scrolled
             },
             refreshing = isCurrentRefreshing,
             pullFraction = { currentPull?.distanceFraction ?: 0f },
-            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications) {
+            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory) {
                 {
                     SearchTopBarField(
                         query = query,
@@ -1127,7 +1176,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         focusRequester = searchFocusRequester,
                     )
                 }
-            } else if (detail?.browseId?.startsWith("local:") == true && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && localDrillDownLabel == null) {
+            } else if (detail?.browseId?.startsWith("local:") == true && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && localDrillDownLabel == null) {
                 {
                     LocalTopBarSegmentedControl(
                         selectedTab = localSelectedTab,
@@ -1136,7 +1185,9 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 }
             } else null,
             onBack = when {
+                showReplay -> ({ showReplay = false })
                 showDiscord -> ({ showDiscord = false })
+                showHistory -> ({ showHistory = false })
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSettings -> ({ showSettings = false })
                 showNotifications -> ({ showNotifications = false })
@@ -1153,29 +1204,11 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             },
             modifier = Modifier.align(Alignment.TopCenter),
             actions = {
-                if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications) {
+                TopBarDownloadButton(
+                    onClick = { showDownloadManager = true },
+                )
+                if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory) {
                     // Recognition icon is embedded cleanly inside the search pill
-                } else if (detail?.browseId == "app:history") {
-                    IconButton(onClick = {
-                        scope.launch {
-                            historyRefreshing = true
-                            com.velthy.client.data.history.PlaybackHistoryManager.syncWithYouTube(force = true)
-                            historyRefreshing = false
-                        }
-                    }) {
-                        Icon(
-                            Icons.Rounded.Sync,
-                            contentDescription = "Sync",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                        )
-                    }
-                    IconButton(onClick = { showClearHistoryDialog = true }) {
-                        Icon(
-                            Icons.Rounded.DeleteOutline,
-                            contentDescription = "Clear History",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                        )
-                    }
                 } else if (detail?.browseId == "local:downloads") {
                     IconButton(onClick = { showDownloadSettingsSheet = true }) {
                         Icon(
@@ -1184,7 +1217,25 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                             tint = MaterialTheme.colorScheme.onBackground,
                         )
                     }
-                } else if (!showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && detail == null) {
+                } else if (detail != null && !detail.browseId.startsWith("local:") && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory) {
+                    IconButton(onClick = {
+                        browseActions = BrowseTarget(
+                            browseId = detail.browseId,
+                            title = detail.title,
+                            subtitle = detail.subtitle,
+                            thumbnailUrl = detail.thumbnailUrl,
+                            type = detail.type,
+                            songs = (detail.songs as? UiState.Success)?.data.orEmpty(),
+                            playlist = viewModel.editablePlaylist(detail.browseId),
+                        )
+                    }) {
+                        Icon(
+                            Icons.Rounded.MoreVert,
+                            contentDescription = "More options",
+                            tint = if (isDetailVisible) detailPalette.onBackground else MaterialTheme.colorScheme.onBackground,
+                        )
+                    }
+                } else if (!showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && detail == null) {
                     if (selectedTab == TAB_HOME) {
                         updateNotice?.let { update ->
                             IconButton(onClick = {
@@ -1201,14 +1252,17 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                             Icon(
                                 Icons.Rounded.NotificationsNone,
                                 contentDescription = "Notifications",
-                                tint = MaterialTheme.colorScheme.onBackground,
+                                tint = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                     }
                     if (selectedTab == TAB_LIBRARY) {
-                        IconButton(onClick = { viewModel.openDetail("app:history", "History", "Riwayat") }) {
+                        IconButton(onClick = {
+                            showHistory = true
+                            viewModel.loadHistory()
+                        }) {
                             Icon(
-                                Icons.Rounded.History,
+                                imageVector = Icons.Rounded.History,
                                 contentDescription = "History",
                                 tint = MaterialTheme.colorScheme.onBackground,
                             )
@@ -1276,6 +1330,10 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     viewModel.clearDetail()
                     showSettings = false
                     showAccountScrobbling = false
+                    showHistory = false
+                    showReplay = false
+                    showDiscord = false
+                    showNotifications = false
                     selectedTab = index
                 },
             )
@@ -1597,30 +1655,69 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 )
             }
         }
-        if (showClearHistoryDialog) {
-            AlertDialog(
-                onDismissRequest = { showClearHistoryDialog = false },
-                title = { Text("Hapus Riwayat Pemutaran?") },
-                text = { Text("Semua lagu dalam riwayat mendengarkan akan dihapus. Tindakan ini tidak dapat dibatalkan.") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showClearHistoryDialog = false
-                            com.velthy.client.data.history.PlaybackHistoryManager.clearHistory()
-                        },
-                        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                    ) {
-                        Text("Hapus Semua")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showClearHistoryDialog = false }) {
-                        Text("Batal")
-                    }
-                },
-            )
+
+        // ---- Album / Playlist / Artist Actions Sheet ----
+        browseActions?.let { target ->
+            ModalBottomSheet(
+                onDismissRequest = { browseActions = null },
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 0.dp,
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                val songs = target.songs
+                BrowseActionsSheet(
+                    target = target,
+                    onPlay = if (songs.isNotEmpty()) {
+                        {
+                            browseActions = null
+                            play(songs, 0)
+                        }
+                    } else null,
+                    onShuffle = if (songs.isNotEmpty()) {
+                        {
+                            browseActions = null
+                            QueueShuffle.enableForNextQueue()
+                            play(songs, songs.indices.random())
+                        }
+                    } else null,
+                    onPlayNext = {
+                        browseActions = null
+                        if (songs.isNotEmpty()) {
+                            songs.reversed().forEach { song ->
+                                controller?.addMediaItem(player.queueIndex + 1, song.toMediaItem())
+                            }
+                            Toast.makeText(context, "Playing next", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onAddToQueue = {
+                        browseActions = null
+                        if (songs.isNotEmpty()) {
+                            controller?.addMediaItems(songs.map { it.toMediaItem() })
+                            Toast.makeText(context, "Added to queue", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDownloadAll = if (songs.isNotEmpty() && target.browseId?.startsWith("local:") != true) {
+                        {
+                            browseActions = null
+                            songs.forEach { Downloads.enqueue(context, it) }
+                            Toast.makeText(context, "Downloading ${songs.size} songs", Toast.LENGTH_SHORT).show()
+                        }
+                    } else null,
+                    onRename = target.playlist?.let { pl ->
+                        { newName ->
+                            browseActions = null
+                            viewModel.renamePlaylist(pl, newName)
+                        }
+                    },
+                    onDelete = target.playlist?.let { pl ->
+                        {
+                            browseActions = null
+                            viewModel.deletePlaylist(pl)
+                            viewModel.closeDetail()
+                        }
+                    },
+                )
+            }
         }
 
         if (showRecognitionSheet) {
@@ -1811,6 +1908,84 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 hazeState = hazeState,
                 onDismiss = { discordDialog = null },
             )
+        }
+
+        val replaySummary = replay.summary
+        if (replaySummary != null) {
+            replayStory?.let { start ->
+                ReplayStories(
+                    summary = replaySummary,
+                    start = start,
+                    onClose = { replayStory = null },
+                    onShare = { page ->
+                        replaySharePage = page
+                        showReplayShare = true
+                    },
+                )
+            }
+        }
+
+        if (showReplayShare && replaySummary != null) {
+            ModalBottomSheet(
+                onDismissRequest = { showReplayShare = false },
+                containerColor = MaterialTheme.colorScheme.background,
+            ) {
+                ReplayShareSheet(
+                    summary = replaySummary,
+                    holder = account?.name.orEmpty(),
+                    memberSince = replay.memberSince,
+                    page = replaySharePage,
+                    onDismiss = { showReplayShare = false },
+                )
+            }
+        }
+
+        if (showDownloadManager) {
+            ModalBottomSheet(
+                onDismissRequest = { showDownloadManager = false },
+                containerColor = MaterialTheme.colorScheme.background,
+            ) {
+                DownloadManagerSheet(
+                    onDismiss = { showDownloadManager = false },
+                )
+            }
+        }
+
+        browseActions?.let { target ->
+            ModalBottomSheet(
+                onDismissRequest = { browseActions = null },
+                containerColor = MaterialTheme.colorScheme.background,
+            ) {
+                BrowseActionsSheet(
+                    target = target,
+                    onPlayNext = {
+                        browseActions = null
+                        target.songs.reversed().forEach { playNext(it) }
+                    },
+                    onAddToQueue = {
+                        browseActions = null
+                        target.songs.forEach { addToQueue(it) }
+                    },
+                    onDownloadAll = if (target.songs.isNotEmpty()) {
+                        {
+                            browseActions = null
+                            startDownload(target.songs)
+                        }
+                    } else null,
+                    onRename = if (target.playlist != null) {
+                        { newName ->
+                            browseActions = null
+                            viewModel.renamePlaylist(target.playlist, newName)
+                        }
+                    } else null,
+                    onDelete = if (target.playlist != null) {
+                        {
+                            browseActions = null
+                            viewModel.deletePlaylist(target.playlist)
+                        }
+                    } else null,
+                )
+            }
         }
 
         // ---- Launch Splash Screen Overlay (Hides initial cold start skeleton) ----

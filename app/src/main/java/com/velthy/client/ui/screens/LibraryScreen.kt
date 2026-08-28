@@ -1,17 +1,34 @@
 package com.velthy.client.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
 import com.velthy.client.data.model.ShelfItem
@@ -21,21 +38,13 @@ import com.velthy.client.ui.components.MessageState
 import com.velthy.client.ui.components.PAGE_GUTTER
 import com.velthy.client.ui.components.PullToRefresh
 import com.velthy.client.ui.components.librarySkeleton
+import com.velthy.client.ui.player.MeshGradientBackground
+import com.velthy.client.ui.player.rememberArtworkColors
+import com.velthy.client.ui.replay.ReplayHeroCard
+import java.util.Locale
 
 /**
  * The signed-in library: the saved collections, as shelves of cards.
- *
- * Deliberately only the collections. This page used to end with two runs of
- * track rows — "Liked Music" and "Songs" — which are two overlapping answers
- * to the same question and read as one list that couldn't make up its mind: a
- * track that stopped being liked didn't leave the page, it moved down it, into
- * a section most people had taken for more of the same. Liked Music is a
- * playlist, and it is reached the way every other playlist here is, by opening
- * its card.
- *
- * The liked list is still fetched — it is what the rest of the app reads a
- * track's rating off (see MainViewModel's `likeStatuses`); it just isn't a
- * second place to browse it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,6 +55,8 @@ fun LibraryScreen(
     onShelfItemClick: (ShelfItem) -> Unit,
     onShelfItemLongPress: (ShelfItem) -> Unit,
     onNewPlaylist: () -> Unit,
+    replayCard: ReplayHeroCard? = null,
+    onOpenReplay: () -> Unit = {},
     onSignIn: () -> Unit,
     onRetry: () -> Unit,
     refreshing: Boolean,
@@ -65,6 +76,9 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = contentPadding,
         ) {
+            // Replay leading banner
+            item(key = "replay") { ReplayBanner(replayCard, onOpenReplay) }
+
             item(key = "shelf:$ON_DEVICE") {
                 Shelf(
                     shelf = HomeShelf(
@@ -89,11 +103,12 @@ fun LibraryScreen(
                                 subtitle = "Listening history",
                                 thumbnailUrl = null,
                                 videoId = null,
-                                browseId = "app:history",
+                                browseId = "history",
                             ),
                         ),
                     ),
                     onItemClick = onShelfItemClick,
+                    onItemLongPress = onShelfItemLongPress,
                 )
             }
             if (!signedIn) {
@@ -113,10 +128,6 @@ fun LibraryScreen(
                     MessageState(state.message, actionLabel = "Retry", onAction = onRetry)
                 }
                 is UiState.Success -> {
-                    // A fresh account has no Playlists shelf at all, and that
-                    // is exactly the account most in need of the button that
-                    // makes one — so the row is drawn either way, empty but
-                    // for the tile that creates the first playlist.
                     val shelves = state.data.shelves
                     if (shelves.none { it.title == PLAYLISTS }) {
                         item(key = "shelf:$PLAYLISTS") {
@@ -138,7 +149,11 @@ fun LibraryScreen(
                                     onNewPlaylist = onNewPlaylist,
                                 )
                             } else {
-                                Shelf(shelf = shelf, onItemClick = onShelfItemClick)
+                                Shelf(
+                                    shelf = shelf,
+                                    onItemClick = onShelfItemClick,
+                                    onItemLongPress = onShelfItemLongPress,
+                                )
                             }
                         }
                     }
@@ -149,8 +164,75 @@ fun LibraryScreen(
 }
 
 /**
+ * The way in to Replay, at the top of the library page.
+ */
+@Composable
+private fun ReplayBanner(card: ReplayHeroCard?, onClick: () -> Unit) {
+    val palette = rememberArtworkColors(card?.artworkUrl)
+    Box(
+        Modifier
+            .padding(horizontal = PAGE_GUTTER, vertical = 6.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Box(Modifier.matchParentSize()) {
+            MeshGradientBackground(
+                palette = palette,
+                trackKey = card?.artworkUrl ?: "replay",
+                continuous = true,
+                blurRadius = 28.dp,
+            )
+        }
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.Black.copy(alpha = 0.34f),
+                            Color.Black.copy(alpha = 0.12f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "Your Replay",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
+                )
+                Text(
+                    text = card?.let { "${it.value} ${it.label.lowercase(Locale.ROOT)} · ${it.detail}" }
+                        ?: "Top songs, artists, albums and genres — counted on this device",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.82f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Icon(
+                imageVector = VelthyIcons.ChevronRight,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+/**
  * The one shelf on this page that can be written to: it leads with the tile
- * that creates a playlist, and holding a card opens the rename/delete menu.
+ * that creates a playlist, and holding a card gets rename and delete on top of
+ * the queue actions every other shelf's menu offers.
  */
 @Composable
 private fun PlaylistShelf(
@@ -174,6 +256,5 @@ private fun PlaylistShelf(
     )
 }
 
-/** The library feed whose cards are the account's own — see [PlaylistShelf]. */
 private const val PLAYLISTS = "Playlists"
 private const val ON_DEVICE = "On Device"

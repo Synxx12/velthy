@@ -37,6 +37,8 @@ open class VelthyApplication : Application(), SingletonImageLoader.Factory {
         LastPlayed.init(this)
         com.velthy.client.data.sources.SourceRegistry.init(this)
         com.velthy.client.data.history.PlaybackHistoryManager.init(this)
+        com.velthy.client.data.stats.ArtistFacts.init(this)
+        com.velthy.client.data.stats.ListeningStats.init(this)
         // What's already saved to Downloads, so the song menu can say so
         // without a media-store query per row.
         Downloads.init(this)

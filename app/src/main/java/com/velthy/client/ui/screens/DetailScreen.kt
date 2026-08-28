@@ -152,6 +152,7 @@ fun DetailScreen(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
+    onMore: (() -> Unit)? = null,
 ) {
     val songs = (page.songs as? UiState.Success)?.data.orEmpty()
     val isArtist = page.type == BrowseType.ARTIST
@@ -203,6 +204,7 @@ fun DetailScreen(
                         // A page of on-device tracks has nothing further away
                         // to fetch — everything on it is already local.
                         onDownload = onDownloadAll.takeUnless { page.browseId.startsWith("local:") },
+                        onMore = onMore,
                         onArtistClick = onArtistClick,
                     )
                 }
@@ -214,6 +216,8 @@ fun DetailScreen(
                         palette = palette,
                         onPlay = { onSongClick(songs, 0) },
                         onShuffle = { onShuffle(songs) },
+                        onDownload = onDownloadAll.takeUnless { page.browseId.startsWith("local:") }?.let { download -> { download(songs) } },
+                        onMore = onMore,
                     )
                 }
             }
@@ -344,6 +348,7 @@ private fun ReleaseHeader(
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onDownload: ((List<Song>) -> Unit)?,
+    onMore: (() -> Unit)? = null,
     onArtistClick: (String, String) -> Unit,
 ) {
     val (credit, meta) = page.headerLines(trackCount)
@@ -439,6 +444,14 @@ private fun ReleaseHeader(
                             contentDescription = "Download all",
                             palette = palette,
                             onClick = { download(songs) },
+                        )
+                    }
+                    onMore?.let { more ->
+                        CircleIconButton(
+                            icon = Icons.Rounded.MoreVert,
+                            contentDescription = "More actions",
+                            palette = palette,
+                            onClick = more,
                         )
                     }
                 }
@@ -694,9 +707,15 @@ private val MERGE_BAND = 320.dp
  */
 private val MERGE_BLUR = 100.dp
 
-/** Shuffle • Play • Download — the Apple Music action row. */
+/** Shuffle • Play • Download • More — the action row. */
 @Composable
-private fun ActionRow(palette: ArtworkPalette, onPlay: () -> Unit, onShuffle: () -> Unit) {
+private fun ActionRow(
+    palette: ArtworkPalette,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+    onDownload: (() -> Unit)? = null,
+    onMore: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -716,6 +735,24 @@ private fun ActionRow(palette: ArtworkPalette, onPlay: () -> Unit, onShuffle: ()
             palette = palette,
             onClick = onPlay,
         )
+
+        onDownload?.let { download ->
+            CircleIconButton(
+                icon = VelthyIcons.Download,
+                contentDescription = "Download all",
+                palette = palette,
+                onClick = download,
+            )
+        }
+
+        onMore?.let { more ->
+            CircleIconButton(
+                icon = Icons.Rounded.MoreVert,
+                contentDescription = "More actions",
+                palette = palette,
+                onClick = more,
+            )
+        }
     }
     Spacer(Modifier.height(22.dp))
 }

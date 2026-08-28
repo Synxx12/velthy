@@ -86,7 +86,8 @@ fun FloatingBottomBar(
     hazeState: HazeState,
     modifier: Modifier = Modifier,
 ) {
-    val container = MaterialTheme.colorScheme.surface
+    val container = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
+    val fallbackContainer = MaterialTheme.colorScheme.surface
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val haptics = rememberHaptics()
     val density = LocalDensity.current
@@ -219,11 +220,11 @@ fun FloatingBottomBar(
                     .clip(capsuleShape)
                     .then(
                         if (reduceDynamicBlur) {
-                            Modifier.background(container)
+                            Modifier.background(fallbackContainer)
                         } else {
                             Modifier.hazeEffect(
                                 state = hazeState,
-                                style = HazeMaterials.regular(container),
+                                style = HazeMaterials.thin(container),
                             )
                         },
                     )
@@ -239,11 +240,11 @@ fun FloatingBottomBar(
                         .clip(circleShape)
                         .then(
                             if (reduceDynamicBlur) {
-                                Modifier.background(container)
+                                Modifier.background(fallbackContainer)
                             } else {
                                 Modifier.hazeEffect(
                                     state = hazeState,
-                                    style = HazeMaterials.regular(container),
+                                    style = HazeMaterials.thin(container),
                                 )
                             },
                         )

@@ -25,13 +25,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Animation
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.BlurOff
 import androidx.compose.material.icons.rounded.Brightness4
 import androidx.compose.material.icons.rounded.Check
@@ -39,12 +41,16 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.MusicOff
+import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.MotionPhotosOff
+import androidx.compose.material.icons.rounded.MusicOff
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.PlaylistPlay
@@ -52,6 +58,7 @@ import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SurroundSound
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.VolumeOff
@@ -103,6 +110,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import com.velthy.client.ui.components.thumbnailBorder
+import com.velthy.client.data.stats.Backup
 import com.velthy.client.data.model.Account
 import com.velthy.client.BuildConfig
 import com.velthy.client.data.scrobbling.LastFM
@@ -110,6 +118,7 @@ import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.sources.SourceKind
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.settings.AudioQuality
+import com.velthy.client.data.settings.DownloadQuality
 import com.velthy.client.data.settings.ThemeMode
 import com.velthy.client.playback.AudioCache
 import com.velthy.client.playback.DolbyAtmos
@@ -135,6 +144,7 @@ fun SettingsScreen(
     onLyricsSources: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
+    onOpenReplay: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -171,6 +181,38 @@ fun SettingsScreen(
     val swipeToPlayNext by AppSettings.swipeToPlayNext.collectAsStateWithLifecycle()
     val hapticFeedback by AppSettings.hapticFeedback.collectAsStateWithLifecycle()
     val shareLiveStats by AppSettings.shareLiveStats.collectAsStateWithLifecycle()
+    val replayGenres by AppSettings.replayGenres.collectAsStateWithLifecycle()
+    val canvasOverCellular by AppSettings.canvasOverCellular.collectAsStateWithLifecycle()
+    val downloadQuality by AppSettings.downloadQuality.collectAsStateWithLifecycle()
+    val wifiOnlyDownloads by AppSettings.wifiOnlyDownloads.collectAsStateWithLifecycle()
+
+    var exportStatus by remember { mutableStateOf<String?>(null) }
+    var importStatus by remember { mutableStateOf<String?>(null) }
+    var confirmImport by remember { mutableStateOf(false) }
+    val backupScope = rememberCoroutineScope()
+
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { target ->
+        if (target == null) return@rememberLauncherForActivityResult
+        backupScope.launch {
+            exportStatus = Backup.exportTo(context, target).fold(
+                onSuccess = { months -> "Exported settings and ${countOfMonths(months)}" },
+                onFailure = { "Export failed: ${it.message ?: "unknown error"}" },
+            )
+        }
+    }
+    val importPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { source ->
+        if (source == null) return@rememberLauncherForActivityResult
+        backupScope.launch {
+            importStatus = Backup.importFrom(context, source).fold(
+                onSuccess = { "Imported ${countOfMonths(it.months)} from v${it.from}" },
+                onFailure = { "Import failed: ${it.message ?: "unknown error"}" },
+            )
+        }
+    }
 
     // Whether the module index URL is baked into this build.
     val losslessConfigured = BuildConfig.MODULE_INDEX_URL.trim().isNotEmpty()
@@ -190,6 +232,7 @@ fun SettingsScreen(
     val listenBrainzToken by AppSettings.listenBrainzToken.collectAsStateWithLifecycle()
 
     var picking by remember { mutableStateOf<QualityTarget?>(null) }
+    var pickingDownloadQuality by remember { mutableStateOf(false) }
     var showListenBrainzTokenDialog by remember { mutableStateOf(false) }
     var showLastfmLoginDialog by remember { mutableStateOf(false) }
     var showStorageSettingsSheet by remember { mutableStateOf(false) }
@@ -302,6 +345,22 @@ fun SettingsScreen(
                 badge = "In use".takeIf { metered == true },
                 value = cellularQuality.label,
                 onClick = { picking = QualityTarget.CELLULAR },
+            )
+        }
+
+        SettingsGroup(header = "Downloads") {
+            SettingsRow(
+                icon = Icons.Rounded.Download,
+                title = "Download quality",
+                subtitle = "${downloadQuality.perTrack} per track, whatever the connection",
+                value = downloadQuality.label,
+                onClick = { pickingDownloadQuality = true },
+            )
+            SettingsSubRow(
+                title = "Download over Wi-Fi only",
+                checked = wifiOnlyDownloads,
+                onCheckedChange = AppSettings::setWifiOnlyDownloads,
+                badge = "Blocking".takeIf { wifiOnlyDownloads && metered == true },
             )
         }
 
@@ -507,6 +566,13 @@ fun SettingsScreen(
                 },
                 onClick = { AppSettings.setAnimatedCanvas(!animatedCanvas) },
             )
+            if (animatedCanvas) {
+                SettingsSubRow(
+                    title = "Play animated cover over cellular",
+                    checked = canvasOverCellular,
+                    onCheckedChange = AppSettings::setCanvasOverCellular,
+                )
+            }
             RowDivider()
             SettingsRow(
                 icon = Icons.AutoMirrored.Rounded.Notes,
@@ -617,6 +683,75 @@ fun SettingsScreen(
                     loader.memoryCache?.clear()
                     loader.diskCache?.clear()
                     Toast.makeText(context, "Image cache cleared", Toast.LENGTH_SHORT).show()
+                },
+            )
+        }
+
+        SettingsGroup(header = "Your data") {
+            SettingsRow(
+                icon = Icons.Rounded.BarChart,
+                title = "Replay",
+                subtitle = "Your top songs, artists, albums and genres",
+                onClick = onOpenReplay,
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.LocalOffer,
+                title = "Work out genres",
+                subtitle = if (replayGenres) {
+                    "Asks Last.fm what an artist plays — their name is sent, nothing else"
+                } else {
+                    "Replay's genre chart is hidden while this is off"
+                },
+                trailing = {
+                    Switch(
+                        checked = replayGenres,
+                        onCheckedChange = AppSettings::setReplayGenres,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setReplayGenres(!replayGenres) },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.FileUpload,
+                title = "Export data",
+                subtitle = exportStatus ?: "Settings and listening history, as one JSON file",
+                onClick = { exportPicker.launch(Backup.suggestedName()) },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.FileDownload,
+                title = "Import data",
+                subtitle = importStatus ?: "Replaces the settings and history on this device",
+                onClick = { confirmImport = true },
+            )
+        }
+
+        if (confirmImport) {
+            AlertDialog(
+                onDismissRequest = { confirmImport = false },
+                title = { Text("Import settings and history?") },
+                text = {
+                    Text("This will replace your current settings, saved listening history and search terms with the backup file.")
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            confirmImport = false
+                            importPicker.launch(arrayOf("application/json", "*/*"))
+                        },
+                    ) {
+                        Text("Choose file")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmImport = false }) {
+                        Text("Cancel")
+                    }
                 },
             )
         }
@@ -826,6 +961,21 @@ fun SettingsScreen(
                         QualityTarget.CELLULAR -> AppSettings.setAudioQualityCellular(quality)
                     }
                     picking = null
+                },
+            )
+        }
+    }
+
+    if (pickingDownloadQuality) {
+        ModalBottomSheet(
+            onDismissRequest = { pickingDownloadQuality = false },
+            containerColor = MaterialTheme.colorScheme.background,
+        ) {
+            DownloadQualitySheet(
+                selected = downloadQuality,
+                onSelect = { quality ->
+                    AppSettings.setDownloadQuality(quality)
+                    pickingDownloadQuality = false
                 },
             )
         }
@@ -1143,6 +1293,82 @@ private fun QualitySheet(
     }
 }
 
+/**
+ * What to keep when a track is saved, with what each rung costs on disk.
+ */
+@Composable
+private fun DownloadQualitySheet(
+    selected: DownloadQuality,
+    onSelect: (DownloadQuality) -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Row(
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Download,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = "Download quality",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    text = "For files kept on this device",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
+
+        // Best first, matching [QualitySheet] — and here the best rung is also
+        // the default, so the checkmark starts where the eye does.
+        DownloadQuality.entries.reversed().forEach { quality ->
+            val chosen = quality == selected
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSelect(quality)
+                    }
+                    .padding(horizontal = 22.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = quality.label,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = "${quality.detail} · ${quality.perTrack} per track",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (chosen) {
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
 // ---- Building blocks --------------------------------------------------------
 
 internal val GroupShape = RoundedCornerShape(14.dp)
@@ -1283,6 +1509,44 @@ internal fun SettingsRow(
             }
             Chevron()
         }
+    }
+}
+
+@Composable
+internal fun SettingsSubRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    badge: String? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(start = ROW_INSET, end = ROW_INSET, top = 0.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (badge != null) {
+                Spacer(Modifier.width(8.dp))
+                Badge(badge)
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                checkedBorderColor = MaterialTheme.colorScheme.primary,
+            ),
+        )
     }
 }
 
@@ -1457,4 +1721,10 @@ private fun SegmentedControl(
             }
         }
     }
+}
+
+private fun countOfMonths(count: Int): String = when (count) {
+    0 -> "no history"
+    1 -> "1 month of history"
+    else -> "$count months of history"
 }

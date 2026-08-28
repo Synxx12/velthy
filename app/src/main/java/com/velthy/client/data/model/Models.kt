@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.model
+package com.velthy.client.data.model
 
 /** A playable YouTube Music track. */
 data class Song(
@@ -55,6 +55,19 @@ data class Song(
  * Video thumbnails carry no hint and are returned unchanged.
  */
 fun Song.artworkAt(px: Int): String? = thumbnailUrl.artworkAt(px)
+
+fun Song.durationMillis(): Long = durationText.durationMillis()
+
+fun String?.durationMillis(): Long {
+    val parts = this?.trim()?.takeIf { it.isNotEmpty() }?.split(":") ?: return 0L
+    val numbers = parts.map { it.trim().toLongOrNull() ?: return 0L }
+    val seconds = when (numbers.size) {
+        2 -> numbers[0] * 60 + numbers[1]
+        3 -> numbers[0] * 3_600 + numbers[1] * 60 + numbers[2]
+        else -> return 0L
+    }
+    return (seconds * 1_000).coerceAtLeast(0L)
+}
 
 /** As [Song.artworkAt], for artwork that isn't a track's. */
 fun String?.artworkAt(px: Int): String? = this?.replace(SIZE_HINT, "w$px-h$px")
@@ -239,3 +252,9 @@ sealed interface UiState<out T> {
     data class Success<T>(val data: T) : UiState<T>
     data class Error(val message: String) : UiState<Nothing>
 }
+
+/** Grouped history section (Today, Yesterday, This week, etc.) */
+data class HistorySection(
+    val title: String,
+    val songs: List<Song>,
+)

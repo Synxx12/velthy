@@ -49,15 +49,34 @@ import dev.chrisbanes.haze.materials.HazeMaterials
  */
 private val GLYPH_SLOT = 40.dp
 
-private val ROW_PADDING = 5.dp
-private val ART_CORNER = 7.dp
+/**
+ * The play and skip glyphs themselves.
+ */
+private val GLYPH_SIZE = 32.dp
+
+/** The spinner that stands in for the play glyph, kept in proportion to it. */
+private val SPINNER_SIZE = 22.dp
 
 /**
- * The bar's own corner, concentric with the artwork's rather than an
- * unrelated, much rounder value — same centre, radius bigger by exactly the
- * padding between the two edges, so the two curves read as one shape.
+ * The gap between the two transport controls.
  */
-private val BAR_CORNER = ART_CORNER + ROW_PADDING
+private val TRANSPORT_GAP = 8.dp
+
+/**
+ * Vertical padding, which with the 40dp artwork sets the bar's height at 56dp
+ * and so its pill radius at 28.
+ */
+private val ROW_PADDING_VERTICAL = 8.dp
+
+/**
+ * Horizontal padding, deliberately larger than the vertical.
+ */
+private val ROW_PADDING_HORIZONTAL = 12.dp
+
+/**
+ * The artwork's corner, on the 8dp every other thumbnail in the app carries.
+ */
+private val ART_CORNER = 8.dp
 
 /** Frosted mini player that rides just above the floating tab bar. */
 @OptIn(ExperimentalHazeMaterialsApi::class)
@@ -72,9 +91,9 @@ fun MiniPlayer(
     onExpand: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val haptics = rememberHaptics()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    val shape = RoundedCornerShape(BAR_CORNER)
+    val haptics = rememberHaptics()
+    val shape = RoundedCornerShape(percent = 50)
     Box(
         modifier = modifier
             .padding(horizontal = PAGE_GUTTER)
@@ -87,17 +106,15 @@ fun MiniPlayer(
                 },
             )
             .border(0.5.dp, Color.White.copy(alpha = 0.10f), shape)
-            .clickable(
-                onClick = {
-                    haptics.play(Haptic.Expand)
-                    onExpand()
-                },
-            ),
+            .clickable(onClick = onExpand),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(ROW_PADDING),
+                .padding(
+                    horizontal = ROW_PADDING_HORIZONTAL,
+                    vertical = ROW_PADDING_VERTICAL,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AsyncImage(
@@ -131,7 +148,7 @@ fun MiniPlayer(
                     CircularProgressIndicator(
                         color = MaterialTheme.colorScheme.onBackground,
                         strokeWidth = 2.dp,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(SPINNER_SIZE),
                     )
                 }
             } else {
@@ -146,10 +163,11 @@ fun MiniPlayer(
                         imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
                         tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(28.dp),
+                        modifier = Modifier.size(GLYPH_SIZE),
                     )
                 }
             }
+            Spacer(Modifier.width(TRANSPORT_GAP))
             IconButton(
                 onClick = {
                     haptics.play(Haptic.SkipNext)
@@ -161,9 +179,10 @@ fun MiniPlayer(
                     Icons.Rounded.SkipNext,
                     contentDescription = "Next",
                     tint = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.size(28.dp),
+                    modifier = Modifier.size(GLYPH_SIZE),
                 )
             }
         }
     }
 }
+

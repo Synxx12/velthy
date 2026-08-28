@@ -5,6 +5,7 @@ import com.velthy.client.data.innertube.Innertube
 import com.velthy.client.data.innertube.InnertubeParser
 import com.velthy.client.data.model.Account
 import com.velthy.client.data.model.ArtistPage
+import com.velthy.client.data.model.HistorySection
 import com.velthy.client.data.model.HomeFeed
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
@@ -101,10 +102,7 @@ object YtMusicRepository {
      */
     private suspend fun recentlyPlayed(): HomeShelf? {
         if (Innertube.cookie == null) return null
-        val songs = InnertubeParser.collectSongsDeep(Innertube.browse(HISTORY))
-            // A track played three times today is three rows in the feed.
-            .distinctBy { it.videoId }
-            .take(RECENT_LIMIT)
+        val songs = fetchHistory().take(RECENT_LIMIT)
         if (songs.isEmpty()) return null
         return HomeShelf(
             title = RECENT_TITLE,
@@ -118,6 +116,20 @@ object YtMusicRepository {
                 )
             },
         )
+    }
+
+    private suspend fun fetchHistory(): List<Song> =
+        InnertubeParser.collectSongsDeep(Innertube.browse(HISTORY)).distinctBy { it.videoId }
+
+    suspend fun history(): Result<List<Song>> = call("history") { fetchHistory() }
+
+    suspend fun historySections(): Result<List<HistorySection>> = call("history:sections") {
+        fetchHistorySections()
+    }
+
+    private suspend fun fetchHistorySections(): List<HistorySection> {
+        val parsed = InnertubeParser.parseHistorySections(Innertube.browse(HISTORY))
+        return parsed.map { HistorySection(it.title, it.songs) }
     }
 
     private const val HISTORY = "FEmusic_history"

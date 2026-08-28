@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.settings
+package com.velthy.client.data.settings
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -36,6 +36,11 @@ object SearchHistory {
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
+        reload()
+    }
+
+    fun reload() {
+        if (!this::prefs.isInitialized) return
         _recent.value = runCatching {
             json.decodeFromString(serializer, prefs.getString(KEY_HISTORY, null) ?: "[]")
         }.getOrDefault(emptyList())

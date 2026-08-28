@@ -718,7 +718,7 @@ private fun ShelfCard(
                     )
                 }
             }
-            "app:history" -> {
+            "app:history", "history" -> {
                 Box(
                     modifier = Modifier
                         .width(SHELF_CARD_WIDTH)

@@ -1,4 +1,4 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
 
 /**
  * Writes iTunes-style metadata atoms — title, artist, album, cover — into an
@@ -47,15 +47,17 @@ object Mp4Tagger {
         title: String,
         artist: String,
         album: String?,
+        lyrics: String? = null,
         cover: ByteArray?,
         coverIsPng: Boolean,
     ): ByteArray {
         val items = mutableListOf<ByteArray>()
-        // © is iTunes's own "copyright" prefix for the three text atoms
+        // © is iTunes's own "copyright" prefix for the text atoms
         // below — not a copyright mark here, just the byte their readers key on.
         if (title.isNotBlank()) items += textItem("©nam", title)
         if (artist.isNotBlank()) items += textItem("©ART", artist)
         if (!album.isNullOrBlank()) items += textItem("©alb", album)
+        if (!lyrics.isNullOrBlank()) items += textItem("©lyr", lyrics)
         if (cover != null && cover.isNotEmpty()) items += coverItem(cover, coverIsPng)
         if (items.isEmpty()) return bytes
 

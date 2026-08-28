@@ -8,6 +8,46 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ### [Unreleased]
 
+### [native-v1.4.4] — 2026-08-28
+
+#### ✨ Fitur Baru & Tampilan
+- **Velthy Replay & Story Kilas Balik Musik Interaktif (*Velthy Replay & Animated Stories*)**:
+  - Menghadirkan fitur **Replay** komprehensif untuk merayakan perjalanan musik pengguna per bulan maupun sepanjang tahun:
+    - **Kartu Ringkasan Dinamis**: Statistik total jam mendengarkan, lagu favorit, artis teratas, dan genre dominan dengan latar belakang gradien *mesh* adaptif yang lembut.
+    - **Replay Stories Animasi**: Tampilan cerita vertikal bersuara (*immersive full-screen stories*) dengan animasi bilah progres interaktif dan gestur tahan/ketuk.
+    - **Poster Kilas Balik Siap Bagikan (*High-Res Shareable Poster*)**: Pembuatan poster gambar grafis tajam beresolusi tinggi untuk dibagikan langsung ke media sosial atau disimpan ke galeri foto.
+- **Bilah Navigasi & Mini Player Transparan Efek Kaca (*Translucent Frosted Glass Aesthetic*)**:
+  - Memperbarui wadah *Mini Player* dan *Dual-Island Floating Bottom Bar* dengan material kaca transparan (*translucent frosted glass*), memungkinkan warna sampul album dan konten yang bergulir di bawahnya berpendar lembut tanpa mengurangi kontras tombol aksi.
+- **Pusat Manajemen Unduhan Paralel & Indikator Cincin Progres (*Download Manager & Top Ring Progress*)**:
+  - Tombol indikator unduhan di bilah navigasi atas dengan cincin progres melingkar (*circular progress ring*) yang memperlihatkan persentase unduhan aktif secara *real-time*.
+  - Lembar manajemen unduhan interaktif untuk memantau status antrean, membatalkan unduhan, maupun membersihkan riwayat unduhan.
+- **Layar Riwayat Pemutaran Terkelompok Waktu & Navigasi Cepat (*Grouped History Sections*)**:
+  - Pengelompokan riwayat mendengarkan berdasarkan periode waktu (*Today*, *Yesterday*, *This week*, *Last week*, *Earlier*) dengan tipografi tebal yang elegan.
+  - Penyelarasan navigasi bilah bawah: mengetuk tombol tab (*Home, New, Library, Search*) saat berada di halaman riwayat langsung menutup layar riwayat dan berpindah ke tab tujuan dengan mulus.
+  - Akses cepat tombol riwayat pada bilah navigasi atas di tab Library.
+- **Pengaturan Kualitas Unduhan & Sampul Bergerak Seluler (*Download Quality & Canvas Cellular Controls*)**:
+  - Penambahan grup pengaturan **Downloads** di menu Settings dengan pilihan kualitas unduhan (*Standard, High, Lossless*) serta opsi sakelar *Download over Wi-Fi only* untuk mencegah konsumsi kuota berlebih.
+  - Penambahan kontrol sakelar **Play animated cover over cellular** di bawah opsi *Animated cover art* untuk menghemat pemakaian data seluler saat memutar video looping kanvas sampul.
+  - Menghapus judul teks "Library" berukuran besar untuk tampilan antarmuka yang jauh lebih bersih dan lapang di bawah bilah kaca.
+  - Penambahan banner interaktif **"Your Replay"** di bagian atas Library dengan pendaran *mesh gradient* yang dinamis.
+  - Penambahan kartu pintasan **History** pada rak *On Device* berdampingan dengan *Downloads* dan *Local Music*.
+- **Menu Aksi Cepat Koleksi Musik & Halaman Artis/Playlist (*Contextual Detail Action Row & 3-Dots Sheet*)**:
+  - Penambahan tombol aksi lengkap (*Shuffle, Play, Download All, dan 3-dots Menu*) pada baris aksi halaman artis, album, dan playlist.
+  - Lembar aksi cepat (*Browse Actions Sheet*) dengan opsi putar instan, putar berikutnya, masukkan antrean, unduh seluruh lagu, ubah nama playlist (*inline rename*), dan hapus playlist.
+  - Akses cepat tombol titik tiga di bilah atas (*TopBar*) saat membuka halaman detail.
+
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Penyematan Lirik Otomatis ke Metadata Berkas Unduhan (*Embedded Offline Lyrics Tagging*)**:
+  - Secara otomatis mengunduh lirik tersinkronisasi (LRC) dari beragam penyedia lirik dan menyematkannya langsung ke dalam metadata berkas audio (`©lyr` atom pada berkas M4A/AAC dan `LYRICS` Vorbis comment pada FLAC) agar lirik dapat langsung dibaca oleh pemutar musik offline manapun.
+- **Mesin Perekam Statistik Waktu Mendengarkan Presisi (*Listening Stats & Analytics Engine*)**:
+  - Perekaman riwayat waktu dengar yang akurat di latar belakang melalui pelacakan durasi nyata untuk setiap sesi pemutaran lagu.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Cadangan & Pemulihan Data Menyeluruh (*Export & Import Data Backup*)**:
+  - Menu ekspor dan impor berkas cadangan JSON terenkripsi untuk menyimpan dan memulihkan seluruh statistik mendengarkan, riwayat pencarian, dan preferensi aplikasi antar perangkat.
+- **Unduhan Paralel Multi-Worker Berkecepatan Tinggi**:
+  - Dukungan pengunduhan lagu secara simultan (*multi-threaded concurrent downloads*) yang dapat diatur kecepatannya sesuai kapasitas jaringan.
+
 ### [native-v1.4.3] — 2026-08-28
 
 #### 🎵 Pemutar Audio & Sinkronisasi

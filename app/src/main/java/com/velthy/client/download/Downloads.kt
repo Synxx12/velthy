@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.model.Song
+import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.sources.SourceResolver
 import com.velthy.client.data.sources.SourceStream
 import com.velthy.client.data.sources.TrackMatcher
@@ -16,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,12 +88,7 @@ object Downloads {
     private val pending = LinkedHashMap<String, Song>()
 
     private val lock = Any()
-
-    @Volatile
-    private var runningId: String? = null
-
-    @Volatile
-    private var runningJob: Job? = null
+    private val running = mutableMapOf<String, Job?>()
 
     fun init(context: Context) {
         prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
@@ -117,26 +114,24 @@ object Downloads {
 
     /**
      * Queue [song], and make sure something is draining the queue.
-     *
-     * A track already saved, queued or running is left alone rather than
-     * doubled — the menu row shows which of those it is, but a second tap
-     * before the sheet updates should still be a no-op.
      */
-    fun enqueue(context: Context, song: Song) {
+    fun enqueue(context: Context, song: Song, from: String? = null) {
         val id = song.videoId
+        if (!AppSettings.downloadsAllowedNow) {
+            fail(id, "Waiting for Wi-Fi (Wi-Fi only downloads enabled)")
+            return
+        }
         synchronized(lock) {
-            if (id in pending || id == runningId) return
+            if (id in pending || id in running) return
             pending[id] = song
         }
         _active.value = _active.value + (id to DownloadState.Queued)
+        DownloadSession.queued(song, from)
 
         val app = context.applicationContext
         runCatching {
             ContextCompat.startForegroundService(app, Intent(app, DownloadService::class.java))
         }.onFailure {
-            // Refused only when the app has no window and no exemption, which
-            // means the queue has nothing to drain it and would sit there
-            // looking accepted forever.
             Log.w(TAG, "could not start the download service: ${it.message}")
             synchronized(lock) { pending.remove(id) }
             fail(id, "Downloads can't start right now")
@@ -144,22 +139,17 @@ object Downloads {
     }
 
     /**
-     * Drop [videoId] from the queue, or stop it if it is the one running.
-     *
-     * Clearing [runningId] is what makes this safe in the gap between a track
-     * being dequeued and its job existing: a cancel landing in that window
-     * finds no job to stop, but [onRunning] then finds the id it was told to
-     * run is no longer the one wanted, and stops it on arrival.
+     * Drop [videoId] from the queue, or stop it if it is one of the ones running.
      */
     fun cancel(videoId: String) {
         val job = synchronized(lock) {
             pending.remove(videoId)
-            if (videoId != runningId) return@synchronized null
-            runningId = null
-            runningJob.also { runningJob = null }
+            if (videoId !in running) return@synchronized null
+            running.remove(videoId)
         }
         job?.cancel()
         clear(videoId)
+        DownloadSession.forget(videoId)
     }
 
     // ---- The record ---------------------------------------------------------
@@ -230,15 +220,13 @@ object Downloads {
         record(savedMap, metaMap)
     }
 
-    private fun record(savedMap: Map<String, String>, metaMap: Map<String, SavedSongMetadata>) {
-        _saved.value = savedMap
-        _savedMetadata.value = metaMap
-        if (::prefs.isInitialized) {
-            prefs.edit()
-                .putString(KEY_SAVED, json.encodeToString(serializer, savedMap))
-                .putString(KEY_SAVED_METADATA, json.encodeToString(metadataSerializer, metaMap))
-                .apply()
-        }
+    private fun record(saved: Map<String, String>, metadata: Map<String, SavedSongMetadata>) {
+        _saved.value = saved
+        _savedMetadata.value = metadata
+        prefs.edit()
+            .putString(KEY_SAVED, json.encodeToString(serializer, saved))
+            .putString(KEY_SAVED_METADATA, json.encodeToString(metadataSerializer, metadata))
+            .apply()
     }
 
     /** Returns all downloaded songs whose files still exist on disk. */
@@ -272,78 +260,57 @@ object Downloads {
 
     private fun String.toUri(): Uri = Uri.parse(this)
 
-    // ---- Driven by DownloadService -----------------------------------------
+    // ---- Worker -------------------------------------------------------------
 
-    /**
-     * The next track to fetch, or null when the queue is empty.
-     *
-     * Claims it as running under the same lock that removed it, so there is no
-     * instant where a track is in neither the queue nor the running slot and a
-     * [cancel] for it would quietly do nothing.
-     */
     internal fun takeNext(): Song? = synchronized(lock) {
         val entry = pending.entries.firstOrNull() ?: return null
         pending.remove(entry.key)
-        runningId = entry.key
+        running[entry.key] = null
         entry.value
     }
 
-    /** Attach the job fetching [videoId], unless it has been cancelled meanwhile. */
     internal fun onRunning(videoId: String, job: Job) {
         val cancelled = synchronized(lock) {
-            if (runningId != videoId) return@synchronized true
-            runningJob = job
+            if (videoId !in running) return@synchronized true
+            running[videoId] = job
             false
         }
         if (cancelled) job.cancel()
     }
 
-    internal fun onIdle() {
-        synchronized(lock) {
-            runningId = null
-            runningJob = null
-        }
+    internal fun onIdle(videoId: String) {
+        synchronized(lock) { running.remove(videoId) }
     }
 
-    /**
-     * Fetch one track, start to finish.
-     *
-     * Everything that can go wrong past the point of reserving a destination
-     * has to unreserve it — a cancelled or failed download must not leave a
-     * partial file behind pretending to be a whole one, which is what
-     * [DownloadStore.Pending] exists to make hard to get wrong.
-     *
-     * Pinned to [Dispatchers.IO] here rather than trusted to arrive on it.
-     * Resolving a stream blocks on HTTP and runs YouTube's player JavaScript
-     * through Rhino, and [DownloadService] drives this from a main-thread scope
-     * so its notification work stays where it belongs — inheriting that would
-     * put every network call in the resolve on the main thread, where they
-     * don't fail loudly so much as fail *uniformly*: `NetworkOnMainThreadException`
-     * is caught by the same per-client `runCatching` that exists to tolerate a
-     * client being turned away, so every client appears to be refused and the
-     * whole thing reads as a network outage.
-     */
+    internal fun busy(): Boolean = synchronized(lock) { pending.isNotEmpty() || running.isNotEmpty() }
+
+    internal fun onStopped() {
+        synchronized(lock) { running.clear() }
+    }
+
     internal suspend fun run(context: Context, song: Song) = withContext(Dispatchers.IO) {
         val id = song.videoId
         _active.value = _active.value + (id to DownloadState.Running(0f))
+        DownloadSession.running(id, 0f)
 
         var pending: DownloadStore.Pending? = null
         try {
-            // A music-video entry is swapped for the catalogue track behind it,
-            // the same way queueing one is. It matters more here: the video's
-            // title is where "(Official Video)" lives, and that would be baked
-            // into a filename this app never gets to correct.
             val track = runCatching { YtMusicRepository.resolveAudio(song) }.getOrDefault(song)
+            DownloadSession.retitle(id, track)
+
+            val lyricsJob = async {
+                LyricsTag.forTrack(track)
+            }
+
             val route = routeFor(track)
             Log.d(TAG, "downloading $id as .${route.extension} (${route.describe})")
 
             val name = DownloadStore.fileNameFor(track, route.extension)
-            // Already there from a previous run the record lost track of —
-            // adopt it rather than writing a second copy beside it.
             val alreadyThere = DownloadStore.existing(context, name)
             if (alreadyThere != null) {
                 Log.d(TAG, "$name is already in Music; adopting it")
                 remember(song, track, alreadyThere)
+                DownloadSession.done(id)
                 clear(id)
                 return@withContext
             }
@@ -353,14 +320,17 @@ object Downloads {
             pending = destination
             destination.openStream().use { sink ->
                 route.write(sink) { written, total ->
-                    _active.value = _active.value +
-                        (id to DownloadState.Running(written.toFloat() / total))
+                    val frac = written.toFloat() / total
+                    _active.value = _active.value + (id to DownloadState.Running(frac))
+                    DownloadSession.running(id, frac)
                 }
             }
+            val words = lyricsJob.await()
             val savedUri = destination.commit()
             pending = null
-            MediaTagger.embed(context, savedUri, track, route.extension)
+            MediaTagger.embed(context, savedUri, track, route.extension, words)
             remember(song, track, savedUri)
+            DownloadSession.done(id)
             clear(id)
             Log.d(TAG, "saved $name")
         } catch (e: CancellationException) {
@@ -370,7 +340,9 @@ object Downloads {
         } catch (e: Exception) {
             pending?.abort()
             Log.w(TAG, "download failed for $id: ${e.message}", e)
-            fail(id, e.friendly())
+            val reason = e.friendly()
+            DownloadSession.failed(id, reason)
+            fail(id, reason)
         }
     }
 
@@ -386,15 +358,17 @@ object Downloads {
     )
 
     private suspend fun routeFor(track: Song): Route {
-        lossless(track)?.let { (stream, storable) ->
-            return Route(
-                extension = storable.extension,
-                mimeType = storable.mimeType,
-                describe = stream.format.summary,
-                write = { sink, onProgress ->
-                    Downloader.fetchDirect(stream.url, stream.headers, sink, onProgress)
-                },
-            )
+        if (AppSettings.downloadQuality.value.keepsLossless) {
+            lossless(track)?.let { (stream, storable) ->
+                return Route(
+                    extension = storable.extension,
+                    mimeType = storable.mimeType,
+                    describe = stream.format.summary,
+                    write = { sink, onProgress ->
+                        Downloader.fetchDirect(stream.url, stream.headers, sink, onProgress)
+                    },
+                )
+            }
         }
         val stream = StreamResolver.resolveForDownload(track.videoId)
         return Route(

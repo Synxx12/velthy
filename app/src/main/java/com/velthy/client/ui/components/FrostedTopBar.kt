@@ -62,22 +62,11 @@ import dev.chrisbanes.haze.materials.HazeMaterials
  * Apple Music behaviour: the big in-list header owns the title at rest;
  * once the list scrolls, the small centered title + hairline divider fade in.
  */
-@OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
 fun FrostedTopBar(
     title: String,
-    hazeState: HazeState,
     scrolled: Boolean,
     modifier: Modifier = Modifier,
-    /**
-     * Whether the bar carries its own pane of glass.
-     *
-     * False where something behind it is already providing one — [TopFadeBlur]
-     * on a page whose artwork runs up under the status bar. Two panes over the
-     * same content is one too many, and this bar's is the one with the hard
-     * bottom edge.
-     */
-    ownBackdrop: Boolean = true,
     onBack: (() -> Unit)? = null,
     refreshing: Boolean = false,
     // A lambda, not a value: the drag changes every frame, and reading it in
@@ -86,22 +75,19 @@ fun FrostedTopBar(
     searchBar: (@Composable () -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val titleAlpha by animateFloatAsState(
         targetValue = if (scrolled) 1f else 0f,
         animationSpec = tween(220),
         label = "topBarTitleAlpha",
     )
-    val backdropAlpha by animateFloatAsState(
-        targetValue = if (scrolled) 1f else 0f,
-        animationSpec = tween(220),
-        label = "topBarBackdropAlpha",
-    )
     val dividerColor by animateColorAsState(
-        targetValue = MaterialTheme.colorScheme.outline.copy(alpha = if (scrolled && ownBackdrop) 0.35f else 0f),
+        targetValue = MaterialTheme.colorScheme.outline.copy(
+            alpha = if (scrolled && reduceDynamicBlur) 0.6f else 0f,
+        ),
         animationSpec = tween(220),
         label = "topBarDivider",
     )
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
 
     Column(
         modifier = modifier
@@ -110,31 +96,15 @@ fun FrostedTopBar(
                 detectTapGestures { /* Absorb any taps in top bar empty space so they never trigger items underneath */ }
             }
             .then(
-                when {
-                    !ownBackdrop -> Modifier
-                    reduceDynamicBlur -> Modifier.background(
-                        MaterialTheme.colorScheme.surface.copy(alpha = backdropAlpha)
-                    )
-                    else -> Modifier
-                        .background(
-                            MaterialTheme.colorScheme.surface.copy(
-                                alpha = 0.85f * backdropAlpha,
-                            )
-                        )
-                        .hazeEffect(
-                            state = hazeState,
-                            style = HazeMaterials.regular(MaterialTheme.colorScheme.surface),
-                        ) {
-                            alpha = backdropAlpha
-                        }
-                },
+                if (reduceDynamicBlur) Modifier.background(MaterialTheme.colorScheme.surface)
+                else Modifier,
             ),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .height(56.dp),
+                .height(TopBarContentHeight),
         ) {
             if (searchBar != null) {
                 Row(

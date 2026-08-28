@@ -438,6 +438,7 @@ class PlaybackService : MediaSessionService() {
                 PlaybackTracker.onPlaybackStateChanged(isPlaying)
                 if (!isPlaying) {
                     PlaybackTracker.onPaused(exoPlayer.currentPosition)
+                    com.velthy.client.data.stats.ListeningRecorder.onStopped()
                 }
 
                 // ListenBrainz & Live Web Stats: "now playing" on play/resume too, not just on
@@ -1945,6 +1946,9 @@ class PlaybackService : MediaSessionService() {
                     player.currentMediaItem?.mediaId?.let {
                         PlaybackTracker.onProgress(it, posMs, durMs)
                     }
+                    player.currentMediaItem?.toSong()?.let {
+                        com.velthy.client.data.stats.ListeningRecorder.onSample(it, player.duration)
+                    }
                     // Same cadence for the resume point: the process can be
                     // killed at any moment without another callback arriving.
                     saveQueue()
@@ -2602,6 +2606,7 @@ class PlaybackService : MediaSessionService() {
         // Last chance to record the resume point, while the player still exists.
         saveQueue()
         publishWidgetState(playing = false)
+        com.velthy.client.data.stats.ListeningRecorder.onStopped()
         AudioCache.cancel()
         trackAnalyzer.release()
         // Also the last chance to close out the track that was playing — a

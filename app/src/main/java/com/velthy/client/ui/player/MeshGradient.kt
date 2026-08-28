@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.player
+package com.velthy.client.ui.player
 
 import android.graphics.Bitmap
 import androidx.compose.animation.animateColorAsState
@@ -43,6 +43,11 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.isActive
+
 private val FallbackColors = listOf(
     Color(0xFF3A1C71),
     Color(0xFFD76D77),
@@ -72,6 +77,9 @@ fun MeshGradientBackground(
     modifier: Modifier = Modifier,
     trackKey: Any? = null,
     driftMillis: Int = 8_000,
+    continuous: Boolean = false,
+    blurRadius: Dp = 64.dp,
+    animated: Boolean = true,
 ) {
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
 
@@ -81,7 +89,7 @@ fun MeshGradientBackground(
 
     // Each colour slot crossfades independently when the track (palette) changes,
     // unless "reduce animation" is on, in which case colours snap straight to target.
-    val colorSpec: AnimationSpec<Color> = if (reduceAnimation) snap() else tween(1400)
+    val colorSpec: AnimationSpec<Color> = if (reduceAnimation || !animated) snap() else tween(1400)
     val animatedColors = tuned.mapIndexed { index, color ->
         animateColorAsState(color, colorSpec, label = "meshColor$index").value
     }
@@ -90,11 +98,16 @@ fun MeshGradientBackground(
     // Read in the draw lambda, not here: an Animatable read during draw
     // invalidates only the drawing, leaving composition out of the loop.
     val phase = remember { Animatable(0f) }
-    LaunchedEffect(trackKey, reduceAnimation) {
-        if (reduceAnimation) {
-            phase.snapTo(0f)
-        } else {
-            phase.animateTo(
+    LaunchedEffect(trackKey, reduceAnimation, continuous, animated) {
+        when {
+            !animated || reduceAnimation -> phase.snapTo(0f)
+            continuous -> while (isActive) {
+                phase.animateTo(
+                    targetValue = phase.value + (2 * PI).toFloat(),
+                    animationSpec = tween(driftMillis * 4, easing = LinearEasing),
+                )
+            }
+            else -> phase.animateTo(
                 targetValue = phase.value + DRIFT_RADIANS,
                 animationSpec = tween(driftMillis, easing = FastOutSlowInEasing),
             )
@@ -107,12 +120,13 @@ fun MeshGradientBackground(
     Canvas(
         modifier = modifier
             .fillMaxSize()
+            .clipToBounds()
             .graphicsLayer {
                 scaleX = 1.3f
                 scaleY = 1.3f
             }
             .background(baseColor)
-            .blur(64.dp),
+            .blur(blurRadius),
     ) {
         val anchors = listOf(
             Offset(0.20f, 0.25f),

@@ -27,6 +27,24 @@ enum class AudioQuality(
     HIGH(Int.MAX_VALUE, "High", "Best available · ~171 kbps Opus", "77 MB/hr"),
 }
 
+enum class DownloadQuality(
+    val maxKbps: Int,
+    val label: String,
+    val detail: String,
+    val perTrack: String,
+    val keepsLossless: Boolean,
+) {
+    STANDARD(128, "Standard", "~128 kbps AAC · fits more on the device", "~4 MB", false),
+    HIGH(Int.MAX_VALUE, "High", "Best AAC on offer, usually ~256 kbps", "~8 MB", false),
+    LOSSLESS(
+        Int.MAX_VALUE,
+        "Lossless",
+        "Bit-exact if a source has it, best AAC if not",
+        "~35 MB",
+        true,
+    ),
+}
+
 enum class ThemeMode(val label: String) {
     SYSTEM("System"), LIGHT("Light"), DARK("Dark")
 }
@@ -106,6 +124,10 @@ object AppSettings {
             return effectiveAudioQuality == AudioQuality.HIGH
         }
 
+    /** Whether downloading is currently permitted under Wi-Fi-only and network policies. */
+    val downloadsAllowedNow: Boolean
+        get() = !wifiOnlyDownloads.value || meteredConnection.value != true
+
     val crossfadeSeconds = MutableStateFlow(0)
 
     /**
@@ -169,6 +191,9 @@ object AppSettings {
      * all. See [CanvasRepository][com.velthy.client.data.canvas.CanvasRepository].
      */
     val animatedCanvas = MutableStateFlow(true)
+    val canvasOverCellular = MutableStateFlow(false)
+    val downloadQuality = MutableStateFlow(DownloadQuality.LOSSLESS)
+    val wifiOnlyDownloads = MutableStateFlow(true)
 
     /**
      * Blow the artwork square out into a full-bleed banner running edge to edge
@@ -198,6 +223,9 @@ object AppSettings {
     val accountAutoSync = MutableStateFlow(true)
     val accountForceSyncOnSwitch = MutableStateFlow(true)
     val audioCacheLimitBytes = MutableStateFlow(DEFAULT_CACHE_LIMIT_BYTES)
+
+    val replayGenres = MutableStateFlow(true)
+    val parallelDownloads = MutableStateFlow(4)
 
     /** First-launch onboarding / setup wizard completion flag. */
     val hasCompletedOnboarding = MutableStateFlow(false)
@@ -381,7 +409,61 @@ object AppSettings {
         downloadFolderStructure.value = runCatching {
             DownloadFolderStructure.valueOf(prefs.getString(KEY_DOWNLOAD_STRUCTURE, null) ?: "FLAT")
         }.getOrDefault(DownloadFolderStructure.FLAT)
+        downloadQuality.value = runCatching {
+            DownloadQuality.valueOf(prefs.getString(KEY_DOWNLOAD_QUALITY, null) ?: "LOSSLESS")
+        }.getOrDefault(DownloadQuality.LOSSLESS)
+        wifiOnlyDownloads.value = prefs.getBoolean(KEY_WIFI_ONLY_DOWNLOADS, true)
+        canvasOverCellular.value = prefs.getBoolean(KEY_CANVAS_CELLULAR, false)
+        replayGenres.value = prefs.getBoolean(KEY_REPLAY_GENRES, true)
+        parallelDownloads.value = prefs.getInt(KEY_PARALLEL_DOWNLOADS, 4).coerceIn(1, 8)
         watchConnection(context)
+    }
+
+    fun reload() {
+        if (!this::prefs.isInitialized) return
+        replayGenres.value = prefs.getBoolean(KEY_REPLAY_GENRES, true)
+        parallelDownloads.value = prefs.getInt(KEY_PARALLEL_DOWNLOADS, 4).coerceIn(1, 8)
+        audioQualityWifi.value = readQuality(KEY_QUALITY_WIFI)
+        audioQualityCellular.value = readQuality(KEY_QUALITY_CELLULAR)
+        losslessAudio.value = prefs.getBoolean(KEY_LOSSLESS, true)
+        crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
+        smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
+        skipSilence.value = prefs.getBoolean(KEY_SKIP_SILENCE, false)
+        spatialAudio.value = prefs.getBoolean(KEY_SPATIAL_AUDIO, false)
+        downloadQuality.value = runCatching {
+            DownloadQuality.valueOf(prefs.getString(KEY_DOWNLOAD_QUALITY, null) ?: "LOSSLESS")
+        }.getOrDefault(DownloadQuality.LOSSLESS)
+        wifiOnlyDownloads.value = prefs.getBoolean(KEY_WIFI_ONLY_DOWNLOADS, true)
+        canvasOverCellular.value = prefs.getBoolean(KEY_CANVAS_CELLULAR, false)
+        themeMode.value = runCatching {
+            ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "DARK")
+        }.getOrDefault(ThemeMode.DARK)
+    }
+
+    fun setCanvasOverCellular(value: Boolean) {
+        canvasOverCellular.value = value
+        prefs.edit().putBoolean(KEY_CANVAS_CELLULAR, value).apply()
+    }
+
+    fun setDownloadQuality(quality: DownloadQuality) {
+        downloadQuality.value = quality
+        prefs.edit().putString(KEY_DOWNLOAD_QUALITY, quality.name).apply()
+    }
+
+    fun setWifiOnlyDownloads(value: Boolean) {
+        wifiOnlyDownloads.value = value
+        prefs.edit().putBoolean(KEY_WIFI_ONLY_DOWNLOADS, value).apply()
+    }
+
+    fun setReplayGenres(value: Boolean) {
+        replayGenres.value = value
+        prefs.edit().putBoolean(KEY_REPLAY_GENRES, value).apply()
+    }
+
+    fun setParallelDownloads(value: Int) {
+        val clamped = value.coerceIn(1, 8)
+        parallelDownloads.value = clamped
+        prefs.edit().putInt(KEY_PARALLEL_DOWNLOADS, clamped).apply()
     }
 
     fun setDownloadFormat(format: DownloadFormat) {
@@ -837,6 +919,52 @@ object AppSettings {
     private const val KEY_DOWNLOAD_FORMAT = "download_format"
     private const val KEY_DOWNLOAD_LOCATION = "download_location"
     private const val KEY_DOWNLOAD_STRUCTURE = "download_structure"
+
+    fun exportPrefs(): Map<String, Any?> {
+        if (!this::prefs.isInitialized) return emptyMap()
+        return prefs.all.filterKeys { it !in SECRETS && it !in DEVICE_LOCAL }
+    }
+
+    fun importPrefs(values: Map<String, Any?>) {
+        if (!this::prefs.isInitialized) return
+        val kept = prefs.all.filterKeys { it in SECRETS || it in DEVICE_LOCAL }
+        prefs.edit().apply {
+            clear()
+            val incoming = values.filterKeys { it !in SECRETS && it !in DEVICE_LOCAL }
+            (kept + incoming).forEach { (key, value) ->
+                when (value) {
+                    is Boolean -> putBoolean(key, value)
+                    is Int -> putInt(key, value)
+                    is Long -> putLong(key, value)
+                    is Float -> putFloat(key, value)
+                    is String -> putString(key, value)
+                    is Set<*> -> putStringSet(key, value.filterIsInstance<String>().toSet())
+                    else -> Unit
+                }
+            }
+        }.apply()
+        reload()
+    }
+
+    private val SECRETS = setOf(
+        KEY_LASTFM_SESSION_KEY,
+        KEY_LASTFM_API_KEY,
+        KEY_LASTFM_SECRET,
+        KEY_LISTENBRAINZ_TOKEN,
+    )
+
+    private val DEVICE_LOCAL = setOf(
+        "downloaded_tracks",
+        "downloaded_tracks_metadata",
+        "downloaded_collections",
+        KEY_LAST_VERSION_CODE,
+    )
+
+    private const val KEY_REPLAY_GENRES = "replay_genres"
+    private const val KEY_PARALLEL_DOWNLOADS = "parallel_downloads"
+    private const val KEY_DOWNLOAD_QUALITY = "download_quality"
+    private const val KEY_WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
+    private const val KEY_CANVAS_CELLULAR = "canvas_over_cellular"
 }
 
 /**
