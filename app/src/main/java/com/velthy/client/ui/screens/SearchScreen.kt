@@ -65,6 +65,8 @@ import com.velthy.client.ui.components.MessageState
 import com.velthy.client.ui.components.PAGE_GUTTER
 import com.velthy.client.ui.components.ROW_DIVIDER_INSET
 import com.velthy.client.ui.components.SongRow
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.components.songListSkeleton
 import com.velthy.client.ui.icons.VelthyIcons
@@ -584,6 +586,7 @@ private fun BrowseRow(item: BrowseItem, onClick: () -> Unit) {
 /** Fully rounded pill; Material's FilterChip can't be padded this tightly. */
 @Composable
 private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val haptics = rememberHaptics()
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -594,7 +597,10 @@ private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
                     MaterialTheme.colorScheme.surfaceVariant
                 },
             )
-            .clickable(onClick = onClick)
+            .clickable {
+                if (!selected) haptics.play(Haptic.Select)
+                onClick()
+            }
             .padding(horizontal = 14.dp, vertical = 7.dp),
     ) {
         Text(

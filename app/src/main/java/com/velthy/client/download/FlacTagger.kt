@@ -1,5 +1,6 @@
 package com.velthy.client.download
 
+import com.velthy.client.data.lyrics.WORD_LYRICS_FIELD
 import java.io.ByteArrayOutputStream
 
 /**
@@ -39,8 +40,9 @@ object FlacTagger {
         lyrics: String? = null,
         cover: ByteArray?,
         coverMime: String,
+        wordLyrics: String? = null,
     ): ByteArray = runCatching {
-        rewrite(bytes, title, artist, album, lyrics, cover, coverMime)
+        rewrite(bytes, title, artist, album, lyrics, cover, coverMime, wordLyrics)
     }.getOrDefault(bytes)
 
     private fun rewrite(
@@ -51,6 +53,7 @@ object FlacTagger {
         lyrics: String?,
         cover: ByteArray?,
         coverMime: String,
+        wordLyrics: String?,
     ): ByteArray {
         if (!bytes.regionMatches(0, MAGIC)) return bytes
 
@@ -71,7 +74,7 @@ object FlacTagger {
         if (blocks.firstOrNull()?.type != TYPE_STREAMINFO) return bytes
 
         val additions = listOfNotNull(
-            vorbisComment(title, artist, album, lyrics)?.let { TYPE_VORBIS_COMMENT to it },
+            vorbisComment(title, artist, album, lyrics, wordLyrics)?.let { TYPE_VORBIS_COMMENT to it },
             cover?.takeIf { it.isNotEmpty() }?.let { TYPE_PICTURE to picture(it, coverMime) },
         )
             .filter { it.second.size <= MAX_BLOCK_BYTES }
@@ -93,12 +96,19 @@ object FlacTagger {
         return out.toByteArray()
     }
 
-    private fun vorbisComment(title: String, artist: String, album: String?, lyrics: String?): ByteArray? {
+    private fun vorbisComment(
+        title: String,
+        artist: String,
+        album: String?,
+        lyrics: String?,
+        wordLyrics: String?,
+    ): ByteArray? {
         val fields = buildList {
             if (title.isNotBlank()) add("TITLE=$title")
             if (artist.isNotBlank()) add("ARTIST=$artist")
             if (!album.isNullOrBlank()) add("ALBUM=$album")
             if (!lyrics.isNullOrBlank()) add("LYRICS=$lyrics")
+            if (!wordLyrics.isNullOrBlank()) add("$WORD_LYRICS_FIELD=$wordLyrics")
         }
         if (fields.isEmpty()) return null
 
@@ -181,5 +191,5 @@ object FlacTagger {
     /** The `PICTURE` type for a front cover, which is the only one written here. */
     private const val PICTURE_FRONT_COVER = 3
 
-    private const val VENDOR = "Musique"
+    private const val VENDOR = "Velthy"
 }

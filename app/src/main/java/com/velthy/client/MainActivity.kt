@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -153,6 +154,7 @@ import com.velthy.client.ui.replay.ReplayStoryPage
 import com.velthy.client.ui.replay.rememberReplayState
 import com.velthy.client.ui.components.DownloadManagerSheet
 import com.velthy.client.ui.components.TopBarDownloadButton
+import com.velthy.client.data.scrobbling.ListenBrainzManager
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.icons.VelthyIcons
@@ -175,7 +177,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.velthy.client.data.model.Account
+import com.velthy.client.data.model.HomeShelf
+import com.velthy.client.playback.LinkRequest
+import com.velthy.client.playback.MusicLink
 import com.velthy.client.playback.PlayerDeepLink
+import com.velthy.client.ui.screens.LibraryGridPage
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -186,6 +192,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         PlayerDeepLink.consume(intent)
+        MusicLink.consume(intent)
         handleIntent(intent)
         setContent {
             val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
@@ -204,10 +211,17 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         PlayerDeepLink.consume(intent)
+        MusicLink.consume(intent)
         handleIntent(intent)
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (intent?.action == "com.velthy.client.download.OPEN_DOWNLOADS" || intent?.getBooleanExtra("open_downloads", false) == true) {
+            com.velthy.client.download.Downloads.requestOpenManager()
+        }
+        if (intent?.getBooleanExtra("open_update", false) == true) {
+            openUpdateRequested.value = true
+        }
         val uri = intent?.data ?: return
         val isDiscordCallback = uri.scheme == "discord-1541308554173227080" ||
             (uri.scheme == "velthy" && (uri.host == "discord" || uri.path?.contains("discord") == true)) ||
@@ -227,6 +241,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    companion object {
+        val openUpdateRequested = kotlinx.coroutines.flow.MutableStateFlow(false)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -243,6 +261,13 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     var showReplayShare by remember { mutableStateOf(false) }
     var replaySharePage by remember { mutableStateOf<ReplayStoryPage?>(null) }
     var showDownloadManager by remember { mutableStateOf(false) }
+    val openDownloadManagerRequested by Downloads.openManagerRequested.collectAsStateWithLifecycle()
+    LaunchedEffect(openDownloadManagerRequested) {
+        if (openDownloadManagerRequested) {
+            showDownloadManager = true
+            Downloads.clearOpenManagerRequest()
+        }
+    }
     var browseActions by remember { mutableStateOf<BrowseTarget?>(null) }
     val replayListState = rememberLazyListState()
     val (replay, setReplayPeriod) = rememberReplayState(showReplay)
@@ -304,6 +329,13 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     var updateDialogShown by rememberSaveable { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showAppUpdateSheet by remember { mutableStateOf(false) }
+    val openUpdateRequested by MainActivity.openUpdateRequested.collectAsStateWithLifecycle()
+    LaunchedEffect(openUpdateRequested) {
+        if (openUpdateRequested) {
+            showAppUpdateSheet = true
+            MainActivity.openUpdateRequested.value = false
+        }
+    }
     val updateAvailable by viewModel.updateAvailable.collectAsStateWithLifecycle()
 
     /**
@@ -338,6 +370,8 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
     val savedAccounts by viewModel.savedAccounts.collectAsStateWithLifecycle()
     var showHistory by remember { mutableStateOf(false) }
+    var libraryShowAll by remember { mutableStateOf<HomeShelf?>(null) }
+    val libraryShowAllGridState = rememberLazyGridState()
     val historyState by viewModel.history.collectAsStateWithLifecycle()
     val historyListState = rememberLazyListState()
     var showRecognitionSheet by remember { mutableStateOf(false) }
@@ -632,6 +666,43 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         if (AppSettings.swipeToPlayNext.value) playNext(song) else addToQueue(song)
     }
 
+    val linkRequest by MusicLink.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(linkRequest, controller) {
+        val request = linkRequest ?: return@LaunchedEffect
+        val session = controller ?: return@LaunchedEffect
+        when (request) {
+            is LinkRequest.Track -> {
+                val song = YtMusicRepository.trackLinks(request.videoId).getOrNull()
+                if (song == null) {
+                    Toast.makeText(context, "Couldn't open that link", Toast.LENGTH_SHORT).show()
+                } else {
+                    playRadio(song)
+                }
+            }
+            is LinkRequest.Page -> {
+                showNowPlaying = false
+                viewModel.openDetail(request.browseId, title = "")
+            }
+            is LinkRequest.Search -> {
+                val songs = if (!request.play) null else {
+                    YtMusicRepository.search(request.query, com.velthy.client.data.model.SearchFilter.SONGS).getOrNull()
+                        ?.filterIsInstance<com.velthy.client.data.model.SearchResult.Track>()
+                }
+                val top = songs?.firstOrNull()?.song
+                if (top != null) {
+                    playRadio(top)
+                } else {
+                    showNowPlaying = false
+                    selectedTab = TAB_SEARCH
+                    viewModel.onQueryChange(request.query)
+                    viewModel.recordSearch()
+                }
+            }
+            LinkRequest.Resume -> if (session.mediaItemCount > 0) session.play()
+        }
+        MusicLink.handled()
+    }
+
     // ---- Downloads ----
     // Two permissions, and never both on one device: writing to the shared
     // Downloads folder needs storage access below API 29 and none at all from
@@ -729,9 +800,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        // A pushed album/artist/playlist page replaces the tab content but
-        // leaves the tab bar and mini player in place.
-        BackHandler(enabled = detail != null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay) { viewModel.closeDetail() }
+        BackHandler(enabled = detail != null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && libraryShowAll == null) { viewModel.closeDetail() }
         BackHandler(enabled = showReplay) { showReplay = false }
         BackHandler(enabled = showDiscordLogin) { showDiscordLogin = false }
         BackHandler(enabled = discordDialog != null) { discordDialog = null }
@@ -744,6 +813,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         BackHandler(enabled = showNotifications && !showSettings && !showAccountScrobbling && !showDiscord && !showReplay) {
             showNotifications = false
         }
+        BackHandler(enabled = libraryShowAll != null) { libraryShowAll = null }
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
         // which is what actually closes/minimizes the app.
@@ -751,7 +821,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             showSettings = false
             if (detail == null) selectedTab = TAB_HOME
         }
-        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && selectedTab != TAB_HOME) {
+        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && libraryShowAll == null && selectedTab != TAB_HOME) {
             selectedTab = TAB_HOME
         }
         BackHandler(enabled = showHistory) { showHistory = false }
@@ -772,6 +842,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             targetState = when {
                 showDiscord -> "discord"
                 showHistory -> "history"
+                libraryShowAll != null -> "library_show_all"
                 showAccountScrobbling -> "account_scrobbling"
                 showSettings -> "settings"
                 showNotifications -> "notifications"
@@ -783,7 +854,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             modifier = Modifier.hazeSource(hazeState),
             label = "content",
         ) { key ->
-            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" }
+            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" && key != "library_show_all" }
             if (key == "history") {
                 HistoryScreen(
                     state = historyState,
@@ -794,6 +865,43 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onRetry = viewModel::loadHistory,
                     contentPadding = listPadding,
                 )
+            } else if (key == "library_show_all") {
+                libraryShowAll?.let { shelf ->
+                    LibraryGridPage(
+                        shelf = shelf,
+                        gridState = libraryShowAllGridState,
+                        onItemClick = { item ->
+                            item.browseId?.let { id ->
+                                if (id == "app:history" || id == "history" || id == "local:history") {
+                                    showHistory = true
+                                    viewModel.loadHistory()
+                                } else {
+                                    if (id == "local:all" && !LocalMediaRepository.hasStoragePermission(context)) {
+                                        val perm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            Manifest.permission.READ_MEDIA_AUDIO
+                                        } else {
+                                            Manifest.permission.READ_EXTERNAL_STORAGE
+                                        }
+                                        mediaPermissionLauncher.launch(perm)
+                                    }
+                                    viewModel.openDetail(
+                                        browseId = id,
+                                        title = item.title,
+                                        subtitle = item.subtitle,
+                                        thumbnailUrl = item.thumbnailUrl,
+                                    )
+                                }
+                            }
+                        },
+                        onItemLongPress = { item ->
+                            playlistActions = viewModel.editablePlaylist(item.browseId)
+                        },
+                        onNewPlaylist = if (shelf.title == "Playlists") {
+                            { creatingPlaylist = true }
+                        } else null,
+                        contentPadding = listPadding,
+                    )
+                }
             } else if (key == "replay") {
                 ReplayScreen(
                     state = replay,
@@ -1115,6 +1223,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onShelfItemLongPress = { item ->
                         playlistActions = viewModel.editablePlaylist(item.browseId)
                     },
+                    onShowAll = { libraryShowAll = it },
                     onNewPlaylist = { creatingPlaylist = true },
                     replayCard = replay.heroCard,
                     onOpenReplay = { showReplay = true },
@@ -1150,6 +1259,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showReplay -> "Replay"
                 showDiscord -> "Discord"
                 showHistory -> "History"
+                libraryShowAll != null -> libraryShowAll?.title ?: "Library"
                 showAccountScrobbling -> "Account & scrobbling"
                 showSettings -> "Settings"
                 showNotifications -> "Notifications"
@@ -1160,6 +1270,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             scrolled = when {
                 showReplay -> replayListState.firstVisibleItemIndex > 0 || replayListState.firstVisibleItemScrollOffset > 0
                 showHistory -> historyListState.firstVisibleItemIndex > 0 || historyListState.firstVisibleItemScrollOffset > 0
+                libraryShowAll != null -> libraryShowAllGridState.firstVisibleItemIndex > 0 || libraryShowAllGridState.firstVisibleItemScrollOffset > 0
                 showSettings || showAccountScrobbling || showDiscord || showNotifications -> true
                 detail != null -> detailScrolled
                 else -> scrolled
@@ -1188,6 +1299,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showReplay -> ({ showReplay = false })
                 showDiscord -> ({ showDiscord = false })
                 showHistory -> ({ showHistory = false })
+                libraryShowAll != null -> ({ libraryShowAll = null })
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSettings -> ({ showSettings = false })
                 showNotifications -> ({ showNotifications = false })
@@ -1331,6 +1443,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     showSettings = false
                     showAccountScrobbling = false
                     showHistory = false
+                    libraryShowAll = null
                     showReplay = false
                     showDiscord = false
                     showNotifications = false
@@ -1847,29 +1960,76 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
 
         if (showListenBrainzLogin) {
             var tokenInput by remember { mutableStateOf(listenBrainzToken) }
+            var lbError by remember { mutableStateOf<String?>(null) }
+            var lbLoading by remember { mutableStateOf(false) }
             ListenBrainzTokenAlert(
                 hazeState = hazeState,
                 tokenInput = tokenInput,
-                onTokenInputChange = { tokenInput = it },
-                onSave = {
-                    AppSettings.setListenBrainzToken(tokenInput.trim())
-                    showListenBrainzLogin = false
+                onTokenInputChange = {
+                    tokenInput = it
+                    lbError = null
                 },
-                onDismiss = { showListenBrainzLogin = false },
+                error = lbError,
+                loading = lbLoading,
+                onSave = {
+                    lbLoading = true
+                    lbError = null
+                    scope.launch {
+                        try {
+                            ListenBrainzManager.validateToken(tokenInput.trim())
+                                .onSuccess { _ ->
+                                    haptics.play(Haptic.Select)
+                                    AppSettings.setListenBrainzToken(tokenInput.trim())
+                                    showListenBrainzLogin = false
+                                }
+                                .onFailure { e ->
+                                    lbError = e.message ?: "Invalid user token. Please check your token."
+                                    haptics.play(Haptic.ToggleOff)
+                                }
+                        } catch (e: Exception) {
+                            lbError = e.message ?: "Validation failed"
+                            haptics.play(Haptic.ToggleOff)
+                        } finally {
+                            lbLoading = false
+                        }
+                    }
+                },
+                onDismiss = { if (!lbLoading) showListenBrainzLogin = false },
             )
         }
 
         if (showLastfmLogin) {
             var usernameInput by remember { mutableStateOf("") }
             var passwordInput by remember { mutableStateOf("") }
+            var apiKeyInput by remember { mutableStateOf(AppSettings.lastfmApiKey.value) }
+            var secretInput by remember { mutableStateOf(AppSettings.lastfmSecret.value) }
+            var showAdvanced by remember { mutableStateOf(false) }
             var lastfmError by remember { mutableStateOf<String?>(null) }
             var lastfmLoading by remember { mutableStateOf(false) }
             LastfmLoginAlert(
                 hazeState = hazeState,
                 usernameInput = usernameInput,
-                onUsernameInputChange = { usernameInput = it },
+                onUsernameInputChange = {
+                    usernameInput = it
+                    lastfmError = null
+                },
                 passwordInput = passwordInput,
-                onPasswordInputChange = { passwordInput = it },
+                onPasswordInputChange = {
+                    passwordInput = it
+                    lastfmError = null
+                },
+                apiKeyInput = apiKeyInput,
+                onApiKeyInputChange = {
+                    apiKeyInput = it
+                    lastfmError = null
+                },
+                secretInput = secretInput,
+                onSecretInputChange = {
+                    secretInput = it
+                    lastfmError = null
+                },
+                showAdvanced = showAdvanced,
+                onToggleAdvanced = { showAdvanced = !showAdvanced },
                 error = lastfmError,
                 loading = lastfmLoading,
                 onSignIn = {
@@ -1877,22 +2037,30 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     lastfmError = null
                     scope.launch {
                         try {
+                            val activeApiKey = apiKeyInput.trim().ifBlank { LastFM.FALLBACK_COMPAT_API_KEY }
+                            val activeSecret = secretInput.trim().ifBlank { LastFM.FALLBACK_COMPAT_SECRET }
                             LastFM.initialize(
-                                apiKey = LastFM.FALLBACK_COMPAT_API_KEY,
-                                secret = LastFM.FALLBACK_COMPAT_SECRET,
+                                apiKey = activeApiKey,
+                                secret = activeSecret,
                             )
                             LastFM.getMobileSession(usernameInput.trim(), passwordInput)
                                 .onSuccess { auth ->
+                                    haptics.play(Haptic.Select)
+                                    if (apiKeyInput.isNotBlank()) AppSettings.setLastfmApiKey(apiKeyInput.trim())
+                                    if (secretInput.isNotBlank()) AppSettings.setLastfmSecret(secretInput.trim())
                                     AppSettings.setLastfmSessionKey(auth.session.key)
                                     AppSettings.setLastfmUsername(auth.session.name)
                                     AppSettings.setLastfmEnabled(true)
+                                    AppSettings.setLastfmScrobbleEnabled(true)
                                     showLastfmLogin = false
                                 }
                                 .onFailure { e ->
-                                    lastfmError = e.message ?: "Login failed"
+                                    lastfmError = e.message ?: "Invalid username or password supplied."
+                                    haptics.play(Haptic.ToggleOff)
                                 }
                         } catch (e: Exception) {
-                            lastfmError = e.message ?: "Login failed"
+                            lastfmError = e.message ?: "Login failed. Please check your connection."
+                            haptics.play(Haptic.ToggleOff)
                         } finally {
                             lastfmLoading = false
                         }
@@ -1951,42 +2119,6 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             }
         }
 
-        browseActions?.let { target ->
-            ModalBottomSheet(
-                onDismissRequest = { browseActions = null },
-                containerColor = MaterialTheme.colorScheme.background,
-            ) {
-                BrowseActionsSheet(
-                    target = target,
-                    onPlayNext = {
-                        browseActions = null
-                        target.songs.reversed().forEach { playNext(it) }
-                    },
-                    onAddToQueue = {
-                        browseActions = null
-                        target.songs.forEach { addToQueue(it) }
-                    },
-                    onDownloadAll = if (target.songs.isNotEmpty()) {
-                        {
-                            browseActions = null
-                            startDownload(target.songs)
-                        }
-                    } else null,
-                    onRename = if (target.playlist != null) {
-                        { newName ->
-                            browseActions = null
-                            viewModel.renamePlaylist(target.playlist, newName)
-                        }
-                    } else null,
-                    onDelete = if (target.playlist != null) {
-                        {
-                            browseActions = null
-                            viewModel.deletePlaylist(target.playlist)
-                        }
-                    } else null,
-                )
-            }
-        }
 
         // ---- Launch Splash Screen Overlay (Hides initial cold start skeleton) ----
         LaunchSplashScreen(

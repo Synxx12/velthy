@@ -1,4 +1,4 @@
-﻿package com.velthy.client
+package com.velthy.client
 
 import com.velthy.client.data.model.Song
 import com.velthy.client.download.DownloadStore
@@ -52,13 +52,21 @@ class DownloadStoreTest {
 
     @Test
     fun `an unknown or absent codec is nothing to file`() {
-        // Every one of these falls the download through to YouTube's AAC, so
-        // answering with a guess here would cost a file nothing can open.
         assertNull(DownloadStore.storable(null))
         assertNull(DownloadStore.storable(""))
-        assertNull(DownloadStore.storable("opus"))
-        assertNull(DownloadStore.storable("webm"))
         assertNull(DownloadStore.storable("dsf"))
+        assertNull(DownloadStore.storable("wma"))
+    }
+
+    @Test
+    fun `opus and webm are filed as webm`() {
+        val opus = DownloadStore.storable("opus")
+        assertEquals("webm", opus?.extension)
+        assertEquals("audio/ogg", opus?.mimeType)
+
+        val webm = DownloadStore.storable("webm")
+        assertEquals("webm", webm?.extension)
+        assertEquals("audio/ogg", webm?.mimeType)
     }
 
     // ---- What the file is called -------------------------------------------

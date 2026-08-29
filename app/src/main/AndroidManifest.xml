@@ -95,6 +95,42 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.APP_MUSIC" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MUSIC_PLAYER" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.APP_MUSIC" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:host="music.youtube.com" />
+                <data android:pathPrefix="/watch" />
+                <data android:pathPrefix="/playlist" />
+                <data android:pathPrefix="/browse" />
+                <data android:pathPrefix="/channel" />
+                <data android:pathPrefix="/search" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:host="youtu.be" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
             <!-- Discord OAuth2 deep link redirect -->
             <intent-filter>

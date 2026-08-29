@@ -37,10 +37,18 @@ object MediaTagger {
 
     fun carriesTags(extension: String): Boolean = extension in TAGGABLE
 
-    fun embed(context: Context, uri: Uri, track: Song, extension: String, lyrics: String? = null) {
+    internal fun embed(
+        context: Context,
+        uri: Uri,
+        track: Song,
+        extension: String,
+        lyrics: LyricsTag.Embeddable? = null,
+    ) {
         if (!carriesTags(extension)) return
         val original = readAll(context, uri) ?: return
         val cover = fetchCover(track)
+        val plain = lyrics?.plain
+        val words = lyrics?.enhanced
 
         val tagged = runCatching {
             when (extension) {
@@ -49,26 +57,30 @@ object MediaTagger {
                     track.title,
                     track.artist,
                     track.albumName,
-                    lyrics,
+                    plain,
                     cover?.bytes,
                     coverIsPng = false,
+                    wordLyrics = words,
                 )
                 "flac" -> FlacTagger.tag(
                     original,
                     track.title,
                     track.artist,
                     track.albumName,
-                    lyrics,
+                    plain,
                     cover?.bytes,
                     cover?.mime ?: "image/jpeg",
+                    wordLyrics = words,
                 )
                 else -> WebmTagger.tag(
                     original,
                     track.title,
                     track.artist,
                     track.albumName,
+                    plain,
                     cover?.bytes,
                     cover?.mime ?: "image/jpeg",
+                    wordLyrics = words,
                 )
             }
         }.getOrNull() ?: return

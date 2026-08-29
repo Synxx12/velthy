@@ -175,6 +175,12 @@ object AppSettings {
     /** Swiping a song row plays it next instead of adding it to the end of the queue. */
     val swipeToPlayNext = MutableStateFlow(false)
 
+    /**
+     * Leaves a music-video upload as itself instead of swapping it for its
+     * catalogue audio release.
+     */
+    val convertVideoToAudio = MutableStateFlow(true)
+
     /** Drops haze blur (status bar, mini player, bottom fade, lyrics focus) for a solid-fill look. */
     val reduceDynamicBlur = MutableStateFlow(false)
 
@@ -358,6 +364,7 @@ object AppSettings {
         stopOnTaskRemoved.value = prefs.getBoolean(KEY_STOP_ON_TASK_REMOVED, true)
         hideVolumeBar.value = prefs.getBoolean(KEY_HIDE_VOLUME_BAR, false)
         swipeToPlayNext.value = prefs.getBoolean(KEY_SWIPE_TO_PLAY_NEXT, false)
+        convertVideoToAudio.value = prefs.getBoolean(KEY_CONVERT_VIDEO_TO_AUDIO, true)
         reduceDynamicBlur.value = prefs.getBoolean(KEY_REDUCE_BLUR, false)
         hapticFeedback.value = prefs.getBoolean(KEY_HAPTIC_FEEDBACK, true)
         animatedCanvas.value = prefs.getBoolean(KEY_ANIMATED_CANVAS, true)
@@ -669,6 +676,11 @@ object AppSettings {
             .toSet()
     }
 
+    fun setConvertVideoToAudio(value: Boolean) {
+        convertVideoToAudio.value = value
+        prefs.edit().putBoolean(KEY_CONVERT_VIDEO_TO_AUDIO, value).apply()
+    }
+
     fun setAnimatedCanvas(value: Boolean) {
         animatedCanvas.value = value
         prefs.edit().putBoolean(KEY_ANIMATED_CANVAS, value).apply()
@@ -875,6 +887,7 @@ object AppSettings {
     private const val KEY_STOP_ON_TASK_REMOVED = "stop_on_task_removed"
     private const val KEY_HIDE_VOLUME_BAR = "hide_volume_bar"
     private const val KEY_SWIPE_TO_PLAY_NEXT = "swipe_to_play_next"
+    private const val KEY_CONVERT_VIDEO_TO_AUDIO = "convert_video_to_audio"
     private const val KEY_REDUCE_BLUR = "reduce_dynamic_blur"
     private const val KEY_HAPTIC_FEEDBACK = "haptic_feedback"
     private const val KEY_ANIMATED_CANVAS = "animated_canvas"

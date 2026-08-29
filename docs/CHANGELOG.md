@@ -8,6 +8,59 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ### [Unreleased]
 
+### [native-v1.4.5] — 2026-08-29
+
+#### ✨ Fitur Baru & Tampilan
+- **Integrasi Tautan Musik & Asisten Suara Universal (*Universal MusicLink & Deep Link Dispatcher*)**:
+  - Penanganan tautan YouTube Music / YouTube global (`music.youtube.com`, `youtu.be`, `watch?v=`, `playlist?list=`, `channel/`, `browse/`), teks yang dibagikan dari aplikasi lain (`ACTION_SEND`), serta integrasi perintah suara Asisten Google (`MEDIA_PLAY_FROM_SEARCH`).
+  - Pemutaran instan atau pembukaan halaman album/artis/playlist otomatis secara mulus saat tautan diklik dari luar aplikasi.
+- **Tampilan Kisi Penuh Koleksi Pustaka (*Library Grid Page & Responsive "Show All"*)**:
+  - Tata letak kisi vertikal multi-kolom responsif (*adaptive vertical grid*) untuk menjelajahi koleksi pustaka (*Playlists, Albums, Artists, Subscriptions*).
+  - Setiap rak pustaka menampilkan pratinjau hingga 5 item dengan tombol **"Show all"** interaktif untuk membuka seluruh koleksi dalam tampilan kisi yang elegan dengan navigasi kembali yang mulus.
+- **Pengaturan Pemutaran Video Musik Asli (*Keep Music Videos as Original*)**:
+  - Sakelar baru di menu Pengaturan: *"Stop converting video songs to audio version"* untuk mempertahankan audio asli dari unggahan video klip musik alih-alih menggantinya dengan rekaman album studio.
+
+- **Tata Letak Adaptif Antrean untuk Layar Kompak (*Adaptive Queue Layout*)**:
+  - Mengoptimalkan pemanfaatan ruang vertikal khusus pada layar berukuran kompak atau perangkat berasio standar: saat panel antrean (*Queue*) dibuka pada perangkat berlayar ringkas, bilah volume disembunyikan secara cerdas dan tombol opsi antrean dirampingkan sehingga daftar lagu antrean tampil luas dan leluasa. Pada perangkat berlayar tinggi / besar, bilah volume tetap tampil normal.
+  - Tampilan lirik dan kontrol pemutar tetap konsisten dengan kendali penuh (*transport, volume, dan bilah tombol bawah*) tanpa terpotong.
+- **Navigasi Notifikasi Unduhan & Pembaruan Aplikasi Cepat (*Interactive Download & Update Notifications*)**:
+  - Mengetuk notifikasi pengunduhan lagu di bilah status langsung membuka lembar kelola unduhan (*Download Manager modal*) secara instan.
+  - Mengetuk notifikasi pembaruan APK otomatis membuka lembar rilis pembaruan atau meluncurkan penginstal paket Android dengan mulus.
+
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Dukungan Multi-Penyedia Lirik Global & Pemisahan Vokal Latar (*Multi-Source Lyrics & Background Vocals Sweep Engine*)**:
+  - Menambahkan penyedia lirik global baru: **PaxSenix** (Apple Music TTML proxy sinkronisasi kata-per-kata), **KuGou** (katalog lirik Asia & global sinkronisasi baris), dan **Musixmatch** (katalog lirik terbesar dunia).
+  - Ekstraksi vokal latar format TTML Apple Music (`ttm:role="x-bg"`): memisahkan suara vokal latar tingkat kata ke dalam baris tersendiri dengan sinkronisasi waktu dan animasi sapuan mandiri (*independent word-by-word backing sweep*).
+  - Mekanisme baris aktif ganda (*alsoActive line persistence*): menjaga baris vokal latar tetap menyala dan bersinar saat vokal latar masih bernyanyi meskipun baris vokal utama berikutnya telah dimulai.
+  - Algoritma pemisahan vokal latar (*background vocals engine*): lirik suara kedua atau jawaban dalam tanda kurung `(ooh)` otomatis dipisahkan ke baris di bawah vokal utama dengan sinkronisasi waktu mandiri, mencegah jeda atau gangguan pada animasi sapuan vokal utama (*lead vocal sweep*).
+  - Penyematan lirik sinkronisasi kata offline (*enhanced word-synced offline lyrics tagging*) ke dalam metadata berkas M4A (`----:com.velthy.client:VELTHY_LYRICS`), FLAC (`VELTHY_LYRICS`), dan WebM/Opus.
+  - Pembacaan lirik luring tersemat (*embedded lyrics extraction*) langsung dari berkas audio lokal saat perangkat tidak terhubung ke internet.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Penyelarasan Bahasa Antarmuka Pembaruan Sistem (*Unified English Localization for Software Updates*)**:
+  - Menyelaraskan seluruh teks informasi, dialog, dan notifikasi pembaruan aplikasi ke dalam Bahasa Inggris yang profesional dan elegan agar serasi dengan seluruh antarmuka aplikasi.
+- **Penyempurnaan Integrasi Gambar Aktivitas Discord (*Discord Rich Presence Artwork Reliability*)**:
+  - Mengalirkan tautan gambar cover resolusi tinggi berformat JPEG langsung ke proksi aset Discord, memastikan foto cover album selalu muncul jernih dan tepat di profil Discord tanpa ikon placeholder dadu tanda tanya `[?]`.
+- **Perbaikan Autentikasi & Scrobbling Last.fm & ListenBrainz (*Production-Grade Scrobbling Auth & Error Handling*)**:
+  - Menyematkan penanganan kesalahan tingkat produksi (*production-grade error feedback*) dengan banner peringatan elegan, ikon status, dan getaran haptik responsif saat kata sandi, nama pengguna, atau token salah.
+  - Memastikan pencatatan lagu (*scrobbling*) otomatis aktif saat lagu diputar baik untuk Last.fm maupun ListenBrainz.
+- **Indikator Loading Pemutar Cerdas & Interaktif (*Smart Interactive Player Buffer Visualizer*)**:
+  - Mengimplementasikan visualisasi pemuatan audio (*buffering indicator*) yang cerdas dan elegan di pemutar penuh (*Now Playing*):
+    - Saat trek baru mulai dimuat (*initial track loading*), kapsul bercahaya bergaya Apple Music meluncur halus bolak-balik di sepanjang garis pemutar.
+    - Saat terjadi *buffering* di tengah lagu (*mid-track buffering*), garis durasi yang sudah diputar tetap solid dan akurat, sementara garis trek di depannya menampilkan gelombang aliran data (*data-stream wave*) interaktif yang menyala lembut bersama halo pendaran di ujung posisi pemutaran.
+- **Penyelarasan & Pemulihan Umpan Balik Haptik Asli (*Authentic Haptic Experience Parity*)**:
+  - Mengembalikan seluruh titik umpan balik getaran mikro (*haptic feedback*) presisi pada gestur usap sampul lagu (*cover swipe gesture*), tombol putar/acak (*Play & Shuffle*), tombol unduh, dan filter pencarian sesuai karakteristik asli BitChord.
+- **Optimasi Pengunduhan Latar Belakang (*Resilient Background Downloads*)**:
+  - Peningkatan keandalan *foreground service* dan pengelolaan aliran data unduhan lagu di latar belakang agar selalu stabil dan cepat.
+
+#### 🐛 Perbaikan Masalah
+- **Pembersihan Lembar Menu Titik Tiga Ganda (*Duplicate Browse Actions Sheet*)**:
+  - Memperbaiki masalah munculnya lembar menu aksi album/playlist/artis yang terbuka rangkap dua saat tombol titik tiga ditekan.
+- **Transisi Loading Halaman Artis & Album yang Mulus (*Seamless Detail Loading Placeholder*)**:
+  - Menghilangkan placeholder ikon kotak biru lokal saat memuat foto artis/album online, menggantikannya dengan transisi gradien gelap yang elegan dan selaras dengan tema.
+- **Penyelarasan Nama Folder & Metadata Unduhan (*Unified Velthy Folder Path*)**:
+  - Memperbarui seluruh jalur penyimpanan, teks informasi, dan tag klien unduhan ke direktori `Music/Velthy` secara konsisten di seluruh aplikasi.
+
 ### [native-v1.4.4] — 2026-08-28
 
 #### ✨ Fitur Baru & Tampilan

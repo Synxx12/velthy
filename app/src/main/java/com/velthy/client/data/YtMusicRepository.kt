@@ -17,6 +17,8 @@ import com.velthy.client.data.model.ShelfItem
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.SongMenu
 import com.velthy.client.data.model.UserPlaylist
+import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.data.sources.TrackMatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -161,7 +163,20 @@ object YtMusicRepository {
             InnertubeParser.parseSearch(Innertube.search(query, filter?.params))
         }
 
-    suspend fun resolveAudio(song: Song): Song = song
+    suspend fun resolveAudio(song: Song): Song {
+        if (!song.isVideo || !AppSettings.convertVideoToAudio.value) return song
+        val target = TrackMatcher.targetOf(song)
+        for (query in TrackMatcher.queries(target)) {
+            val candidates = search(query, SearchFilter.SONGS)
+                .getOrNull()
+                ?.filterIsInstance<SearchResult.Track>()
+                ?.map { it.song }
+                .orEmpty()
+            TrackMatcher.best(candidates, target)?.let { return it }
+        }
+        return song
+    }
+
 
     /** Signed-in profile for the settings header. Null when signed out. */
     suspend fun account(): Result<Account> = call("account") {

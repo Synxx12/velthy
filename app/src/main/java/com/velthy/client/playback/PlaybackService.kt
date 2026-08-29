@@ -2203,12 +2203,14 @@ class PlaybackService : MediaSessionService() {
                     delaySeconds = values[9] as Int,
                 )
             }.collectLatest { snapshot ->
+                val effectiveApiKey = snapshot.apiKey.ifBlank { LastFM.FALLBACK_COMPAT_API_KEY }
+                val effectiveSecret = snapshot.secret.ifBlank { LastFM.FALLBACK_COMPAT_SECRET }
                 val shouldEnable = AppSettings.scrobblingAvailable &&
                     snapshot.lastfmEnabled &&
                     snapshot.scrobbleEnabled &&
                     snapshot.sessionKey.isNotBlank() &&
-                    snapshot.apiKey.isNotBlank() &&
-                    snapshot.secret.isNotBlank()
+                    effectiveApiKey.isNotBlank() &&
+                    effectiveSecret.isNotBlank()
 
                 if (!shouldEnable) {
                     scrobbleManager?.destroy()
@@ -2218,8 +2220,8 @@ class PlaybackService : MediaSessionService() {
 
                 LastFM.configure(
                     endpoint = snapshot.endpoint.ifBlank { LastFM.DEFAULT_API_ENDPOINT },
-                    apiKey = snapshot.apiKey,
-                    secret = snapshot.secret,
+                    apiKey = effectiveApiKey,
+                    secret = effectiveSecret,
                     sessionKey = snapshot.sessionKey,
                 )
                 val manager = scrobbleManager ?: ScrobbleManager(scope).also {

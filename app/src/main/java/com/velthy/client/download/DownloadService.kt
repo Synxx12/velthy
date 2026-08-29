@@ -154,6 +154,18 @@ class DownloadService : Service() {
             else -> song.artist
         }
 
+        val openIntent = (packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, com.velthy.client.MainActivity::class.java)).apply {
+            action = ACTION_OPEN_DOWNLOADS
+            putExtra("open_downloads", true)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPending = PendingIntent.getActivity(
+            this,
+            0x8176,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
         val cancel = PendingIntent.getService(
             this,
             0,
@@ -169,6 +181,7 @@ class DownloadService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setOnlyAlertOnce(true)
+            .setContentIntent(openPending)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(0, "Cancel", cancel)
@@ -189,10 +202,11 @@ class DownloadService : Service() {
         )
     }
 
-    private companion object {
+    companion object {
         const val CHANNEL_ID = "downloads"
         const val NOTIFICATION_ID = 0x8175
         const val ACTION_CANCEL_ALL = "com.velthy.client.download.CANCEL_ALL"
+        const val ACTION_OPEN_DOWNLOADS = "com.velthy.client.download.OPEN_DOWNLOADS"
         const val PROGRESS_REFRESH_MS = 250L
         const val IDLE_GRACE_MS = 2_000L
         const val IDLE_POLL_MS = 100L

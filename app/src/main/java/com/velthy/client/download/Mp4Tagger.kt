@@ -1,5 +1,7 @@
 package com.velthy.client.download
 
+import com.velthy.client.data.lyrics.WORD_LYRICS_FIELD
+
 /**
  * Writes iTunes-style metadata atoms — title, artist, album, cover — into an
  * already-downloaded M4A/MP4 file, in place.
@@ -50,6 +52,7 @@ object Mp4Tagger {
         lyrics: String? = null,
         cover: ByteArray?,
         coverIsPng: Boolean,
+        wordLyrics: String? = null,
     ): ByteArray {
         val items = mutableListOf<ByteArray>()
         // © is iTunes's own "copyright" prefix for the text atoms
@@ -58,6 +61,7 @@ object Mp4Tagger {
         if (artist.isNotBlank()) items += textItem("©ART", artist)
         if (!album.isNullOrBlank()) items += textItem("©alb", album)
         if (!lyrics.isNullOrBlank()) items += textItem("©lyr", lyrics)
+        if (!wordLyrics.isNullOrBlank()) items += freeformItem(WORD_LYRICS_FIELD, wordLyrics)
         if (cover != null && cover.isNotEmpty()) items += coverItem(cover, coverIsPng)
         if (items.isEmpty()) return bytes
 
@@ -202,6 +206,14 @@ object Mp4Tagger {
     /** Type indicator 13 = JPEG, 14 = PNG. */
     private fun coverItem(image: ByteArray, isPng: Boolean): ByteArray =
         box("covr", dataAtom(if (isPng) 14 else 13, image))
+
+    private fun freeformItem(name: String, text: String): ByteArray {
+        val mean = box("mean", ByteArray(4) + MEAN.toByteArray(Charsets.UTF_8))
+        val label = box("name", ByteArray(4) + name.toByteArray(Charsets.UTF_8))
+        return box("----", mean + label + dataAtom(1, text.toByteArray(Charsets.UTF_8)))
+    }
+
+    private const val MEAN = "com.velthy.client"
 
     /** A minimal handler box declaring this `meta` as iTunes-style metadata. */
     private fun hdlrAtom(): ByteArray {

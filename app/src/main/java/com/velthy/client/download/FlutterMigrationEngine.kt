@@ -156,8 +156,15 @@ object FlutterMigrationEngine {
             }
         }.onFailure { Log.w(TAG, "Error reading Flutter SharedPreferences index: ${it.message}") }
 
-        // 2. Scan physical Musique download directories for any files
+        // 2. Scan physical Velthy and legacy Musique download directories for any files
         val candidateDirectories = listOfNotNull(
+            File("/storage/emulated/0/Music/Velthy"),
+            File("/storage/emulated/0/Download/Velthy"),
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Velthy"),
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Velthy"),
+            File(context.filesDir, "velthy_downloads"),
+            context.getExternalFilesDir(null)?.let { File(it, "velthy_downloads") },
+            context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { File(it, "Velthy") },
             File("/storage/emulated/0/Music/Musique"),
             File("/storage/emulated/0/Download/Musique"),
             File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Musique"),
@@ -286,6 +293,13 @@ object FlutterMigrationEngine {
         )
 
         val searchDirs = listOfNotNull(
+            File("/storage/emulated/0/Music/Velthy"),
+            File("/storage/emulated/0/Download/Velthy"),
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Velthy"),
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Velthy"),
+            File(context.filesDir, "velthy_downloads"),
+            context.getExternalFilesDir(null)?.let { File(it, "velthy_downloads") },
+            context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.let { File(it, "Velthy") },
             File("/storage/emulated/0/Music/Musique"),
             File("/storage/emulated/0/Download/Musique"),
             File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Musique"),

@@ -14,14 +14,15 @@ import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import com.velthy.client.BuildConfig
 import java.net.URI
 import java.security.MessageDigest
 
 object LastFM {
     const val DEFAULT_API_ENDPOINT = "https://ws.audioscrobbler.com/2.0/"
     const val LIBREFM_API_ENDPOINT = "https://libre.fm/2.0/"
-    const val FALLBACK_COMPAT_API_KEY = "musique"
-    const val FALLBACK_COMPAT_SECRET = "musique"
+    val FALLBACK_COMPAT_API_KEY: String get() = BuildConfig.LASTFM_API_KEY
+    val FALLBACK_COMPAT_SECRET: String get() = BuildConfig.LASTFM_SECRET
 
     @Serializable
     data class Session(val name: String, val key: String, val subscriber: Int)
@@ -283,12 +284,25 @@ object LastFM {
             }
 
         val responseText = response.bodyAsText()
-        if (!response.status.isSuccess()) {
-            throw LastFmException(response.status.value, response.status.description)
-        }
         if (responseText.contains("\"error\"")) {
-            val error = json.decodeFromString<LastFmError>(responseText)
-            throw LastFmException(error.error, error.message)
+            val parsedError = runCatching { json.decodeFromString<LastFmError>(responseText) }.getOrNull()
+            if (parsedError != null) {
+                val userFriendlyMessage = when (parsedError.error) {
+                    4 -> "Invalid username or password supplied."
+                    6 -> "Invalid parameters. Please check your credentials."
+                    9 -> "Invalid session key. Please re-authenticate."
+                    10 -> "Invalid API Key. Please verify your Last.fm API credentials."
+                    11 -> "Last.fm service is temporarily offline. Please try again later."
+                    13 -> "Invalid authentication signature."
+                    26 -> "API Key suspended by Last.fm."
+                    29 -> "Rate limit exceeded. Please wait a moment and try again."
+                    else -> parsedError.message.ifBlank { "Authentication failed (Error ${parsedError.error})" }
+                }
+                throw LastFmException(parsedError.error, userFriendlyMessage)
+            }
+        }
+        if (!response.status.isSuccess()) {
+            throw LastFmException(response.status.value, "Network error: HTTP ${response.status.value} ${response.status.description}")
         }
         return responseText
     }

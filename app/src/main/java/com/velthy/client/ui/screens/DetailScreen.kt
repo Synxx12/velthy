@@ -82,6 +82,8 @@ import com.velthy.client.ui.components.SHELF_CARD_WIDTH
 import com.velthy.client.ui.components.SongRow
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.components.detailSkeleton
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.icons.VelthyIcons
 import com.velthy.client.ui.theme.ArtworkPalette
 import com.velthy.client.ui.theme.rememberArtworkPalette
@@ -528,17 +530,17 @@ private fun PageBackground(
                         .matchParentSize()
                         .background(palette.elevated),
                 )
-            } else {
+            } else if (page.browseId.startsWith("local:") || page.browseId == "app:history" || page.browseId == "history") {
                 val icon = when (page.browseId) {
                     "local:downloads" -> VelthyIcons.Download
-                    "app:history" -> Icons.Rounded.History
+                    "app:history", "history" -> Icons.Rounded.History
                     else -> Icons.Rounded.LibraryMusic
                 }
                 val bgBrush = when (page.browseId) {
                     "local:downloads" -> Brush.verticalGradient(
                         listOf(Color(0xFF2E7D32), Color(0xFF1B5E20), palette.background),
                     )
-                    "app:history" -> Brush.verticalGradient(
+                    "app:history", "history" -> Brush.verticalGradient(
                         listOf(Color(0xFFE65100), Color(0xFFBF360C), palette.background),
                     )
                     else -> Brush.verticalGradient(
@@ -558,6 +560,22 @@ private fun PageBackground(
                         modifier = Modifier.size(72.dp),
                     )
                 }
+            } else {
+                // Online artist / album / playlist while loading or when artwork is empty:
+                // Clean elevated surface matching dark aesthetic
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    palette.elevated,
+                                    palette.background.copy(alpha = 0.7f),
+                                    palette.background,
+                                ),
+                            ),
+                        ),
+                )
             }
 
             // Shade under the glass bar. Drawn in the page's own tint rather
@@ -758,8 +776,7 @@ private fun ActionRow(
 }
 
 /**
- * The prominent, pill-shaped Play button that anchors the action row.
- * White-ish solid fill with the accent colour, like Apple Music's Play button.
+ * Wide pill at the foot of a release's cover — the primary action on the page.
  */
 @Composable
 private fun PlayPill(
@@ -767,13 +784,17 @@ private fun PlayPill(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptics = rememberHaptics()
     Row(
         modifier = modifier
             .height(50.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
             .border(0.5.dp, Color.White.copy(alpha = 0.10f), CircleShape)
-            .clickable(onClick = onClick)
+            .clickable {
+                haptics.play(Haptic.Resume)
+                onClick()
+            }
             .padding(horizontal = 32.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
@@ -803,14 +824,19 @@ private fun CircleIconButton(
     contentDescription: String,
     palette: ArtworkPalette,
     onClick: () -> Unit,
+    haptic: Haptic = Haptic.Tap,
 ) {
+    val haptics = rememberHaptics()
     Box(
         modifier = Modifier
             .size(50.dp)
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
             .border(0.5.dp, Color.White.copy(alpha = 0.10f), CircleShape)
-            .clickable(onClick = onClick),
+            .clickable {
+                haptics.play(haptic)
+                onClick()
+            },
         contentAlignment = Alignment.Center,
     ) {
         Icon(

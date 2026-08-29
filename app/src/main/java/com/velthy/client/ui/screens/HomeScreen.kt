@@ -205,6 +205,7 @@ internal fun SectionHeader(
     title: String,
     subtitle: String = "",
     onClick: (() -> Unit)? = null,
+    onShowAll: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -223,13 +224,15 @@ internal fun SectionHeader(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Spacer(Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.size(22.dp),
-                )
+                if (onClick != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
             }
             if (subtitle.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
@@ -241,6 +244,16 @@ internal fun SectionHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (onShowAll != null) {
+            Text(
+                text = "Show all",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable(onClick = onShowAll)
+                    .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+            )
         }
     }
 }
@@ -613,7 +626,7 @@ private fun MoreToExploreSection(
 }
 
 /**
- * A card that isn't a thing yet — the dashed "New playlist" tile at the head
+ * The "New playlist" card, which is shaped like a shelf card and leads the
  * of the Library's playlist row.
  */
 @Composable
@@ -622,15 +635,16 @@ internal fun NewShelfCard(
     label: String,
     subtitle: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val cardModifier = if (modifier == Modifier) Modifier.width(SHELF_CARD_WIDTH) else modifier
     Column(
-        modifier = Modifier
-            .width(SHELF_CARD_WIDTH)
+        modifier = cardModifier
             .clickable(onClick = onClick),
     ) {
         Box(
             modifier = Modifier
-                .width(SHELF_CARD_WIDTH)
+                .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -663,21 +677,22 @@ internal fun NewShelfCard(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ShelfCard(
+internal fun ShelfCard(
     item: ShelfItem,
     onClick: () -> Unit,
     onLongPress: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
+    val cardModifier = if (modifier == Modifier) Modifier.width(SHELF_CARD_WIDTH) else modifier
     Column(
-        modifier = Modifier
-            .width(SHELF_CARD_WIDTH)
+        modifier = cardModifier
             .combinedClickable(onClick = onClick, onLongClick = onLongPress),
     ) {
         when (item.browseId) {
             "local:downloads" -> {
                 Box(
                     modifier = Modifier
-                        .width(SHELF_CARD_WIDTH)
+                        .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .thumbnailBorder(RoundedCornerShape(12.dp))
@@ -699,7 +714,7 @@ private fun ShelfCard(
             "local:all" -> {
                 Box(
                     modifier = Modifier
-                        .width(SHELF_CARD_WIDTH)
+                        .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .thumbnailBorder(RoundedCornerShape(12.dp))
@@ -721,7 +736,7 @@ private fun ShelfCard(
             "app:history", "history" -> {
                 Box(
                     modifier = Modifier
-                        .width(SHELF_CARD_WIDTH)
+                        .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .thumbnailBorder(RoundedCornerShape(12.dp))
@@ -746,7 +761,7 @@ private fun ShelfCard(
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .width(SHELF_CARD_WIDTH)
+                        .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .thumbnailBorder(RoundedCornerShape(12.dp))

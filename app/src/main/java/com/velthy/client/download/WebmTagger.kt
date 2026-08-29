@@ -1,4 +1,6 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
+
+import com.velthy.client.data.lyrics.WORD_LYRICS_FIELD
 
 /**
  * Appends Matroska `Tags` and `Attachments` elements — title, artist, album,
@@ -16,13 +18,8 @@
  * The one field that can need touching is `Segment`'s own size, if it
  * declared one — a WebM served as a live remux typically declares it
  * "unknown" (an all-ones size, meaning "read to the end"), in which case
- * appending needs no further change at all. A declared size is only ever
- * widened in place, keeping its original byte width, because growing that
- * width would shift the size field itself and everything after it — the
- * same offset cascade [Mp4Tagger] exists to handle, which nothing here
- * reaches for. If the value doesn't fit the existing width, or the file
- * doesn't match the single-header/single-segment shape this assumes, the
- * input comes back unchanged rather than guessed at.
+ * Appends standard Matroska/WebM `Tags` and `Attachments` elements to an Opus
+ * file in place, updating the Segment element's size in its header.
  */
 object WebmTagger {
 
@@ -47,10 +44,12 @@ object WebmTagger {
         title: String,
         artist: String,
         album: String?,
+        lyrics: String? = null,
         cover: ByteArray?,
         coverMime: String,
+        wordLyrics: String? = null,
     ): ByteArray = runCatching {
-        insert(bytes, buildTail(title, artist, album, cover, coverMime))
+        insert(bytes, buildTail(title, artist, album, lyrics, cover, coverMime, wordLyrics))
     }.getOrDefault(bytes)
 
     private fun insert(bytes: ByteArray, tail: ByteArray): ByteArray {
@@ -90,8 +89,10 @@ object WebmTagger {
         title: String,
         artist: String,
         album: String?,
+        lyrics: String?,
         cover: ByteArray?,
         coverMime: String,
+        wordLyrics: String?,
     ): ByteArray {
         var out = ByteArray(0)
 
@@ -99,6 +100,8 @@ object WebmTagger {
         if (title.isNotBlank()) simple += simpleTag("TITLE", title)
         if (artist.isNotBlank()) simple += simpleTag("ARTIST", artist)
         if (!album.isNullOrBlank()) simple += simpleTag("ALBUM", album)
+        if (!lyrics.isNullOrBlank()) simple += simpleTag("LYRICS", lyrics)
+        if (!wordLyrics.isNullOrBlank()) simple += simpleTag(WORD_LYRICS_FIELD, wordLyrics)
         if (simple.isNotEmpty()) {
             // An empty Targets applies the tag to the whole file — there is no
             // track/chapter to single out in a lone-audio-stream download.

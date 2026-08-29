@@ -77,6 +77,17 @@ object Downloads {
     private val _active = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val active: StateFlow<Map<String, DownloadState>> = _active.asStateFlow()
 
+    private val _openManagerRequested = MutableStateFlow(false)
+    val openManagerRequested: StateFlow<Boolean> = _openManagerRequested.asStateFlow()
+
+    fun requestOpenManager() {
+        _openManagerRequested.value = true
+    }
+
+    fun clearOpenManagerRequest() {
+        _openManagerRequested.value = false
+    }
+
     private val _saved = MutableStateFlow<Map<String, String>>(emptyMap())
 
     /** videoId to the uri of the file saved for it. */
@@ -434,7 +445,7 @@ object Downloads {
     }
 
     suspend fun exportAllToMusicFolder(context: Context): Int = withContext(Dispatchers.IO) {
-        val targetDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Musique")
+        val targetDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Velthy")
         if (!targetDir.exists()) targetDir.mkdirs()
         var count = 0
         val scannedPaths = mutableListOf<String>()
@@ -503,7 +514,7 @@ object Downloads {
         val audioCount = AudioCache.cachedCount()
 
         val tempBytes = runCatching {
-            context.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("musique_audio") }.sumOf { it.length() }
+            context.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("velthy_audio") && !it.path.contains("musique_audio") }.sumOf { it.length() }
         }.getOrDefault(0L)
 
         var dlBytes = 0L

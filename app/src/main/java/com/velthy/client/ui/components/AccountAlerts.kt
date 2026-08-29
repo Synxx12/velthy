@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,8 +20,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -48,6 +52,34 @@ import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
+@Composable
+fun AlertErrorBanner(
+    error: String,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.ErrorOutline,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = error,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium),
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+}
+
 /**
  * Same UIAlertController shape as [UpdateAvailableDialog] — frosted card,
  * hairline rules, full-width stacked actions — but with a text field for the
@@ -59,6 +91,8 @@ fun ListenBrainzTokenAlert(
     hazeState: HazeState,
     tokenInput: String,
     onTokenInputChange: (String) -> Unit,
+    error: String? = null,
+    loading: Boolean = false,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -77,23 +111,38 @@ fun ListenBrainzTokenAlert(
             )
             Text(
                 text = "Paste your ListenBrainz user token to enable scrobbling.",
-                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
-                color = MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            AnimatedVisibility(
+                visible = error != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                if (error != null) {
+                    AlertErrorBanner(error = error, modifier = Modifier.padding(bottom = 10.dp))
+                }
+            }
             AlertTextField(
                 value = tokenInput,
                 onValueChange = onTokenInputChange,
                 placeholder = "API Token",
+                enabled = !loading,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onSave() }),
+                keyboardActions = KeyboardActions(onDone = { if (tokenInput.isNotBlank()) onSave() }),
             )
         }
         AlertRule()
-        AlertAction(label = "Save", emphasised = true, onClick = onSave)
+        AlertAction(
+            label = if (loading) "Validating..." else "Save",
+            emphasised = true,
+            onClick = onSave,
+            enabled = !loading && tokenInput.isNotBlank(),
+        )
         AlertRule()
-        AlertAction(label = "Cancel", emphasised = false, onClick = onDismiss)
+        AlertAction(label = "Cancel", emphasised = false, onClick = onDismiss, enabled = !loading)
     }
 }
 
@@ -105,11 +154,18 @@ fun LastfmLoginAlert(
     onUsernameInputChange: (String) -> Unit,
     passwordInput: String,
     onPasswordInputChange: (String) -> Unit,
+    apiKeyInput: String = "",
+    onApiKeyInputChange: (String) -> Unit = {},
+    secretInput: String = "",
+    onSecretInputChange: (String) -> Unit = {},
+    showAdvanced: Boolean = false,
+    onToggleAdvanced: () -> Unit = {},
     error: String?,
     loading: Boolean,
     onSignIn: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     AlertScaffold(hazeState = hazeState, onDismiss = onDismiss) {
         Column(
             modifier = Modifier
@@ -124,12 +180,21 @@ fun LastfmLoginAlert(
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = error ?: "Sign in with your Last.fm account to enable scrobbling.",
-                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+                text = "Sign in with your Last.fm account to enable scrobbling.",
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
-                color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            AnimatedVisibility(
+                visible = error != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                if (error != null) {
+                    AlertErrorBanner(error = error, modifier = Modifier.padding(bottom = 10.dp))
+                }
+            }
             AlertTextField(
                 value = usernameInput,
                 onValueChange = onUsernameInputChange,
@@ -144,11 +209,67 @@ fun LastfmLoginAlert(
                 placeholder = "Password",
                 enabled = !loading,
                 isPassword = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = if (showAdvanced) ImeAction.Next else ImeAction.Done),
                 keyboardActions = KeyboardActions(
                     onDone = { if (usernameInput.isNotBlank() && passwordInput.isNotBlank()) onSignIn() },
                 ),
             )
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(onClick = onToggleAdvanced)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (showAdvanced) "Hide API Credentials ▲" else "Custom API Key (Optional) ▼",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            if (showAdvanced) {
+                Spacer(Modifier.height(8.dp))
+                AlertTextField(
+                    value = apiKeyInput,
+                    onValueChange = onApiKeyInputChange,
+                    placeholder = "API Key",
+                    enabled = !loading,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                )
+                Spacer(Modifier.height(8.dp))
+                AlertTextField(
+                    value = secretInput,
+                    onValueChange = onSecretInputChange,
+                    placeholder = "Shared Secret",
+                    enabled = !loading,
+                    isPassword = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = { if (usernameInput.isNotBlank() && passwordInput.isNotBlank()) onSignIn() },
+                    ),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Get free API keys at last.fm/api/account/create",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable {
+                            runCatching {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse("https://www.last.fm/api/account/create"),
+                                    ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) },
+                                )
+                            }
+                        }
+                        .padding(4.dp),
+                )
+            }
         }
         AlertRule()
         AlertAction(
@@ -195,14 +316,21 @@ fun DiscordTokenAlert(
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = error
-                    ?: "Paste your Discord account token. It stays on this device, " +
-                    "encrypted, and is only ever sent to Discord.",
-                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+                text = "Paste your Discord account token. It stays on this device, encrypted, and is only ever sent to Discord.",
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
-                color = if (error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            AnimatedVisibility(
+                visible = error != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                if (error != null) {
+                    AlertErrorBanner(error = error, modifier = Modifier.padding(bottom = 10.dp))
+                }
+            }
             AlertTextField(
                 value = tokenInput,
                 onValueChange = onTokenInputChange,

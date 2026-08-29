@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.lyrics
+package com.velthy.client.data.lyrics
 
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -9,16 +9,14 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Intelligent Multi-Source Lyrics Cascade Engine.
  *
- * Parallel competitive resolution across 4 global lyrics providers:
- *  1. [BetterLyrics] — Apple Music TTML (per-syllable / per-word sync)
+ * Parallel competitive resolution across 7 global lyrics providers:
+ *  1. [PaxSenix] — Apple Music TTML via PaxSenix proxy (per-word sync)
  *  2. [LyricsPlus] — YouLy+ backend (fine syllable timing)
- *  3. [SimpMusicLyrics] — Direct YouTube videoId sync
- *  4. [LrcLib] — Key-less public synced LRC database with multi-step search
- *
- * Features:
- *  - High-performance thread-safe in-memory cache to prevent re-fetching and "disappearing lyrics".
- *  - Word-synced priority: If any provider returns word-synced lyrics, it takes precedence.
- *  - Seamless fallback to line-synced lyrics when word-timing is unavailable.
+ *  3. [BetterLyrics] — Apple Music TTML (per-syllable / per-word sync)
+ *  4. [SimpMusicLyrics] — Direct YouTube videoId sync
+ *  5. [KuGou] — KuGou global/Asian synchronized LRC database
+ *  6. [LrcLib] — Key-less public synced LRC database
+ *  7. [Musixmatch] — World's largest lyrics catalog
  */
 object LyricsRepository {
 
@@ -34,13 +32,14 @@ object LyricsRepository {
         durationMs: Long,
         album: String? = null,
         sources: Set<LyricsSource> = LyricsSource.entries.toSet(),
+        order: List<LyricsSource> = LyricsSource.entries,
     ): Result? = coroutineScope {
         if (sources.isEmpty() || (title.isBlank() && videoId.isBlank())) return@coroutineScope null
 
         val cleaned = LyricsCleaner.clean(title, artist)
         val metaKey = "${cleaned.cleanTitle.lowercase()}|${cleaned.cleanArtist.lowercase()}"
 
-        // 1. Check in-memory cache first (instant hit)
+        // 1. Check in-memory cache
         if (videoId.isNotBlank()) {
             cacheByVideoId[videoId]?.let { cached ->
                 if (cached.source in sources) return@coroutineScope cached
@@ -50,69 +49,55 @@ object LyricsRepository {
             if (cached.source in sources) return@coroutineScope cached
         }
 
-        // 2. Launch all enabled providers concurrently in parallel
-        val tasks = mutableListOf<Pair<LyricsSource, Deferred<List<LyricLine>?>>>()
+        val sequence = order.filter { it in sources } +
+            LyricsSource.entries.filter { it in sources && it !in order }
 
-        if (LyricsSource.BETTER_LYRICS in sources) {
-            tasks += LyricsSource.BETTER_LYRICS to async(Dispatchers.IO) {
-                runCatching { BetterLyrics.lyrics(title, artist, durationMs, album) }.getOrNull()
-            }
-        }
-
-        if (LyricsSource.LYRICS_PLUS in sources) {
-            tasks += LyricsSource.LYRICS_PLUS to async(Dispatchers.IO) {
-                runCatching { LyricsPlus.lyrics(title, artist, durationMs, album) }.getOrNull()
-            }
-        }
-
-        if (LyricsSource.SIMP_MUSIC in sources && videoId.isNotBlank()) {
-            tasks += LyricsSource.SIMP_MUSIC to async(Dispatchers.IO) {
-                runCatching { SimpMusicLyrics.lyrics(videoId, durationMs) }.getOrNull()
-            }
-        }
-
-        if (LyricsSource.LRCLIB in sources) {
-            tasks += LyricsSource.LRCLIB to async(Dispatchers.IO) {
-                runCatching { LrcLib.lyrics(title, artist, durationMs) }.getOrNull()
-            }
+        val racing: List<Pair<LyricsSource, Deferred<List<LyricLine>?>>> = sequence.map { source ->
+            source to async(Dispatchers.IO) { fetch(source, videoId, title, artist, durationMs, album) }
         }
 
         try {
-            val results = tasks.map { (source, job) ->
-                source to runCatching { job.await() }.getOrNull()
-            }
-
-            // Priority 1: Word-synced lyrics from highest priority provider
-            for ((source, lines) in results) {
-                if (lines != null && lines.any { it.isWordSynced }) {
-                    val winner = Result(source, lines)
+            var lineSynced: Result? = null
+            for ((source, job) in racing) {
+                val lines = runCatching { job.await() }.getOrNull() ?: continue
+                if (lines.any { it.isWordSynced }) {
+                    val winner = result(source, lines)
                     saveToCache(videoId, metaKey, winner)
                     return@coroutineScope winner
                 }
-            }
-
-            // Priority 2: Line-synced lyrics in order of reliability
-            val lineSyncedPriority = listOf(
-                LyricsSource.BETTER_LYRICS,
-                LyricsSource.LYRICS_PLUS,
-                LyricsSource.SIMP_MUSIC,
-                LyricsSource.LRCLIB,
-            )
-
-            for (pSource in lineSyncedPriority) {
-                val candidate = results.firstOrNull { it.first == pSource && !it.second.isNullOrEmpty() }
-                if (candidate?.second != null) {
-                    val winner = Result(pSource, candidate.second!!)
-                    saveToCache(videoId, metaKey, winner)
-                    return@coroutineScope winner
+                if (lineSynced == null) {
+                    lineSynced = result(source, lines)
                 }
             }
-
+            if (lineSynced != null) {
+                saveToCache(videoId, metaKey, lineSynced)
+                return@coroutineScope lineSynced
+            }
             null
         } finally {
-            tasks.forEach { it.second.cancel() }
+            racing.forEach { it.second.cancel() }
         }
     }
+
+    private suspend fun fetch(
+        source: LyricsSource,
+        videoId: String,
+        title: String,
+        artist: String,
+        durationMs: Long,
+        album: String?,
+    ): List<LyricLine>? = when (source) {
+        LyricsSource.PAXSENIX -> PaxSenix.lyrics(title, artist, durationMs, album)
+        LyricsSource.LYRICS_PLUS -> LyricsPlus.lyrics(title, artist, durationMs, album)
+        LyricsSource.BETTER_LYRICS -> BetterLyrics.lyrics(title, artist, durationMs, album)
+        LyricsSource.SIMP_MUSIC -> if (videoId.isNotBlank()) SimpMusicLyrics.lyrics(videoId, durationMs) else null
+        LyricsSource.KUGOU -> KuGou.lyrics(title, artist, durationMs, album)
+        LyricsSource.LRCLIB -> LrcLib.lyrics(title, artist, durationMs)
+        LyricsSource.MUSIXMATCH -> Musixmatch.lyrics(title, artist, durationMs)
+    }
+
+    private fun result(source: LyricsSource, lines: List<LyricLine>) =
+        Result(source, lines.withBackgroundVocals())
 
     private fun saveToCache(videoId: String, metaKey: String, result: Result) {
         if (videoId.isNotBlank()) {

@@ -55,6 +55,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.SignalCellularAlt
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SurroundSound
@@ -105,6 +106,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.SingletonImageLoader
@@ -114,6 +116,8 @@ import com.velthy.client.data.stats.Backup
 import com.velthy.client.data.model.Account
 import com.velthy.client.BuildConfig
 import com.velthy.client.data.scrobbling.LastFM
+import com.velthy.client.data.scrobbling.ListenBrainzManager
+import com.velthy.client.ui.components.AlertErrorBanner
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.sources.SourceKind
 import com.velthy.client.data.sources.SourceRegistry
@@ -122,6 +126,8 @@ import com.velthy.client.data.settings.DownloadQuality
 import com.velthy.client.data.settings.ThemeMode
 import com.velthy.client.playback.AudioCache
 import com.velthy.client.playback.DolbyAtmos
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.player.fullBleedArtworkAvailable
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -152,6 +158,7 @@ fun SettingsScreen(
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var showUpdateSheet by remember { mutableStateOf(false) }
     var updateModalInfo by remember { mutableStateOf<AppUpdateChecker.UpdateInfo?>(null) }
+    val haptics = rememberHaptics()
 
     val wifiQuality by AppSettings.audioQualityWifi.collectAsStateWithLifecycle()
     val cellularQuality by AppSettings.audioQualityCellular.collectAsStateWithLifecycle()
@@ -178,6 +185,7 @@ fun SettingsScreen(
     val losslessOnCellular by AppSettings.losslessOnCellular.collectAsStateWithLifecycle()
     val stopOnTaskRemoved by AppSettings.stopOnTaskRemoved.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
+    val convertVideoToAudio by AppSettings.convertVideoToAudio.collectAsStateWithLifecycle()
     val swipeToPlayNext by AppSettings.swipeToPlayNext.collectAsStateWithLifecycle()
     val hapticFeedback by AppSettings.hapticFeedback.collectAsStateWithLifecycle()
     val shareLiveStats by AppSettings.shareLiveStats.collectAsStateWithLifecycle()
@@ -483,6 +491,23 @@ fun SettingsScreen(
                     )
                 },
                 onClick = { AppSettings.setShowNerdStats(!nerdStats) },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.SmartDisplay,
+                title = "Stop converting video songs to audio version",
+                subtitle = "Plays a music-video upload as itself instead of swapping it for its catalogue audio release",
+                trailing = {
+                    Switch(
+                        checked = !convertVideoToAudio,
+                        onCheckedChange = { AppSettings.setConvertVideoToAudio(!it) },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setConvertVideoToAudio(!convertVideoToAudio) },
             )
         }
 
@@ -991,28 +1016,62 @@ fun SettingsScreen(
 
     if (showListenBrainzTokenDialog) {
         var tokenInput by remember { mutableStateOf(listenBrainzToken) }
+        var lbError by remember { mutableStateOf<String?>(null) }
+        var lbLoading by remember { mutableStateOf(false) }
+        val haptic = LocalHapticFeedback.current
         AlertDialog(
-            onDismissRequest = { showListenBrainzTokenDialog = false },
+            onDismissRequest = { if (!lbLoading) showListenBrainzTokenDialog = false },
             title = { Text("ListenBrainz Token") },
             text = {
-                OutlinedTextField(
-                    value = tokenInput,
-                    onValueChange = { tokenInput = it },
-                    label = { Text("API Token") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column {
+                    if (lbError != null) {
+                        AlertErrorBanner(error = lbError!!, modifier = Modifier.padding(bottom = 10.dp))
+                    }
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = {
+                            tokenInput = it
+                            lbError = null
+                        },
+                        label = { Text("API Token") },
+                        singleLine = true,
+                        enabled = !lbLoading,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    AppSettings.setListenBrainzToken(tokenInput.trim())
-                    showListenBrainzTokenDialog = false
-                }) {
-                    Text("Save")
+                TextButton(
+                    onClick = {
+                        lbLoading = true
+                        lbError = null
+                        scrobbleScope.launch {
+                            try {
+                                ListenBrainzManager.validateToken(tokenInput.trim())
+                                    .onSuccess { _ ->
+                                        haptics.play(Haptic.Select)
+                                        AppSettings.setListenBrainzToken(tokenInput.trim())
+                                        showListenBrainzTokenDialog = false
+                                    }
+                                    .onFailure { e ->
+                                        lbError = e.message ?: "Invalid user token. Please check your token."
+                                        haptics.play(Haptic.ToggleOff)
+                                    }
+                            } catch (e: Exception) {
+                                lbError = e.message ?: "Validation failed"
+                                haptics.play(Haptic.ToggleOff)
+                            } finally {
+                                lbLoading = false
+                            }
+                        }
+                    },
+                    enabled = !lbLoading && tokenInput.isNotBlank(),
+                ) {
+                    Text(if (lbLoading) "Validating..." else "Save")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showListenBrainzTokenDialog = false }) {
+                TextButton(onClick = { showListenBrainzTokenDialog = false }, enabled = !lbLoading) {
                     Text("Cancel")
                 }
             },
@@ -1022,36 +1081,96 @@ fun SettingsScreen(
     if (showLastfmLoginDialog) {
         var usernameInput by remember { mutableStateOf("") }
         var passwordInput by remember { mutableStateOf("") }
+        var apiKeyInput by remember { mutableStateOf(AppSettings.lastfmApiKey.value) }
+        var secretInput by remember { mutableStateOf(AppSettings.lastfmSecret.value) }
+        var showAdvanced by remember { mutableStateOf(false) }
         var lastfmError by remember { mutableStateOf<String?>(null) }
         var lastfmLoading by remember { mutableStateOf(false) }
+        val context = androidx.compose.ui.platform.LocalContext.current
         AlertDialog(
             onDismissRequest = { if (!lastfmLoading) showLastfmLoginDialog = false },
             title = { Text("Last.fm Login") },
             text = {
                 Column {
                     if (lastfmError != null) {
-                        Text(
-                            text = lastfmError!!,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(bottom = 8.dp),
-                        )
+                        AlertErrorBanner(error = lastfmError!!, modifier = Modifier.padding(bottom = 10.dp))
                     }
                     OutlinedTextField(
                         value = usernameInput,
-                        onValueChange = { usernameInput = it },
+                        onValueChange = {
+                            usernameInput = it
+                            lastfmError = null
+                        },
                         label = { Text("Username") },
                         singleLine = true,
+                        enabled = !lastfmLoading,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = passwordInput,
-                        onValueChange = { passwordInput = it },
+                        onValueChange = {
+                            passwordInput = it
+                            lastfmError = null
+                        },
                         label = { Text("Password") },
                         singleLine = true,
+                        enabled = !lastfmLoading,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (showAdvanced) "Hide API Credentials ▲" else "Custom API Key (Optional) ▼",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { showAdvanced = !showAdvanced }
+                            .padding(vertical = 4.dp),
+                    )
+                    if (showAdvanced) {
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = apiKeyInput,
+                            onValueChange = {
+                                apiKeyInput = it
+                                lastfmError = null
+                            },
+                            label = { Text("API Key") },
+                            singleLine = true,
+                            enabled = !lastfmLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = secretInput,
+                            onValueChange = {
+                                secretInput = it
+                                lastfmError = null
+                            },
+                            label = { Text("Shared Secret") },
+                            singleLine = true,
+                            enabled = !lastfmLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Get free API keys at last.fm/api/account/create",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable {
+                                    runCatching {
+                                        context.startActivity(
+                                            android.content.Intent(
+                                                android.content.Intent.ACTION_VIEW,
+                                                android.net.Uri.parse("https://www.last.fm/api/account/create"),
+                                            ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) },
+                                        )
+                                    }
+                                }
+                                .padding(vertical = 4.dp),
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -1061,23 +1180,30 @@ fun SettingsScreen(
                         lastfmError = null
                         scrobbleScope.launch {
                             try {
-                                // Use default keys for now
+                                val activeApiKey = apiKeyInput.trim().ifBlank { LastFM.FALLBACK_COMPAT_API_KEY }
+                                val activeSecret = secretInput.trim().ifBlank { LastFM.FALLBACK_COMPAT_SECRET }
                                 LastFM.initialize(
-                                    apiKey = LastFM.FALLBACK_COMPAT_API_KEY,
-                                    secret = LastFM.FALLBACK_COMPAT_SECRET,
+                                    apiKey = activeApiKey,
+                                    secret = activeSecret,
                                 )
                                 LastFM.getMobileSession(usernameInput.trim(), passwordInput)
                                     .onSuccess { auth ->
+                                        haptics.play(Haptic.Select)
+                                        if (apiKeyInput.isNotBlank()) AppSettings.setLastfmApiKey(apiKeyInput.trim())
+                                        if (secretInput.isNotBlank()) AppSettings.setLastfmSecret(secretInput.trim())
                                         AppSettings.setLastfmSessionKey(auth.session.key)
                                         AppSettings.setLastfmUsername(auth.session.name)
                                         AppSettings.setLastfmEnabled(true)
+                                        AppSettings.setLastfmScrobbleEnabled(true)
                                         showLastfmLoginDialog = false
                                     }
                                     .onFailure { e ->
-                                        lastfmError = e.message ?: "Login failed"
+                                        lastfmError = e.message ?: "Invalid username or password supplied."
+                                        haptics.play(Haptic.ToggleOff)
                                     }
                             } catch (e: Exception) {
-                                lastfmError = e.message ?: "Login failed"
+                                lastfmError = e.message ?: "Login failed. Please check your connection."
+                                haptics.play(Haptic.ToggleOff)
                             } finally {
                                 lastfmLoading = false
                             }

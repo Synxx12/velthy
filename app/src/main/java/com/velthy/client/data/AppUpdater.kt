@@ -170,7 +170,7 @@ object AppUpdater {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Download error", e)
-                _downloadState.value = DownloadState.Error(e.message ?: "Terjadi kesalahan saat mengunduh APK")
+                _downloadState.value = DownloadState.Error(e.message ?: "An error occurred while downloading update")
                 cancelNotification(context)
             }
         }
@@ -184,7 +184,7 @@ object AppUpdater {
                 "App Updates",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Notifikasi progres pengunduhan pembaruan aplikasi"
+                description = "Progress notifications for software updates"
                 setShowBadge(false)
             }
             notificationManager?.createNotificationChannel(channel)
@@ -210,13 +210,25 @@ object AppUpdater {
             val percent = (progress * 100).toInt()
             val text = "${formatSize(downloadedBytes)} / ${formatSize(totalBytes)} · ${"%.1f".format(speedMbPerSec)} MB/s"
 
+            val openIntent = (context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent(context, com.velthy.client.MainActivity::class.java)).apply {
+                putExtra("open_update", true)
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val openPending = PendingIntent.getActivity(
+                context,
+                0x9903,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
             val builder = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification_logo)
-                .setContentTitle("Mengunduh Musique v$version ($percent%)")
+                .setContentTitle("Downloading Velthy v$version ($percent%)")
                 .setContentText(text)
                 .setProgress(100, percent, totalBytes <= 0)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
+                .setContentIntent(openPending)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
 
             notificationManager.notify(NOTIFICATION_ID, builder.build())
@@ -252,8 +264,8 @@ object AppUpdater {
 
             val builder = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification_logo)
-                .setContentTitle("Musique v$version Siap Diinstal")
-                .setContentText("Unduhan selesai. Ketuk untuk menginstal pembaruan.")
+                .setContentTitle("Velthy v$version Ready to Install")
+                .setContentText("Download complete. Tap to install update.")
                 .setProgress(0, 0, false)
                 .setOngoing(false)
                 .setAutoCancel(true)
@@ -277,7 +289,7 @@ object AppUpdater {
     fun installApk(context: Context, apkFile: File) {
         try {
             if (!apkFile.exists()) {
-                _downloadState.value = DownloadState.Error("File APK tidak ditemukan di penyimpanan")
+                _downloadState.value = DownloadState.Error("APK file not found in storage")
                 return
             }
 
@@ -308,7 +320,7 @@ object AppUpdater {
             context.startActivity(installIntent)
         } catch (e: Exception) {
             Log.e(TAG, "Install error", e)
-            _downloadState.value = DownloadState.Error("Gagal membuka installer: ${e.message}")
+            _downloadState.value = DownloadState.Error("Failed to open package installer: ${e.message}")
         }
     }
 }

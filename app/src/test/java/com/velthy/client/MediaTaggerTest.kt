@@ -1,4 +1,4 @@
-﻿package com.velthy.client
+package com.velthy.client
 
 import com.velthy.client.download.FlacTagger
 import com.velthy.client.download.Mp4Tagger
@@ -66,9 +66,6 @@ class MediaTaggerTest {
             return box("moov", trak)
         }
 
-        // moov's length doesn't depend on the offset value itself (both are
-        // fixed 4-byte fields), so a placeholder pass is enough to learn where
-        // mdat's payload will actually start.
         val moovPlaceholder = moovWithStcoOffset(0)
         val mdatPayloadOffset = ftyp.size + moovPlaceholder.size + 8
         val moov = moovWithStcoOffset(mdatPayloadOffset)
@@ -84,7 +81,7 @@ class MediaTaggerTest {
         val (original, mdatPayloadOffset, _) = buildFakeMp4(mdatPayload)
         val cover = byteArrayOf(9, 8, 7, 6, 5)
 
-        val tagged = Mp4Tagger.tag(original, "My Title", "My Artist", "My Album", cover, coverIsPng = false)
+        val tagged = Mp4Tagger.tag(original, "My Title", "My Artist", "My Album", null, cover, coverIsPng = false)
 
         assertNotSame(original, tagged)
         val delta = tagged.size - original.size
@@ -95,7 +92,7 @@ class MediaTaggerTest {
 
         val stcoTypePos = tagged.indexOfBytes("stco".toByteArray(Charsets.US_ASCII))
         assertTrue(stcoTypePos >= 0)
-        val entryOffsetPos = stcoTypePos + 4 + 4 + 4 // past type, version/flags, entry_count
+        val entryOffsetPos = stcoTypePos + 4 + 4 + 4
         assertEquals(newOffset.toLong(), readU32(tagged, entryOffsetPos))
 
         assertTrue(tagged.indexOfBytes("My Title".toByteArray(Charsets.UTF_8)) >= 0)
@@ -107,23 +104,33 @@ class MediaTaggerTest {
     @Test
     fun `mp4 tagging is a no-op without a moov box`() {
         val bytes = box("ftyp", ByteArray(8)) + box("mdat", ByteArray(16))
-        val tagged = Mp4Tagger.tag(bytes, "Title", "Artist", null, null, false)
+        val tagged = Mp4Tagger.tag(bytes, "Title", "Artist", null, null, null, false)
         assertSame(bytes, tagged)
     }
 
     @Test
     fun `mp4 tagging is a no-op with nothing worth writing`() {
         val (original, _, _) = buildFakeMp4(ByteArray(4))
-        val tagged = Mp4Tagger.tag(original, "", "", null, null, false)
+        val tagged = Mp4Tagger.tag(original, "", "", null, null, null, false)
         assertSame(original, tagged)
+    }
+
+    @Test
+    fun `mp4 tagging writes lyrics into a lyr atom on their own`() {
+        val (original, _, _) = buildFakeMp4(ByteArray(4))
+
+        val tagged = Mp4Tagger.tag(original, "", "", null, LRC, null, false)
+
+        assertNotSame(original, tagged)
+        assertTrue(tagged.indexOfBytes("©lyr".toByteArray(Charsets.ISO_8859_1)) >= 0)
+        assertTrue(tagged.indexOfBytes(LRC.toByteArray(Charsets.UTF_8)) >= 0)
     }
 
     private val ebmlHeaderId = byteArrayOf(0x1A, 0x45, 0xDF.toByte(), 0xA3.toByte())
     private val segmentId = byteArrayOf(0x18, 0x53.toByte(), 0x80.toByte(), 0x67)
 
-    /** A one-byte-vint EBML header (4 bytes of dummy payload) followed by a `Segment` of [segmentSize]. */
     private fun buildFakeWebm(segmentBody: ByteArray, segmentSize: ByteArray): ByteArray {
-        val header = ebmlHeaderId + byteArrayOf(0x84.toByte()) + ByteArray(4) // size vint = 4, one byte wide
+        val header = ebmlHeaderId + byteArrayOf(0x84.toByte()) + ByteArray(4)
         return header + segmentId + segmentSize + segmentBody
     }
 
@@ -134,7 +141,7 @@ class MediaTaggerTest {
         val original = buildFakeWebm(segmentBody, unknownSize)
 
         val cover = byteArrayOf(3, 1, 4, 1, 5)
-        val tagged = WebmTagger.tag(original, "T", "A", "Al", cover, "image/jpeg")
+        val tagged = WebmTagger.tag(original, "T", "A", "Al", null, cover, "image/jpeg")
 
         assertNotSame(original, tagged)
         assertArrayEquals(original, tagged.copyOfRange(0, original.size))
@@ -146,7 +153,6 @@ class MediaTaggerTest {
 
     @Test
     fun `webm tagging widens a definite segment size in place`() {
-        // A 2-byte vint (marker 0x40..) covering exactly the body that follows.
         val segmentBody = ByteArray(20) { it.toByte() }
         val declaredSize = segmentBody.size.toLong()
         val sizeField = byteArrayOf(
@@ -155,12 +161,10 @@ class MediaTaggerTest {
         )
         val original = buildFakeWebm(segmentBody, sizeField)
 
-        val tagged = WebmTagger.tag(original, "T", "", null, null, "image/jpeg")
+        val tagged = WebmTagger.tag(original, "T", "", null, null, null, "image/jpeg")
 
         assertNotSame(original, tagged)
         val sizeFieldOffset = ebmlHeaderId.size + 1 + 4 + segmentId.size
-        // Everything except the 2-byte size field itself — which is expected
-        // to change, that's the point of this test — is untouched.
         assertArrayEquals(original.copyOfRange(0, sizeFieldOffset), tagged.copyOfRange(0, sizeFieldOffset))
         assertArrayEquals(
             original.copyOfRange(sizeFieldOffset + 2, original.size),
@@ -177,31 +181,39 @@ class MediaTaggerTest {
     @Test
     fun `webm tagging is a no-op without a recognisable ebml header`() {
         val bytes = ByteArray(20) { it.toByte() }
-        val tagged = WebmTagger.tag(bytes, "Title", "Artist", null, null, "image/jpeg")
+        val tagged = WebmTagger.tag(bytes, "Title", "Artist", null, null, null, "image/jpeg")
         assertSame(bytes, tagged)
+    }
+
+    @Test
+    fun `webm tagging writes lyrics into a LYRICS simpletag on their own`() {
+        val unknownSize = byteArrayOf(0x01) + ByteArray(7) { 0xFF.toByte() }
+        val original = buildFakeWebm(ByteArray(10) { (it + 1).toByte() }, unknownSize)
+
+        val tagged = WebmTagger.tag(original, "", "", null, LRC, null, "image/jpeg")
+
+        assertNotSame(original, tagged)
+        assertArrayEquals(original, tagged.copyOfRange(0, original.size))
+        assertTrue(tagged.indexOfBytes("LYRICS".toByteArray(Charsets.US_ASCII)) >= 0)
+        assertTrue(tagged.indexOfBytes(LRC.toByteArray(Charsets.UTF_8)) >= 0)
     }
 
     // ---- FLAC ---------------------------------------------------------------
 
     private val flacMagic = "fLaC".toByteArray(Charsets.US_ASCII)
 
-    private fun flacBlock(type: Int, payload: ByteArray, last: Boolean = false): ByteArray =
-        byteArrayOf(
-            (type or if (last) 0x80 else 0).toByte(),
-            (payload.size ushr 16).toByte(),
-            (payload.size ushr 8).toByte(),
-            payload.size.toByte(),
-        ) + payload
+    private fun flacBlock(type: Int, body: ByteArray, last: Boolean = false): ByteArray {
+        val flags = (if (last) 0x80 else 0) or (type and 0x7F)
+        val length = body.size
+        val header = byteArrayOf(
+            flags.toByte(),
+            (length ushr 16).toByte(),
+            (length ushr 8).toByte(),
+            length.toByte(),
+        )
+        return header + body
+    }
 
-    /**
-     * The metadata chain of [bytes] as (type, payload), and where the audio
-     * frames begin.
-     *
-     * Walking to the last-block flag rather than to a known count is the point:
-     * a flag left set on a block that is no longer last stops the walk early and
-     * every assertion made off the result then fails, which is exactly the bug
-     * worth catching.
-     */
     private fun flacChain(bytes: ByteArray): Pair<List<Pair<Int, ByteArray>>, Int> {
         assertArrayEquals(flacMagic, bytes.copyOfRange(0, 4))
         val blocks = mutableListOf<Pair<Int, ByteArray>>()
@@ -249,13 +261,10 @@ class MediaTaggerTest {
             frames
         val cover = byteArrayOf(9, 8, 7, 6, 5)
 
-        val tagged = FlacTagger.tag(original, "My Title", "My Artist", "My Album", cover, "image/jpeg")
+        val tagged = FlacTagger.tag(original, "My Title", "My Artist", "My Album", null, cover, "image/jpeg")
 
         assertNotSame(original, tagged)
         val (blocks, framesAt) = flacChain(tagged)
-        // STREAMINFO first, SEEKTABLE carried across, PADDING gone, the two new
-        // blocks appended — and the last-block flag on the last of them, which
-        // is what let the walk get this far.
         assertEquals(
             listOf(TYPE_STREAMINFO, TYPE_SEEKTABLE, TYPE_VORBIS_COMMENT, TYPE_PICTURE),
             blocks.map { it.first },
@@ -264,12 +273,9 @@ class MediaTaggerTest {
         assertArrayEquals(seekTable, blocks[1].second)
         assertArrayEquals(frames, tagged.copyOfRange(framesAt, tagged.size))
 
-        // Little-endian lengths, and no framing bit after the last field. Both
-        // are inherited from Ogg Vorbis' comment layout except that the framing
-        // bit isn't, and both are silent when written the other way.
         val comment = blocks[2].second
         val vendorLength = readU32Le(comment, 0)
-        assertEquals("Musique", String(comment, 4, vendorLength, Charsets.UTF_8))
+        assertEquals("Velthy", String(comment, 4, vendorLength, Charsets.UTF_8))
         var at = 4 + vendorLength
         val count = readU32Le(comment, at)
         at += 4
@@ -285,13 +291,11 @@ class MediaTaggerTest {
         assertEquals(listOf("TITLE=My Title", "ARTIST=My Artist", "ALBUM=My Album"), fields)
         assertEquals(comment.size.toLong(), at.toLong())
 
-        // The picture block is big-endian, unlike the one above it.
         val picture = blocks[3].second
-        assertEquals(3L, readU32(picture, 0)) // front cover
+        assertEquals(3L, readU32(picture, 0))
         val mimeLength = readU32(picture, 4).toInt()
         assertEquals("image/jpeg", String(picture, 8, mimeLength, Charsets.US_ASCII))
         var pat = 8 + mimeLength
-        // Description length, width, height, colour depth, colours used.
         repeat(5) {
             assertEquals(0L, readU32(picture, pat))
             pat += 4
@@ -310,7 +314,7 @@ class MediaTaggerTest {
             flacBlock(TYPE_VORBIS_COMMENT, stale, last = true) +
             frames
 
-        val tagged = FlacTagger.tag(original, "New Title", "New Artist", null, null, "image/jpeg")
+        val tagged = FlacTagger.tag(original, "New Title", "New Artist", null, null, null, "image/jpeg")
 
         val (blocks, framesAt) = flacChain(tagged)
         assertEquals(1L, blocks.count { it.first == TYPE_VORBIS_COMMENT }.toLong())
@@ -323,7 +327,7 @@ class MediaTaggerTest {
     @Test
     fun `flac tagging is a no-op without the fLaC magic`() {
         val bytes = ByteArray(64) { it.toByte() }
-        assertSame(bytes, FlacTagger.tag(bytes, "Title", "Artist", null, null, "image/jpeg"))
+        assertSame(bytes, FlacTagger.tag(bytes, "Title", "Artist", null, null, null, "image/jpeg"))
     }
 
     @Test
@@ -331,13 +335,27 @@ class MediaTaggerTest {
         val original = flacMagic +
             byteArrayOf(TYPE_STREAMINFO.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()) +
             ByteArray(34)
-        assertSame(original, FlacTagger.tag(original, "Title", "Artist", null, null, "image/jpeg"))
+        assertSame(original, FlacTagger.tag(original, "Title", "Artist", null, null, null, "image/jpeg"))
     }
 
     @Test
     fun `flac tagging is a no-op with nothing to write`() {
         val original = flacMagic + flacBlock(TYPE_STREAMINFO, ByteArray(34), last = true) + ByteArray(16)
-        assertSame(original, FlacTagger.tag(original, "   ", "", null, null, "image/jpeg"))
+        assertSame(original, FlacTagger.tag(original, "   ", "", null, null, null, "image/jpeg"))
+    }
+
+    @Test
+    fun `flac tagging writes multi-line lyrics into a LYRICS field on their own`() {
+        val frames = ByteArray(16) { 7 }
+        val original = flacMagic + flacBlock(TYPE_STREAMINFO, ByteArray(34), last = true) + frames
+
+        val tagged = FlacTagger.tag(original, "", "", null, LRC, null, "image/jpeg")
+
+        assertNotSame(original, tagged)
+        val (blocks, framesAt) = flacChain(tagged)
+        assertEquals(listOf(TYPE_STREAMINFO, TYPE_VORBIS_COMMENT), blocks.map { it.first })
+        assertArrayEquals(frames, tagged.copyOfRange(framesAt, tagged.size))
+        assertTrue(tagged.indexOfBytes("LYRICS=$LRC".toByteArray(Charsets.UTF_8)) >= 0)
     }
 
     private companion object {
@@ -346,5 +364,7 @@ class MediaTaggerTest {
         const val TYPE_SEEKTABLE = 3
         const val TYPE_VORBIS_COMMENT = 4
         const val TYPE_PICTURE = 6
+
+        const val LRC = "[00:01.20]first line here\n[00:04.50]second line here"
     }
 }

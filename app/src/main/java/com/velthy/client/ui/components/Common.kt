@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.velthy.client.data.model.ROW_ART_PX
@@ -93,6 +94,32 @@ val ROW_DIVIDER_INSET = PAGE_GUTTER + 68.dp
  * showing: enough to say the row scrolls without a card being half a card.
  */
 val SHELF_CARD_WIDTH = 150.dp
+
+/** How many cards sit across a library grid row, and how wide each lands. */
+data class LibraryGridSpec(val columns: Int, val cardWidth: Dp)
+
+/** The narrowest a library grid card is let get before another column gives way. */
+private val LIBRARY_GRID_MIN_CARD_WIDTH = 84.dp
+
+/** Gap between cards in a library grid, in both directions. */
+val LIBRARY_GRID_SPACING = 12.dp
+
+private const val LIBRARY_GRID_MIN_COLUMNS = 2
+
+/** Library shelves never grow past this many across, however wide the screen. */
+private const val LIBRARY_GRID_MAX_COLUMNS = 5
+
+/**
+ * How a Library shelf's full "Show all" page lays out as a grid, in
+ * [available] dp of row — see `LibraryGridPage`.
+ */
+fun libraryGrid(available: Dp): LibraryGridSpec {
+    val raw = ((available.value + LIBRARY_GRID_SPACING.value) / (LIBRARY_GRID_MIN_CARD_WIDTH.value + LIBRARY_GRID_SPACING.value))
+        .toInt()
+    val columns = raw.coerceIn(LIBRARY_GRID_MIN_COLUMNS, LIBRARY_GRID_MAX_COLUMNS)
+    val cardWidth = (available - LIBRARY_GRID_SPACING * (columns - 1)) / columns
+    return LibraryGridSpec(columns, cardWidth)
+}
 
 /**
  * One track row, used by search, library and detail pages.

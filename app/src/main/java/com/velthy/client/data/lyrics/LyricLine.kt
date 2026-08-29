@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.lyrics
+package com.velthy.client.data.lyrics
 
 /**
  * One word of a line, with the stretch of the song it is sung over.
@@ -20,12 +20,16 @@ data class LyricWord(val startMs: Long, val endMs: Long, val text: String)
  *
  * [sungUntilMs] is the line's own end where a line-synced provider states one,
  * which is what lets an interlude be told apart from a slowly sung line.
+ *
+ * [background] is the answering vocal — the "(ooh)" or the echoed half-phrase
+ * a second voice sings over the lead.
  */
 data class LyricLine(
     val timeMs: Long,
     val text: String,
     val words: List<LyricWord> = emptyList(),
     val sungUntilMs: Long? = null,
+    val background: LyricLine? = null,
 ) {
     val isGap: Boolean get() = text.isEmpty()
 
@@ -47,7 +51,11 @@ data class LyricLine(
      * gave one, or [timeMs] when nothing did. Check [hasKnownEnd] before
      * reading a silence out of this.
      */
-    val endMs: Long get() = words.lastOrNull()?.endMs ?: sungUntilMs ?: timeMs
+    val endMs: Long
+        get() {
+            val lead = words.lastOrNull()?.endMs ?: sungUntilMs ?: timeMs
+            return maxOf(lead, background?.endMs ?: lead)
+        }
 
     /**
      * How far through the line the singing has got, 0..1, as a fractional

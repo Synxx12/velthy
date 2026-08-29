@@ -80,9 +80,8 @@ open class VelthyApplication : Application(), SingletonImageLoader.Factory {
         val sessionKey = AppSettings.lastfmSessionKey.value
         if (sessionKey.isBlank()) return
         val endpoint = AppSettings.lastfmEndpoint.value.ifBlank { LastFM.DEFAULT_API_ENDPOINT }
-        val apiKey = AppSettings.lastfmApiKey.value.trim()
-        val secret = AppSettings.lastfmSecret.value.trim()
-        if (apiKey.isBlank() || secret.isBlank()) return
+        val apiKey = AppSettings.lastfmApiKey.value.trim().ifBlank { LastFM.FALLBACK_COMPAT_API_KEY }
+        val secret = AppSettings.lastfmSecret.value.trim().ifBlank { LastFM.FALLBACK_COMPAT_SECRET }
         LastFM.configure(
             endpoint = endpoint,
             apiKey = apiKey,

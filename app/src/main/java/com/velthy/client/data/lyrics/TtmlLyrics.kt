@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.lyrics
+package com.velthy.client.data.lyrics
 
 import org.w3c.dom.Element
 import org.w3c.dom.Node
@@ -29,12 +29,19 @@ import org.xml.sax.InputSource
 object TtmlLyrics {
 
     /**
-     * Roles that are not the lead vocal. Translations and romanisations are
+     * Roles that are not a sung voice. Translations and romanisations are
      * alternate renderings of the same line and would double it up;
-     * background vocals overlap the line they answer, which the player's
-     * "last line whose stamp has passed" cursor has no way to show.
+     * background vocals have their own role ([BACKGROUND_ROLE]) and are split
+     * into [LyricLine.background] below.
      */
-    private val SKIPPED_ROLES = setOf("x-translation", "x-roman", "x-bg")
+    private val SKIPPED_ROLES = setOf("x-translation", "x-roman")
+
+    /**
+     * Answering / backing vocals Apple wraps in a child span under the lead's
+     * `<p>`. Handled apart from the main text so the player can draw the two
+     * voices on their own rows and sweep them on their own word clocks.
+     */
+    private const val BACKGROUND_ROLE = "x-bg"
 
     fun parse(ttml: String): List<LyricLine> = runCatching {
         val factory = DocumentBuilderFactory.newInstance().apply {
@@ -58,11 +65,22 @@ object TtmlLyrics {
 
     private fun lineFrom(paragraph: Element): LyricLine? {
         val pieces = mutableListOf<Piece>()
-        collect(paragraph, pieces)
+        val backingPieces = mutableListOf<Piece>()
+        collect(paragraph, pieces, backingPieces)
         val words = mergeIntoWords(pieces)
+        val backing = mergeIntoWords(backingPieces).takeIf { it.isNotEmpty() }?.let {
+            LyricLine(
+                timeMs = it.first().startMs,
+                text = it.joinToString(" ") { word -> word.text },
+                words = it,
+            )
+        }
 
         if (words.isEmpty()) {
             // Line-synced TTML: a <p> with a stamp and bare text, no spans.
+            // textContent is the whole paragraph, backing vocal included, so
+            // there is nothing here to hang underneath — the bracket in the
+            // text is all the separation the document gave.
             val text = paragraph.textContent?.trim().orEmpty()
             val begin = time(paragraph.getAttribute("begin")) ?: return null
             if (text.isEmpty()) return null
@@ -80,6 +98,7 @@ object TtmlLyrics {
             timeMs = minOf(begin, words.first().startMs),
             text = words.joinToString(" ") { it.text },
             words = words,
+            background = backing,
         )
     }
 
@@ -88,19 +107,27 @@ object TtmlLyrics {
      * Nested spans (Apple wraps background vocals, and occasionally whole
      * phrases, in an outer timed span) recurse to their leaves, so only the
      * innermost timings — the ones actually per-syllable — survive.
+     *
+     * Spans marked [BACKGROUND_ROLE] and everything under them go to
+     * [backing] instead of [out], which is what keeps the two voices apart.
      */
-    private fun collect(node: Node, out: MutableList<Piece>) {
+    private fun collect(node: Node, out: MutableList<Piece>, backing: MutableList<Piece>) {
         val children = node.childNodes
         for (i in 0 until children.length) {
             when (val child = children.item(i)) {
                 is Element -> {
-                    if (child.getAttribute("ttm:role") in SKIPPED_ROLES) continue
+                    val role = child.getAttribute("ttm:role")
+                    if (role in SKIPPED_ROLES) continue
+                    // Inside a backing span every leaf is backing, so the sink
+                    // switches for the whole of that subtree — whether the
+                    // span holds its own syllables or is a single timed leaf.
+                    val sink = if (role == BACKGROUND_ROLE) backing else out
                     val begin = time(child.getAttribute("begin"))
                     val end = time(child.getAttribute("end"))
                     if (begin != null && end != null && !hasTimedChild(child)) {
-                        out += Piece.Timed(child.textContent.orEmpty(), begin, end)
+                        sink += Piece.Timed(child.textContent.orEmpty(), begin, end)
                     } else {
-                        collect(child, out)
+                        collect(child, sink, backing)
                     }
                 }
                 else -> if (child.nodeType == Node.TEXT_NODE) {

@@ -2,7 +2,9 @@ package com.velthy.client.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -33,11 +41,13 @@ import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
 import com.velthy.client.data.model.ShelfItem
 import com.velthy.client.data.model.UiState
-import com.velthy.client.ui.icons.VelthyIcons
+import com.velthy.client.ui.components.LIBRARY_GRID_SPACING
 import com.velthy.client.ui.components.MessageState
 import com.velthy.client.ui.components.PAGE_GUTTER
 import com.velthy.client.ui.components.PullToRefresh
+import com.velthy.client.ui.components.libraryGrid
 import com.velthy.client.ui.components.librarySkeleton
+import com.velthy.client.ui.icons.VelthyIcons
 import com.velthy.client.ui.player.MeshGradientBackground
 import com.velthy.client.ui.player.rememberArtworkColors
 import com.velthy.client.ui.replay.ReplayHeroCard
@@ -54,6 +64,7 @@ fun LibraryScreen(
     listState: LazyListState,
     onShelfItemClick: (ShelfItem) -> Unit,
     onShelfItemLongPress: (ShelfItem) -> Unit,
+    onShowAll: (HomeShelf) -> Unit,
     onNewPlaylist: () -> Unit,
     replayCard: ReplayHeroCard? = null,
     onOpenReplay: () -> Unit = {},
@@ -76,39 +87,40 @@ fun LibraryScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = contentPadding,
         ) {
-            // Replay leading banner
             item(key = "replay") { ReplayBanner(replayCard, onOpenReplay) }
 
             item(key = "shelf:$ON_DEVICE") {
-                Shelf(
-                    shelf = HomeShelf(
-                        title = ON_DEVICE,
-                        items = listOf(
-                            ShelfItem(
-                                title = "Downloads",
-                                subtitle = "Downloaded songs",
-                                thumbnailUrl = null,
-                                videoId = null,
-                                browseId = "local:downloads",
-                            ),
-                            ShelfItem(
-                                title = "Local Music",
-                                subtitle = "Audio files on device",
-                                thumbnailUrl = null,
-                                videoId = null,
-                                browseId = "local:all",
-                            ),
-                            ShelfItem(
-                                title = "History",
-                                subtitle = "Listening history",
-                                thumbnailUrl = null,
-                                videoId = null,
-                                browseId = "history",
-                            ),
+                val shelf = HomeShelf(
+                    title = ON_DEVICE,
+                    items = listOf(
+                        ShelfItem(
+                            title = "Downloads",
+                            subtitle = "Downloaded songs",
+                            thumbnailUrl = null,
+                            videoId = null,
+                            browseId = "local:downloads",
+                        ),
+                        ShelfItem(
+                            title = "Local Music",
+                            subtitle = "Audio files on device",
+                            thumbnailUrl = null,
+                            videoId = null,
+                            browseId = "local:all",
+                        ),
+                        ShelfItem(
+                            title = "History",
+                            subtitle = "Listening history",
+                            thumbnailUrl = null,
+                            videoId = null,
+                            browseId = "history",
                         ),
                     ),
+                )
+                LibraryGridShelf(
+                    shelf = shelf,
                     onItemClick = onShelfItemClick,
                     onItemLongPress = onShelfItemLongPress,
+                    onShowAll = { onShowAll(shelf) },
                 )
             }
             if (!signedIn) {
@@ -131,10 +143,12 @@ fun LibraryScreen(
                     val shelves = state.data.shelves
                     if (shelves.none { it.title == PLAYLISTS }) {
                         item(key = "shelf:$PLAYLISTS") {
+                            val shelf = HomeShelf(PLAYLISTS, emptyList())
                             PlaylistShelf(
-                                shelf = HomeShelf(PLAYLISTS, emptyList()),
+                                shelf = shelf,
                                 onItemClick = onShelfItemClick,
                                 onItemLongPress = onShelfItemLongPress,
+                                onShowAll = { onShowAll(shelf) },
                                 onNewPlaylist = onNewPlaylist,
                             )
                         }
@@ -146,13 +160,15 @@ fun LibraryScreen(
                                     shelf = shelf,
                                     onItemClick = onShelfItemClick,
                                     onItemLongPress = onShelfItemLongPress,
+                                    onShowAll = { onShowAll(shelf) },
                                     onNewPlaylist = onNewPlaylist,
                                 )
                             } else {
-                                Shelf(
+                                LibraryGridShelf(
                                     shelf = shelf,
                                     onItemClick = onShelfItemClick,
                                     onItemLongPress = onShelfItemLongPress,
+                                    onShowAll = { onShowAll(shelf) },
                                 )
                             }
                         }
@@ -229,22 +245,105 @@ private fun ReplayBanner(card: ReplayHeroCard?, onClick: () -> Unit) {
     }
 }
 
+private const val LIBRARY_ROW_MAX_ITEMS = 5
+
 /**
- * The one shelf on this page that can be written to: it leads with the tile
- * that creates a playlist, and holding a card gets rename and delete on top of
- * the queue actions every other shelf's menu offers.
+ * A Library shelf: capped at [LIBRARY_ROW_MAX_ITEMS] preview cards with a "Show all" button.
+ */
+@Composable
+internal fun LibraryGridShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: (ShelfItem) -> Unit,
+    onShowAll: () -> Unit,
+    leadingCard: (@Composable () -> Unit)? = null,
+) {
+    val leadingCount = if (leadingCard != null) 1 else 0
+    val visibleItems = shelf.items.take((LIBRARY_ROW_MAX_ITEMS - leadingCount).coerceAtLeast(0))
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeader(
+            title = shelf.title,
+            subtitle = shelf.subtitle,
+            onShowAll = onShowAll.takeIf { shelf.items.size + leadingCount > LIBRARY_ROW_MAX_ITEMS },
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+            horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING),
+        ) {
+            leadingCard?.let { card -> item(key = "leading") { card() } }
+            items(visibleItems) { item ->
+                ShelfCard(
+                    item = item,
+                    onClick = { onItemClick(item) },
+                    onLongPress = { onItemLongPress(item) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Everything a Library shelf's "Show all" opens onto — a responsive vertical grid layout.
+ */
+@Composable
+fun LibraryGridPage(
+    shelf: HomeShelf,
+    gridState: LazyGridState,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: (ShelfItem) -> Unit,
+    contentPadding: PaddingValues,
+    modifier: Modifier = Modifier,
+    onNewPlaylist: (() -> Unit)? = null,
+) {
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val grid = libraryGrid(maxWidth - PAGE_GUTTER * 2)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(grid.columns),
+            state = gridState,
+            contentPadding = contentPadding,
+            horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            modifier = Modifier.padding(horizontal = PAGE_GUTTER),
+        ) {
+            if (onNewPlaylist != null) {
+                item(key = "leading") {
+                    NewShelfCard(
+                        icon = VelthyIcons.Plus,
+                        label = "New playlist",
+                        subtitle = "Saved to YouTube Music",
+                        onClick = onNewPlaylist,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            items(shelf.items, key = { it.browseId ?: it.title }) { item ->
+                ShelfCard(
+                    item = item,
+                    onClick = { onItemClick(item) },
+                    onLongPress = { onItemLongPress(item) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The one shelf on this page that can be written to.
  */
 @Composable
 private fun PlaylistShelf(
     shelf: HomeShelf,
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: (ShelfItem) -> Unit,
+    onShowAll: () -> Unit,
     onNewPlaylist: () -> Unit,
 ) {
-    Shelf(
+    LibraryGridShelf(
         shelf = shelf,
         onItemClick = onItemClick,
         onItemLongPress = onItemLongPress,
+        onShowAll = onShowAll,
         leadingCard = {
             NewShelfCard(
                 icon = VelthyIcons.Plus,

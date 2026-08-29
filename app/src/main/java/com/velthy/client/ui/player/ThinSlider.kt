@@ -69,7 +69,6 @@ fun ThinSlider(
     markerColor: Color = Color.White.copy(alpha = 0.5f),
     /**
      * True while audio stream is buffering/loading in ExoPlayer.
-     * Displays Apple Music's flat, smooth sliding capsule across the hairline track.
      */
     isLoading: Boolean = false,
 ) {
@@ -89,7 +88,7 @@ fun ThinSlider(
             initialValue = 0f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1_150, easing = FastOutSlowInEasing),
+                animation = tween(durationMillis = 1_250, easing = FastOutSlowInEasing),
                 repeatMode = RepeatMode.Reverse,
             ),
             label = "loadingPhase",
@@ -98,9 +97,23 @@ fun ThinSlider(
         remember { mutableFloatStateOf(0f) }
     }
 
+    val streamPhase by if (isLoading) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_350, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "streamPhase",
+        )
+    } else {
+        remember { mutableFloatStateOf(0f) }
+    }
+
     val loadingAlpha by animateFloatAsState(
         targetValue = if (isLoading && !dragging) 1f else 0f,
-        animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
         label = "loadingAlpha",
     )
 
@@ -157,27 +170,76 @@ fun ThinSlider(
                 }
             }
 
-            // Normal filled progress bar (fades in smoothly as loading ends)
             val filled = size.width * value.coerceIn(0f, 1f)
+
+            // Smart Interactive Loading / Streaming Visualizer
+            if (loadingAlpha > 0.005f) {
+                if (filled <= size.height) {
+                    // Initial track loading: Apple Music full-track gliding luminous capsule
+                    val pillWidth = (size.width * 0.28f).coerceAtLeast(size.height * 2f)
+                    val travelDistance = (size.width - pillWidth).coerceAtLeast(0f)
+                    val startX = travelDistance * loadingPhase
+                    drawRoundRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                activeColor.copy(alpha = 0.25f * loadingAlpha),
+                                activeColor.copy(alpha = 0.95f * loadingAlpha),
+                                activeColor.copy(alpha = 0.25f * loadingAlpha),
+                            ),
+                            startX = startX,
+                            endX = startX + pillWidth,
+                        ),
+                        topLeft = Offset(startX, 0f),
+                        size = Size(pillWidth, size.height),
+                        cornerRadius = radius,
+                    )
+                } else {
+                    // Mid-track buffering: Smart forward data-stream wave on the unplayed track ahead
+                    val remainingWidth = (size.width - filled).coerceAtLeast(0f)
+                    if (remainingWidth > size.height) {
+                        val waveWidth = (remainingWidth * 0.5f).coerceAtLeast(size.height * 2f)
+                        val travel = remainingWidth + waveWidth
+                        val waveStart = filled - waveWidth + (travel * streamPhase)
+                        drawRoundRect(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.55f * loadingAlpha),
+                                    Color.Transparent,
+                                ),
+                                startX = waveStart,
+                                endX = waveStart + waveWidth,
+                            ),
+                            topLeft = Offset(filled, 0f),
+                            size = Size(remainingWidth, size.height),
+                            cornerRadius = radius,
+                        )
+                    }
+                }
+            }
+
+            // Normal filled progress bar (Solid, precise, and never jittering)
             if (filled > 0f) {
                 drawRoundRect(
-                    color = activeColor.copy(alpha = activeColor.alpha * (1f - loadingAlpha * 0.45f)),
+                    color = activeColor,
                     size = Size(filled.coerceAtLeast(size.height), size.height),
                     cornerRadius = radius,
                 )
-            }
-
-            // Apple Music flat continuous ping-pong loading pill
-            if (loadingAlpha > 0.01f) {
-                val pillWidth = (size.width * 0.28f).coerceAtLeast(size.height * 2f)
-                val travelDistance = (size.width - pillWidth).coerceAtLeast(0f)
-                val startX = travelDistance * loadingPhase
-                drawRoundRect(
-                    color = activeColor.copy(alpha = activeColor.alpha * loadingAlpha),
-                    topLeft = Offset(startX, 0f),
-                    size = Size(pillWidth, size.height),
-                    cornerRadius = radius,
-                )
+                // If loading mid-song, draw an active glowing halo at the playhead tip
+                if (loadingAlpha > 0.005f) {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.9f * loadingAlpha),
+                                Color.Transparent,
+                            ),
+                            center = Offset(filled, size.height / 2f),
+                            radius = size.height * 1.5f,
+                        ),
+                        radius = size.height * 1.5f,
+                        center = Offset(filled, size.height / 2f),
+                    )
+                }
             }
         }
 

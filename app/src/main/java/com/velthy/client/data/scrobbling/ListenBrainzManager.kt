@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.scrobbling
+package com.velthy.client.data.scrobbling
 
 import android.util.Log
 import com.velthy.client.data.model.Song
@@ -28,7 +28,7 @@ object ListenBrainzManager {
                 val durationPart = if (durationMs > 0) "\"duration_ms\":$durationMs," else ""
                 val releaseName = song.albumName.orEmpty()
                 val releasePart = if (releaseName.isBlank()) "" else "\"release_name\":\"${escapeJson(releaseName)}\","
-                val trackMetadata = """{"track_metadata":{"artist_name":"${escapeJson(song.artist)}","track_name":"${escapeJson(song.title)}",$releasePart"additional_info":{${durationPart}"position_ms":$positionMs,"submission_client":"Musique"}}}"""
+                val trackMetadata = """{"track_metadata":{"artist_name":"${escapeJson(song.artist)}","track_name":"${escapeJson(song.title)}",$releasePart"additional_info":{${durationPart}"position_ms":$positionMs,"submission_client":"Velthy"}}}"""
                 val bodyJson = "{\"listen_type\":\"playing_now\",\"payload\":[$trackMetadata]}"
                 Log.d(TAG, "submitPlayingNow: $bodyJson")
                 val body = bodyJson.toRequestBody("application/json".toMediaType())
@@ -76,7 +76,7 @@ object ListenBrainzManager {
                 if (listenedAtStart < MIN_LISTEN_TS) {
                     listenedAtStart = System.currentTimeMillis() / 1000L
                 }
-                val trackMetadata = """{"listened_at":$listenedAtStart,"track_metadata":{"artist_name":"${escapeJson(song.artist)}","track_name":"${escapeJson(song.title)}",$releasePart"additional_info":{${durationPart}"start_ms":$startMs,"end_ms":$endMs,"submission_client":"Musique"}}}"""
+                val trackMetadata = """{"listened_at":$listenedAtStart,"track_metadata":{"artist_name":"${escapeJson(song.artist)}","track_name":"${escapeJson(song.title)}",$releasePart"additional_info":{${durationPart}"start_ms":$startMs,"end_ms":$endMs,"submission_client":"Velthy"}}}"""
                 val bodyJson = "{\"listen_type\":\"single\",\"payload\":[$trackMetadata]}"
                 Log.d(TAG, "submitFinished: $bodyJson")
                 val body = bodyJson.toRequestBody("application/json".toMediaType())
@@ -112,6 +112,35 @@ object ListenBrainzManager {
         val minutes = parts[0].toLongOrNull() ?: return 0L
         val seconds = parts[1].toLongOrNull() ?: return 0L
         return (minutes * 60 + seconds) * 1000
+    }
+
+    suspend fun validateToken(token: String): Result<String> = withContext(Dispatchers.IO) {
+        if (token.isBlank()) return@withContext Result.failure(IllegalArgumentException("User token cannot be blank."))
+        try {
+            val request = Request.Builder()
+                .url("https://api.listenbrainz.org/1/validate-token")
+                .header("Authorization", "Token ${token.trim()}")
+                .get()
+                .build()
+
+            Http.client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val valid = body.contains("\"valid\": true") || body.contains("\"valid\":true")
+                    if (valid) {
+                        val username = Regex(""""user_name":\s*"([^"]+)"""").find(body)?.groupValues?.getOrNull(1) ?: "ListenBrainz User"
+                        Result.success(username)
+                    } else {
+                        val msg = Regex(""""message":\s*"([^"]+)"""").find(body)?.groupValues?.getOrNull(1) ?: "Invalid ListenBrainz token. Please check your token."
+                        Result.failure(Exception(msg))
+                    }
+                } else {
+                    Result.failure(Exception("Validation failed (HTTP ${resp.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     private fun escapeJson(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")

@@ -1,7 +1,8 @@
 package com.velthy.client.download
 
-import android.util.Log
+import com.velthy.client.data.DebugLog as Log
 import com.velthy.client.data.lyrics.LyricsRepository
+import com.velthy.client.data.lyrics.toEnhancedLrc
 import com.velthy.client.data.lyrics.toLrc
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.durationMillis
@@ -9,11 +10,16 @@ import com.velthy.client.data.settings.AppSettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * The lyrics to write into a track [Downloads] is about to save, as LRC text.
+ */
 internal object LyricsTag {
 
     private const val TAG = "VelthyLyricsTag"
 
-    suspend fun forTrack(track: Song): String? {
+    internal class Embeddable(val plain: String, val enhanced: String?)
+
+    suspend fun forTrack(track: Song): Embeddable? {
         val sources = if (AppSettings.syncedLyrics.value) {
             AppSettings.lyricsSources.value
         } else {
@@ -52,8 +58,16 @@ internal object LyricsTag {
             Log.w(TAG, "lyrics for ${track.videoId} are ${lrc.length} chars; not embedding")
             return null
         }
-        Log.d(TAG, "embedding ${found.source.label} lyrics for ${track.videoId}")
-        return lrc.takeIf { it.isNotBlank() }
+        if (lrc.isBlank()) return null
+        val enhanced = found.lines.toEnhancedLrc().takeIf {
+            it.isNotBlank() && it.length <= MAX_LRC_CHARS * 2
+        }
+        Log.d(
+            TAG,
+            "embedding ${found.source.label} lyrics for ${track.videoId}" +
+                if (enhanced != null) " (word-synced)" else "",
+        )
+        return Embeddable(plain = lrc, enhanced = enhanced)
     }
 
     private const val MAX_LRC_CHARS = 64_000

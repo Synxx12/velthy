@@ -129,19 +129,29 @@ jobs:
             echo "✅ Release keystore generated successfully."
           fi
 
-      - name: Setup Local Properties & Module Index
+      - name: Setup Local Properties & Secrets
         env:
           MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
         run: |
           MOD_URL="${MODULE_INDEX_URL:-https://monochrome.rickyaddons.dpdns.org/8spine-source.json}"
           echo "MODULE_INDEX_URL=${MOD_URL}" > local.properties
+          if [ -n "${LASTFM_API_KEY}" ]; then
+            echo "LASTFM_API_KEY=${LASTFM_API_KEY}" >> local.properties
+          fi
+          if [ -n "${LASTFM_SECRET}" ]; then
+            echo "LASTFM_SECRET=${LASTFM_SECRET}" >> local.properties
+          fi
           echo "MODULE_INDEX_URL=${MOD_URL}" >> $GITHUB_ENV
-          echo "✅ MODULE_INDEX_URL injected successfully: ${MOD_URL}"
+          echo "✅ Properties configured securely"
 
       # ── 6. BUILD PRODUCTION APK RELEASE ──
       - name: Build Android APK
         env:
           MODULE_INDEX_URL: ${{ env.MODULE_INDEX_URL }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
         run: |
           ./gradlew assembleProdRelease --stacktrace
           

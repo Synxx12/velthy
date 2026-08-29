@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
@@ -51,6 +52,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -419,6 +422,10 @@ private val LYRICS_LOADING_LINES = listOf(
 private const val LYRICS_UNAVAILABLE_HOLD_MS = 5_000L
 private const val LYRICS_UNAVAILABLE_FADE_MS = 900
 
+private val BACKING_FONT_SIZE = 19.sp
+private val BACKING_LINE_HEIGHT = 24.sp
+private const val BACKING_ALPHA = 0.72f
+
 /**
  * Apple Music's Now Playing, closely: artwork that shrinks when paused, a
  * hairline scrubber with elapsed / remaining either side, oversized transport
@@ -476,6 +483,8 @@ fun NowPlayingScreen(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val isCompactScreen = configuration.screenHeightDp < 740
 
     val syncedLyricsEnabled by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
@@ -877,8 +886,14 @@ fun NowPlayingScreen(
                         onDragCancel = { swipeOffset = 0f },
                         onDragEnd = {
                             when {
-                                total <= -swipeThreshold && hasNext -> onNext()
-                                total >= swipeThreshold && hasPrevious -> onPrevious()
+                                total <= -swipeThreshold && hasNext -> {
+                                    haptics.play(Haptic.SkipNext)
+                                    onNext()
+                                }
+                                total >= swipeThreshold && hasPrevious -> {
+                                    haptics.play(Haptic.SkipPrevious)
+                                    onPrevious()
+                                }
                             }
                             swipeOffset = 0f
                         },
@@ -1412,172 +1427,170 @@ fun NowPlayingScreen(
             Spacer(Modifier.height(14.dp))
 
             // ---- Transport ----
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TransportGlyph(
-                    icon = Icons.Rounded.FastRewind,
-                    contentDescription = "Previous",
-                    size = 46.dp,
-                    onClick = {
-                        haptics.play(Haptic.SkipPrevious)
-                        onPrevious()
-                    },
-                    // Lit whenever back has something to do — either a track to
-                    // step to, or enough elapsed for it to restart this one.
-                    enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
-                )
-                TransportGlyph(
-                    icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    size = 62.dp,
-                    onClick = {
-                        haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
-                        onPlayPause()
-                    },
-                )
-                TransportGlyph(
-                    icon = Icons.Rounded.FastForward,
-                    contentDescription = "Next",
-                    size = 46.dp,
-                    onClick = {
-                        haptics.play(Haptic.SkipNext)
-                        onNext()
-                    },
-                    enabled = hasNext,
-                )
-            }
-
-            // Hidden entirely rather than just faded out — with the setting
-            // on, the slider takes up no space at all, so the transport and
-            // the toggle row below it close the gap instead of leaving a
-            // blank strip where the volume bar used to be.
-            if (hideVolumeBar) {
-                Spacer(Modifier.height(24.dp))
-            } else {
-                Spacer(Modifier.height(18.dp))
-
-                // ---- Volume ----
                 Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.VolumeDown,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.5f),
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    ThinSlider(
-                        value = volume.value,
-                        onValueChange = {
-                            volumeDragging = true
-                            // Follow the finger exactly; only external changes tween.
-                            scope.launch { volume.snapTo(it) }
-                            audioManager?.setStreamVolume(
-                                AudioManager.STREAM_MUSIC,
-                                (it * maxVolume).roundToInt(),
-                                0,
-                            )
+                    TransportGlyph(
+                        icon = Icons.Rounded.FastRewind,
+                        contentDescription = "Previous",
+                        size = 46.dp,
+                        onClick = {
+                            haptics.play(Haptic.SkipPrevious)
+                            onPrevious()
                         },
-                        onValueChangeFinished = { volumeDragging = false },
-                        idleHeight = 6.dp,
-                        activeHeight = 10.dp,
-                        modifier = Modifier.weight(1f),
+                        // Lit whenever back has something to do — either a track to
+                        // step to, or enough elapsed for it to restart this one.
+                        enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
                     )
-                    Spacer(Modifier.width(10.dp))
-                    Icon(
-                        Icons.AutoMirrored.Rounded.VolumeUp,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.5f),
-                        modifier = Modifier.size(20.dp),
+                    TransportGlyph(
+                        icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        size = 62.dp,
+                        onClick = {
+                            haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
+                            onPlayPause()
+                        },
+                    )
+                    TransportGlyph(
+                        icon = Icons.Rounded.FastForward,
+                        contentDescription = "Next",
+                        size = 46.dp,
+                        onClick = {
+                            haptics.play(Haptic.SkipNext)
+                            onNext()
+                        },
+                        enabled = hasNext,
                     )
                 }
 
-                Spacer(Modifier.height(24.dp))
-            }
+                // Hide volume bar on setting or when queue is open on compact screens only
+                if (hideVolumeBar || (queueOpen && isCompactScreen)) {
+                    Spacer(Modifier.height(20.dp))
+                } else {
+                    Spacer(Modifier.height(16.dp))
 
-            // ---- Bottom: Lyrics · Sleep Timer · Audio Output Switcher · Queue ----
-            val sleepChosen by SleepTimer.minutes.collectAsStateWithLifecycle()
-            val sleepAfterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
-            val isSleepActive = sleepChosen != null || sleepAfterTrack
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // 1. Lyrics Button
-                BottomGlyph(
-                    icon = VelthyIcons.LyricsQuote,
-                    contentDescription = "Lyrics",
-                    onClick = {
-                        haptics.play(if (!lyricsOpen) Haptic.ToggleOn else Haptic.ToggleOff)
-                        queueOpen = false
-                        lyricsOpen = !lyricsOpen
-                    },
-                    highlighted = lyricsOpen,
-                )
-
-                // 2. Sleep Timer Button
-                val sleepBadge = remember(sleepRemaining, sleepAfterTrack, durationMs, positionMs) {
-                    val rem = sleepRemaining
-                    when {
-                        rem != null -> {
-                            if (rem >= 60_000L) {
-                                "${(rem + 59999L) / 60000L}m"
-                            } else {
-                                "${(rem / 1000L).coerceAtLeast(1)}s"
-                            }
-                        }
-                        sleepAfterTrack -> {
-                            val songRemainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-                            when {
-                                songRemainingMs >= 60_000L -> "${(songRemainingMs + 59999L) / 60000L}m"
-                                songRemainingMs > 0L -> "${(songRemainingMs / 1000L).coerceAtLeast(1)}s"
-                                else -> "End"
-                            }
-                        }
-                        else -> null
+                    // ---- Volume ----
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.VolumeDown,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        ThinSlider(
+                            value = volume.value,
+                            onValueChange = {
+                                volumeDragging = true
+                                // Follow the finger exactly; only external changes tween.
+                                scope.launch { volume.snapTo(it) }
+                                audioManager?.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    (it * maxVolume).roundToInt(),
+                                    0,
+                                )
+                            },
+                            onValueChangeFinished = { volumeDragging = false },
+                            idleHeight = 6.dp,
+                            activeHeight = 10.dp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Icon(
+                            Icons.AutoMirrored.Rounded.VolumeUp,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
+
+                    Spacer(Modifier.height(20.dp))
                 }
-                BottomGlyph(
-                    icon = VelthyIcons.Moon,
-                    contentDescription = "Sleep Timer",
-                    onClick = {
-                        haptics.play(Haptic.Tap)
-                        showSleepTimerSheet = true
-                    },
-                    highlighted = isSleepActive,
-                    badgeText = sleepBadge,
-                )
 
-                // 3. Audio Output Switcher Button
-                BottomGlyph(
-                    icon = activeDevice.icon,
-                    contentDescription = "Audio Output (${activeDevice.name})",
-                    onClick = {
-                        haptics.play(Haptic.Tap)
-                        showAudioOutputSheet = true
-                    },
-                    highlighted = activeDevice.isExternal,
-                    label = activeDevice.name,
-                )
+                // ---- Bottom: Lyrics · Sleep Timer · Audio Output Switcher · Queue ----
+                val sleepChosen by SleepTimer.minutes.collectAsStateWithLifecycle()
+                val sleepAfterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
+                val isSleepActive = sleepChosen != null || sleepAfterTrack
 
-                // 4. Queue Button
-                BottomGlyph(
-                    icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                    contentDescription = "Queue",
-                    onClick = {
-                        haptics.play(if (!queueOpen) Haptic.ToggleOn else Haptic.ToggleOff)
-                        lyricsOpen = false
-                        queueOpen = !queueOpen
-                    },
-                    highlighted = queueOpen,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 1. Lyrics Button
+                    BottomGlyph(
+                        icon = VelthyIcons.LyricsQuote,
+                        contentDescription = "Lyrics",
+                        onClick = {
+                            haptics.play(if (!lyricsOpen) Haptic.ToggleOn else Haptic.ToggleOff)
+                            queueOpen = false
+                            lyricsOpen = !lyricsOpen
+                        },
+                        highlighted = lyricsOpen,
+                    )
+
+                    // 2. Sleep Timer Button
+                    val sleepBadge = remember(sleepRemaining, sleepAfterTrack, durationMs, positionMs) {
+                        val rem = sleepRemaining
+                        when {
+                            rem != null -> {
+                                if (rem >= 60_000L) {
+                                    "${(rem + 59999L) / 60000L}m"
+                                } else {
+                                    "${(rem / 1000L).coerceAtLeast(1)}s"
+                                }
+                            }
+                            sleepAfterTrack -> {
+                                val songRemainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+                                when {
+                                    songRemainingMs >= 60_000L -> "${(songRemainingMs + 59999L) / 60000L}m"
+                                    songRemainingMs > 0L -> "${(songRemainingMs / 1000L).coerceAtLeast(1)}s"
+                                    else -> "End"
+                                }
+                            }
+                            else -> null
+                        }
+                    }
+                    BottomGlyph(
+                        icon = VelthyIcons.Moon,
+                        contentDescription = "Sleep Timer",
+                        onClick = {
+                            haptics.play(Haptic.Tap)
+                            showSleepTimerSheet = true
+                        },
+                        highlighted = isSleepActive,
+                        badgeText = sleepBadge,
+                    )
+
+                    // 3. Audio Output Switcher Button
+                    BottomGlyph(
+                        icon = activeDevice.icon,
+                        contentDescription = "Audio Output (${activeDevice.name})",
+                        onClick = {
+                            haptics.play(Haptic.Tap)
+                            showAudioOutputSheet = true
+                        },
+                        highlighted = activeDevice.isExternal,
+                        label = activeDevice.name,
+                    )
+
+                    // 4. Queue Button
+                    BottomGlyph(
+                        icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                        contentDescription = "Queue",
+                        onClick = {
+                            haptics.play(if (!queueOpen) Haptic.ToggleOn else Haptic.ToggleOff)
+                            lyricsOpen = false
+                            queueOpen = !queueOpen
+                        },
+                        highlighted = queueOpen,
+                    )
+                }
             }
 
             Spacer(Modifier.height(18.dp))
@@ -2088,7 +2101,6 @@ fun NowPlayingScreen(
         }
     }
 }
-}
 
 @Composable
 private fun CompactOptionRow(
@@ -2463,6 +2475,22 @@ private fun LyricsPanel(
     val activeLine by remember(lines) {
         derivedStateOf { lines.indexOfLast { it.timeMs <= clock.longValue } }
     }
+    // A background vocal routinely holds past the *next* line's own stamp —
+    // that's the whole reason it's carried apart, see [LyricLine.background].
+    // Taken on [activeLine] alone, the row above dropped out of its active
+    // treatment the instant the next line's stamp passed, so its sweep lost
+    // the glow and full brightness mid-bracket while the words were still
+    // being sung. This is the one line behind [activeLine] kept active
+    // alongside it for as long as its own end — background included — hasn't
+    // arrived yet, so the two rows animate together instead of the first
+    // being cut off under the second.
+    val alsoActive by remember(lines) {
+        derivedStateOf {
+            val previous = activeLine - 1
+            val line = lines.getOrNull(previous)
+            if (line != null && line.hasKnownEnd && clock.longValue < line.endMs) previous else -1
+        }
+    }
     val listState = rememberLazyListState()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
     var browsing by remember { mutableStateOf(false) }
@@ -2579,13 +2607,16 @@ private fun LyricsPanel(
             items = lines,
             key = { index, line -> "${line.timeMs}_$index" },
         ) { index, line ->
-            val distance = if (activeLine < 0) 0 else abs(index - activeLine)
-            val isActive = index == activeLine
-            // Unbounded, and ahead of the clip: the default edge treatment cuts
-            // the blur off at the line's own box, which put a hard edge down
-            // either side of every out-of-focus line where the halo should have
-            // faded out. The list bleeds a gutter wider than its content
-            // padding, so there is room for the spill.
+            // Signed rather than absolute: a line already sung and one still to
+            // come are not the same distance from being read, even at the same
+            // number of rows away, so the two fade at different rates below.
+            val offset = if (activeLine < 0) 0 else index - activeLine
+            val distance = abs(offset)
+            val isActive = index == activeLine || index == alsoActive
+            // Lines already sung stay close to legible — they're what the eye
+            // just read and glances back to. Lines still to come fade faster
+            // and further, so the panel reads as an arrival rather than a wall
+            // of equally-weighted text.
             val blur by animateDpAsState(
                 targetValue = when {
                     reduceDynamicBlur || browsing || isActive -> 0.dp
@@ -2597,7 +2628,8 @@ private fun LyricsPanel(
                 targetValue = when {
                     browsing -> 1f
                     isActive -> 1f
-                    else -> (0.5f - distance * 0.06f).coerceAtLeast(0.22f)
+                    offset < 0 -> (0.55f - distance * 0.05f).coerceAtLeast(0.30f)
+                    else -> (0.45f - distance * 0.09f).coerceAtLeast(0.12f)
                 },
                 label = "lyricAlpha",
             )
@@ -2650,43 +2682,84 @@ private fun LyricsPanel(
                     .then(if (blur > 0.dp && !reduceDynamicBlur) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
                     .clip(RoundedCornerShape(10.dp))
                     .clickable { onSeekToLine(line.timeMs) }
-                if (line.isWordSynced && !browsing) {
-                    // Every word-synced line goes through the sweep, not just
-                    // the playing one — a line that has already been sung is
-                    // fully revealed and one still to come is not, which falls
-                    // out of the same arithmetic.
-                    //
-                    // Running it only on the active line meant swapping this
-                    // composable for a plain Text the instant a line handed
-                    // over, and the two disagreed about the brightness of the
-                    // words: the tail of the line popped up to meet the rest of
-                    // it in a single frame. Animating the tail instead lets a
-                    // finished line close up as it dims away.
-                    val tail by animateFloatAsState(
-                        targetValue = if (isActive) UNSUNG_ALPHA else 1f,
-                        label = "lyricTail",
-                    )
-                    SweptLyricLine(
+                Column(modifier = shape) {
+                    PanelVoice(
                         line = line,
                         clock = clock,
                         style = style,
-                        dimAlpha = tail,
-                        modifier = shape,
+                        isActive = isActive,
+                        browsing = browsing,
                         glowAlpha = glow,
-                        glowRoom = GLOW_ROOM,
+                        room = GLOW_ROOM,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                } else {
-                    Text(
-                        text = line.text,
-                        style = style,
-                        color = Color.White,
-                        modifier = shape.padding(GLOW_ROOM),
-                    )
+                    line.background?.let { backing ->
+                        PanelVoice(
+                            line = backing.withoutBracketPunctuation(),
+                            clock = clock,
+                            style = style.copy(
+                                fontSize = BACKING_FONT_SIZE,
+                                lineHeight = BACKING_LINE_HEIGHT,
+                            ),
+                            isActive = isActive,
+                            browsing = browsing,
+                            glowAlpha = 0f,
+                            room = 0.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = GLOW_ROOM, end = GLOW_ROOM, bottom = GLOW_ROOM)
+                                .graphicsLayer { alpha = BACKING_ALPHA },
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun PanelVoice(
+    line: LyricLine,
+    clock: MutableLongState,
+    style: TextStyle,
+    isActive: Boolean,
+    browsing: Boolean,
+    glowAlpha: Float,
+    room: Dp,
+    modifier: Modifier = Modifier,
+) {
+    if (line.isWordSynced && !browsing) {
+        val tail by animateFloatAsState(
+            targetValue = if (isActive) UNSUNG_ALPHA else 1f,
+            label = "lyricTail",
+        )
+        SweptLyricLine(
+            line = line,
+            clock = clock,
+            style = style,
+            dimAlpha = tail,
+            modifier = modifier,
+            glowAlpha = glowAlpha,
+            glowRoom = room,
+        )
+    } else {
+        Text(
+            text = line.text,
+            style = style,
+            color = Color.White,
+            modifier = modifier.padding(room),
+        )
+    }
+}
+
+private fun LyricLine.withoutBracketPunctuation(): LyricLine = copy(
+    text = text.stripParens(),
+    words = words.mapNotNull { word ->
+        word.text.stripParens().takeIf { it.isNotEmpty() }?.let { word.copy(text = it) }
+    },
+)
+
+private fun String.stripParens(): String = replace("(", "").replace(")", "").trim()
 
 
 /**
@@ -3139,21 +3212,21 @@ private fun InlineQueue(
     )
 
     Column(modifier.fillMaxWidth()) {
-        // Capsule Pill Buttons: Shuffle · Repeat · AutoPlay · Clear
+        // Capsule Pill Buttons: Shuffle · Repeat · AutoPlay · Clear (Compact)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Shuffle Pill
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(if (shuffleEnabled) Color.White.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
                     .clickable(onClick = onToggleShuffle)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3161,12 +3234,12 @@ private fun InlineQueue(
                         imageVector = VelthyIcons.Shuffle,
                         contentDescription = "Shuffle",
                         tint = if (shuffleEnabled) Color.White else Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(13.dp),
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(4.dp))
                     Text(
                         text = "Shuffle",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
                         color = if (shuffleEnabled) Color.White else Color.White.copy(alpha = 0.7f),
                     )
                 }
@@ -3176,10 +3249,10 @@ private fun InlineQueue(
             val isRepeatOn = repeatMode != Player.REPEAT_MODE_OFF
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(if (isRepeatOn) Color.White.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
                     .clickable(onClick = onCycleRepeat)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3187,12 +3260,12 @@ private fun InlineQueue(
                         imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) VelthyIcons.RepeatOne else VelthyIcons.Repeat,
                         contentDescription = "Repeat",
                         tint = if (isRepeatOn) Color.White else Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(13.dp),
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(4.dp))
                     Text(
                         text = if (repeatMode == Player.REPEAT_MODE_ONE) "One" else "Repeat",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
                         color = if (isRepeatOn) Color.White else Color.White.copy(alpha = 0.7f),
                     )
                 }
@@ -3201,10 +3274,10 @@ private fun InlineQueue(
             // AutoPlay Pill
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(if (autoplayEnabled) Color.White.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
                     .clickable(onClick = onToggleAutoplay)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3212,12 +3285,12 @@ private fun InlineQueue(
                         imageVector = VelthyIcons.Infinity,
                         contentDescription = "AutoPlay",
                         tint = if (autoplayEnabled) Color.White else Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(13.dp),
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(4.dp))
                     Text(
                         text = "AutoPlay",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
                         color = if (autoplayEnabled) Color.White else Color.White.copy(alpha = 0.7f),
                     )
                 }
@@ -3228,15 +3301,15 @@ private fun InlineQueue(
             // Clear Pill
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(Color.White.copy(alpha = 0.10f))
                     .clickable(onClick = onClear)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = "Clear",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
                     color = Color.White.copy(alpha = 0.75f),
                 )
             }

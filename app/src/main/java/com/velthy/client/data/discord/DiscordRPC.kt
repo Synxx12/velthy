@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.discord
+package com.velthy.client.data.discord
 
 import android.content.Context
 import com.velthy.client.R
@@ -105,12 +105,18 @@ class DiscordRPC(
 
         val name = activityName.ifEmpty { appName() }
 
+        val artworkUrl = if (song.videoId.isNotEmpty() && !song.videoId.startsWith("local:")) {
+            "https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg"
+        } else {
+            song.artworkAt(ART_PX)
+        }
+
         setActivity(
             name = name,
             details = songTitleWithRate,
             state = song.artist,
             detailsUrl = watchUrl(song),
-            largeImage = song.artworkAt(ART_PX)?.let { RpcImage.ExternalImage(it) },
+            largeImage = artworkUrl?.let { RpcImage.ExternalImage(it) },
             smallImage = null,
             largeText = song.albumName,
             smallText = null,
