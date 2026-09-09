@@ -6,6 +6,8 @@ import com.velthy.client.data.model.BrowseItem
 import com.velthy.client.data.model.BrowseType
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LikeStatus
+import com.velthy.client.data.model.MoodGenre
+import com.velthy.client.data.model.MoodGenreSection
 import com.velthy.client.data.model.SearchResult
 import com.velthy.client.data.model.ShelfItem
 import com.velthy.client.data.model.Song
@@ -135,6 +137,34 @@ object InnertubeParser {
             section.o("musicCarouselShelfRenderer")?.let(::carouselShelf)
                 ?: section.o("musicShelfRenderer")?.let(::plainShelf)
                 ?: section.o("gridRenderer")?.let(::gridShelf)
+        }
+    }
+
+    /**
+     * The mood & genre buttons of the Explore page — the same server sections
+     * BitChord's Explore shows: a headed grid of labelled navigation buttons
+     * per mood/genre group. Each button becomes a [ShelfItem] whose browseId
+     * opens that exact mood or genre.
+     */
+    fun parseMoodAndGenres(response: JsonObject): List<MoodGenreSection> {
+        val sections = response.o("contents")
+            .o("singleColumnBrowseResultsRenderer").a("tabs")?.firstOrNull()
+            .o("tabRenderer").o("content").o("sectionListRenderer").a("contents")
+            .orEmpty()
+        return sections.mapNotNull { section ->
+            val grid = section.o("gridRenderer") ?: return@mapNotNull null
+            val title = grid.o("header").o("gridHeaderRenderer").o("title").runs()
+            val items = grid.a("items").orEmpty().mapNotNull { item ->
+                val button = item.o("musicNavigationButtonRenderer") ?: return@mapNotNull null
+                val endpoint = button.o("clickCommand").o("browseEndpoint")
+                    ?: button.o("navigationEndpoint").o("browseEndpoint")
+                    ?: return@mapNotNull null
+                val browseId = endpoint.s("browseId") ?: return@mapNotNull null
+                val label = button.o("buttonText").runs().takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                MoodGenre(label, browseId, endpoint.s("params"))
+            }
+            if (title.isBlank() || items.isEmpty()) null else MoodGenreSection(title, items)
         }
     }
 

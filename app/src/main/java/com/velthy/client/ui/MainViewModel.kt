@@ -19,6 +19,7 @@ import com.velthy.client.data.model.HistorySection
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
 import com.velthy.client.data.model.LikeStatus
+import com.velthy.client.data.model.MoodGenreSection
 import com.velthy.client.data.model.PlaylistPrivacy
 import com.velthy.client.data.model.SearchFilter
 import com.velthy.client.data.model.SearchResult
@@ -28,8 +29,14 @@ import com.velthy.client.data.model.UiState
 import com.velthy.client.data.model.UserPlaylist
 import com.velthy.client.data.settings.SearchHistory
 import android.util.LruCache
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,8 +75,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _homeLoadingMore = MutableStateFlow(false)
     val homeLoadingMore: StateFlow<Boolean> = _homeLoadingMore.asStateFlow()
 
-    private val _explore = MutableStateFlow<UiState<List<HomeShelf>>>(UiState.Loading)
-    val explore: StateFlow<UiState<List<HomeShelf>>> = _explore.asStateFlow()
+    private val _explore = MutableStateFlow<UiState<List<MoodGenreSection>>>(UiState.Loading)
+    val explore: StateFlow<UiState<List<MoodGenreSection>>> = _explore.asStateFlow()
+
+    private val _moodShelves = MutableStateFlow<UiState<List<HomeShelf>>>(UiState.Loading)
+    val moodShelves: StateFlow<UiState<List<HomeShelf>>> = _moodShelves.asStateFlow()
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
@@ -452,6 +462,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun toggleLibrary(browseId: String) {
+        if (!requireSignIn()) return
+        val current = _detailStack.value.firstOrNull { it.browseId == browseId }?.library ?: return
+        val target = !current.saved
+        setSavedOnPage(browseId, target)
+        viewModelScope.launch {
+            if (YtMusicRepository.setSaved(current.playlistId, target).isSuccess) {
+                libraryStale = true
+            } else {
+                setSavedOnPage(browseId, current.saved)
+            }
+        }
+    }
+
+    private fun setSavedOnPage(browseId: String, saved: Boolean) {
+        _detailStack.value = _detailStack.value.map { page ->
+            val library = page.library
+            if (page.browseId != browseId || library == null) {
+                page
+            } else {
+                page.copy(library = library.copy(saved = saved))
+            }
+        }
+    }
+
     /**
      * Creates a playlist, seeded with [song] when the flow started from a
      * track's menu — one request, so it can't half-succeed into an empty
@@ -736,13 +771,55 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun fetchExplore() {
-        _explore.value = YtMusicRepository.explore().fold(
-            onSuccess = { shelves ->
-                if (shelves.isEmpty()) UiState.Error("Nothing to explore right now")
-                else UiState.Success(shelves)
-            },
-            onFailure = { UiState.Error(it.friendly()) },
-        )
+        val sections = YtMusicRepository.moodAndGenres().getOrNull()
+        if (sections.isNullOrEmpty()) {
+            _explore.value = UiState.Error("Nothing to explore right now")
+            return
+        }
+        // Show the grid immediately; only fetch covers for moods that still
+        // need one, capped to a few at a time so the tab never hammers the
+        // network all at once.
+        _explore.value = UiState.Success(sections)
+        val missing = sections.flatMap { it.items }.filter { it.thumbnailUrl == null }
+        if (missing.isEmpty()) return
+        viewModelScope.launch {
+            val gate = Semaphore(4)
+            val covers = coroutineScope {
+                missing
+                    .map { mood ->
+                        async(Dispatchers.IO) {
+                            gate.withPermit {
+                                mood to YtMusicRepository.moodGenreArtwork(mood.browseId, mood.params).getOrNull()
+                            }
+                        }
+                    }
+                    .map { it.await() }
+                    .toMap()
+            }
+            val enriched = sections.map { section ->
+                section.copy(
+                    items = section.items.map { mood ->
+                        val cover = covers[mood]
+                        if (cover != null && mood.thumbnailUrl == null) mood.copy(thumbnailUrl = cover) else mood
+                    },
+                )
+            }
+            _explore.value = UiState.Success(enriched)
+        }
+    }
+
+    /** Loads the playlist shelves of one mood/genre category for its page. */
+    fun loadMoodGenreShelves(browseId: String, params: String?) {
+        _moodShelves.value = UiState.Loading
+        viewModelScope.launch {
+            _moodShelves.value = YtMusicRepository.moodGenreShelves(browseId, params).fold(
+                onSuccess = { shelves ->
+                    if (shelves.isEmpty()) UiState.Error("Nothing here yet")
+                    else UiState.Success(shelves)
+                },
+                onFailure = { UiState.Error(it.friendly()) },
+            )
+        }
     }
 
     /** Tapping a tab should leave any pushed page behind. */
@@ -828,19 +905,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Recent searches, kept on device. */
+    
+    private val _suggestions = MutableStateFlow<List<String>>(emptyList())
+    val searchSuggestions: StateFlow<List<String>> = _suggestions.asStateFlow()
+
     val searchHistory: StateFlow<List<String>> = SearchHistory.recent
+
+    private var liveSearchJob: Job? = null
 
     fun onQueryChange(value: String) {
         _query.value = value
-        runSearch()
+        _suggestions.value = emptyList()
+        if (value.isBlank()) {
+            liveSearchJob?.cancel()
+            newestRequestId.incrementAndGet()
+            _results.value = null
+            return
+        }
+        liveSearchJob?.cancel()
+        liveSearchJob = viewModelScope.launch {
+            delay(250)
+            runSearch()
+        }
     }
 
-    /**
-     * Commits the current query to the history. Called when the user acts on
-     * what they found — submitting from the keyboard, or opening a result —
-     * rather than on every keystroke, which would fill the list with the
-     * prefixes typed on the way to the real query.
-     */
     fun recordSearch() = SearchHistory.record(_query.value)
 
     fun submitSearch() {

@@ -65,7 +65,7 @@ enum class DownloadLocation(
     val detail: String,
 ) {
     APP_INTERNAL("App Internal (Secure)", "Saved securely in app private directory."),
-    PHONE_MUSIC("Phone Music Folder (/Music/Musique)", "Visible in File Manager & native phone music apps."),
+    PHONE_MUSIC("Phone Music Folder (/Music/Velthy)", "Visible in File Manager & native phone music apps."),
     DOWNLOADS("Downloads Folder (/Download/Velthy)", "Saved in device public downloads folder."),
 }
 
@@ -85,6 +85,13 @@ enum class DownloadFolderStructure(
  * same flows and applies changes to the live ExoPlayer instance immediately —
  * no restart, no rebinding.
  */
+/** How a Library playlist "Show all" page orders its cards. */
+enum class LibrarySort(val label: String) {
+    DEFAULT("Default order"),
+    TITLE_ASC("Alphabetical (A to Z)"),
+    TITLE_DESC("Alphabetical (Z to A)"),
+}
+
 object AppSettings {
 
     private lateinit var prefs: SharedPreferences
@@ -173,6 +180,29 @@ object AppSettings {
     val hideVolumeBar = MutableStateFlow(false)
 
     /** Swiping a song row plays it next instead of adding it to the end of the queue. */
+    
+    val dontRepeatSuggestions = MutableStateFlow(false)
+    fun setDontRepeatSuggestions(enabled: Boolean) {
+        dontRepeatSuggestions.value = enabled
+        prefs.edit().putBoolean("dont_repeat_suggestions", enabled).apply()
+    }
+
+    
+    val pinnedPlaylists = MutableStateFlow<List<String>>(emptyList())
+    fun pinPlaylist(browseId: String) {
+        val current = pinnedPlaylists.value
+        if (browseId !in current) {
+            val updated = current + browseId
+            pinnedPlaylists.value = updated
+            prefs.edit().putStringSet("pinned_playlists", updated.toSet()).apply()
+        }
+    }
+    fun unpinPlaylist(browseId: String) {
+        val updated = pinnedPlaylists.value - browseId
+        pinnedPlaylists.value = updated
+        prefs.edit().putStringSet("pinned_playlists", updated.toSet()).apply()
+    }
+
     val swipeToPlayNext = MutableStateFlow(false)
 
     /**
@@ -183,6 +213,9 @@ object AppSettings {
 
     /** Drops haze blur (status bar, mini player, bottom fade, lyrics focus) for a solid-fill look. */
     val reduceDynamicBlur = MutableStateFlow(false)
+
+    /** Order of a Library playlist's "Show all" page. */
+    val librarySort = MutableStateFlow(LibrarySort.DEFAULT)
 
     /** Vibrate on button taps, player gestures, and tab switches. */
     val hapticFeedback = MutableStateFlow(true)
@@ -196,6 +229,13 @@ object AppSettings {
      * but it is the better default, and most tracks resolve to no canvas at
      * all. See [CanvasRepository][com.velthy.client.data.canvas.CanvasRepository].
      */
+    
+    val spotifySpdcToken = MutableStateFlow<String?>(null)
+    fun setSpotifySpdcToken(token: String?) {
+        spotifySpdcToken.value = token
+        prefs.edit().putString("spotify_spdc_token", token).apply()
+    }
+
     val animatedCanvas = MutableStateFlow(true)
     val canvasOverCellular = MutableStateFlow(false)
     val downloadQuality = MutableStateFlow(DownloadQuality.LOSSLESS)
@@ -224,7 +264,6 @@ object AppSettings {
     val lyricsSources = MutableStateFlow(LyricsSource.entries.toSet())
 
     /** Disk budget for cached audio. [AudioCache][com.velthy.client.playback.AudioCache] evicts past it. */
-    val shareLiveStats = MutableStateFlow(true)
     val accountMoreContent = MutableStateFlow(false)
     val accountAutoSync = MutableStateFlow(true)
     val accountForceSyncOnSwitch = MutableStateFlow(true)
@@ -363,15 +402,20 @@ object AppSettings {
         reduceAnimation.value = prefs.getBoolean(KEY_REDUCE_ANIMATION, false)
         stopOnTaskRemoved.value = prefs.getBoolean(KEY_STOP_ON_TASK_REMOVED, true)
         hideVolumeBar.value = prefs.getBoolean(KEY_HIDE_VOLUME_BAR, false)
+        dontRepeatSuggestions.value = prefs.getBoolean("dont_repeat_suggestions", false)
+        pinnedPlaylists.value = prefs.getStringSet("pinned_playlists", emptySet())?.toList().orEmpty()
         swipeToPlayNext.value = prefs.getBoolean(KEY_SWIPE_TO_PLAY_NEXT, false)
         convertVideoToAudio.value = prefs.getBoolean(KEY_CONVERT_VIDEO_TO_AUDIO, true)
         reduceDynamicBlur.value = prefs.getBoolean(KEY_REDUCE_BLUR, false)
+        librarySort.value = runCatching {
+            LibrarySort.valueOf(prefs.getString(KEY_LIBRARY_SORT, null) ?: "")
+        }.getOrDefault(LibrarySort.DEFAULT)
         hapticFeedback.value = prefs.getBoolean(KEY_HAPTIC_FEEDBACK, true)
+        spotifySpdcToken.value = prefs.getString("spotify_spdc_token", null)
         animatedCanvas.value = prefs.getBoolean(KEY_ANIMATED_CANVAS, true)
         fullBleedArtwork.value = prefs.getBoolean(KEY_FULL_BLEED_ARTWORK, true)
         syncedLyrics.value = prefs.getBoolean(KEY_SYNCED_LYRICS, true)
         lyricsSources.value = readLyricsSources()
-        shareLiveStats.value = prefs.getBoolean(KEY_SHARE_LIVE_STATS, true)
         accountMoreContent.value = prefs.getBoolean(KEY_ACCOUNT_MORE_CONTENT, false)
         accountAutoSync.value = prefs.getBoolean(KEY_ACCOUNT_AUTO_SYNC, true)
         accountForceSyncOnSwitch.value = prefs.getBoolean(KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH, true)
@@ -646,6 +690,11 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_REDUCE_BLUR, value).apply()
     }
 
+    fun setLibrarySort(value: LibrarySort) {
+        librarySort.value = value
+        prefs.edit().putString(KEY_LIBRARY_SORT, value.name).apply()
+    }
+
     fun setHapticFeedback(value: Boolean) {
         hapticFeedback.value = value
         prefs.edit().putBoolean(KEY_HAPTIC_FEEDBACK, value).apply()
@@ -684,12 +733,6 @@ object AppSettings {
     fun setAnimatedCanvas(value: Boolean) {
         animatedCanvas.value = value
         prefs.edit().putBoolean(KEY_ANIMATED_CANVAS, value).apply()
-    }
-
-    /** Clamped to [DEFAULT_CACHE_LIMIT_BYTES]..[MAX_CACHE_LIMIT_BYTES] — the floor is the default, not zero. */
-    fun setShareLiveStats(value: Boolean) {
-        shareLiveStats.value = value
-        prefs.edit().putBoolean(KEY_SHARE_LIVE_STATS, value).apply()
     }
 
     fun setAccountMoreContent(value: Boolean) {
@@ -895,7 +938,6 @@ object AppSettings {
     private const val KEY_SYNCED_LYRICS = "synced_lyrics"
     private const val KEY_LYRICS_SOURCES = "lyrics_sources"
 
-    private const val KEY_SHARE_LIVE_STATS = "share_live_stats"
     private const val KEY_ACCOUNT_MORE_CONTENT = "account_more_content"
     private const val KEY_ACCOUNT_AUTO_SYNC = "account_auto_sync"
     private const val KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH = "account_force_sync_on_switch"
@@ -905,6 +947,7 @@ object AppSettings {
     private const val KEY_LASTFM_API_KEY = "lastfm_api_key"
     private const val KEY_LASTFM_SECRET = "lastfm_secret"
     private const val KEY_LASTFM_ENDPOINT = "lastfm_endpoint"
+    private const val KEY_LIBRARY_SORT = "library_sort"
     private const val KEY_LASTFM_SCROBBLE_ENABLED = "lastfm_scrobble_enabled"
     private const val KEY_LASTFM_NOW_PLAYING = "lastfm_now_playing"
     private const val KEY_SCROBBLE_MIN_DURATION = "scrobble_min_duration"

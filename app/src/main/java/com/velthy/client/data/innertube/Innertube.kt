@@ -489,6 +489,20 @@ object Innertube {
      * refused write with HTTP 200 and an `error` object in the body, so the
      * status line alone will happily report a rating that never happened.
      */
+    
+    suspend fun ratePlaylist(playlistId: String, saved: Boolean) {
+        requireSession()
+        val endpoint = if (saved) "like/like" else "like/removelike"
+        val response = postMusic(endpoint) {
+            putJsonObject("target") { put("playlistId", playlistId) }
+        }
+        response["error"]?.let { error ->
+            val message = error.jsonObject["message"]?.jsonPrimitive?.contentOrNull
+            error("YouTube Music refused the change: ${message ?: error}")
+        }
+        Log.d(TAG, "$endpoint $playlistId -> ${findString(response, "text") ?: "no confirmation"}")
+    }
+
     suspend fun rate(videoId: String, status: LikeStatus) {
         requireSession()
         val endpoint = when (status) {

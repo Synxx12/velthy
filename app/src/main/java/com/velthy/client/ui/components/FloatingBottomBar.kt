@@ -56,7 +56,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
 import dev.chrisbanes.haze.HazeState
@@ -88,7 +87,7 @@ fun FloatingBottomBar(
 ) {
     val container = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
     val fallbackContainer = MaterialTheme.colorScheme.surface
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val canBlur = rememberCanBlur()
     val haptics = rememberHaptics()
     val density = LocalDensity.current
 
@@ -219,7 +218,7 @@ fun FloatingBottomBar(
                     .fillMaxHeight()
                     .clip(capsuleShape)
                     .then(
-                        if (reduceDynamicBlur) {
+                        if (!canBlur) {
                             Modifier.background(fallbackContainer)
                         } else {
                             Modifier.hazeEffect(
@@ -239,7 +238,7 @@ fun FloatingBottomBar(
                         .size(barHeight)
                         .clip(circleShape)
                         .then(
-                            if (reduceDynamicBlur) {
+                            if (!canBlur) {
                                 Modifier.background(fallbackContainer)
                             } else {
                                 Modifier.hazeEffect(

@@ -147,6 +147,21 @@ data class HomeFeed(
     val continuation: String?,
 )
 
+/** One server-defined group of the buttons shown on Explore. */
+data class MoodGenreSection(
+    val title: String,
+    val items: List<MoodGenre>,
+)
+
+/** A mood or genre button and the exact browse request that it represents. */
+data class MoodGenre(
+    val title: String,
+    val browseId: String,
+    val params: String?,
+    /** First real cover from the category's playlist shelves, loaded in the background. */
+    val thumbnailUrl: String? = null,
+)
+
 /**
  * The signed-in library, as YouTube Music splits it: the auto-generated Liked
  * Music playlist, the tracks explicitly added to the library, and a shelf per
@@ -162,6 +177,12 @@ data class LibraryPage(
 }
 
 /** A browsed album / artist / playlist page. */
+
+data class LibraryState(
+    val playlistId: String,
+    val saved: Boolean,
+)
+
 data class DetailPage(
     val browseId: String,
     val title: String,
@@ -178,6 +199,10 @@ data class DetailPage(
      * than folded into [songs] where they'd read as the user's own picks.
      */
     val suggestedSongs: List<Song> = emptyList(),
+    val library: LibraryState? = null,
+    val description: String? = null,
+    val subscriberCountText: String? = null,
+    val monthlyListenerCount: String? = null,
 )
 
 /** Parsed artist landing page. */
@@ -190,6 +215,9 @@ data class ArtistPage(
     val thumbnailUrl: String? = null,
     /** The single artist this page is for, as the header bills them. */
     val name: String? = null,
+    val description: String? = null,
+    val subscriberCountText: String? = null,
+    val monthlyListenerCount: String? = null,
 )
 
 /**

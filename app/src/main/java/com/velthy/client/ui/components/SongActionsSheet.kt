@@ -1,6 +1,5 @@
 package com.velthy.client.ui.components
 
-import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
@@ -281,19 +280,6 @@ fun SongActionsSheet(
             }
         }
         if (!isOffline) {
-            val context = LocalContext.current
-            ActionRow(
-                icon = Icons.Rounded.Cloud,
-                label = "Web Live Tracker",
-                value = "velthy.my.id",
-                accent = palette.accent,
-                onClick = {
-                    runCatching {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://velthy.my.id/stats"))
-                        context.startActivity(intent)
-                    }
-                },
-            )
             onShare?.let {
                 ActionRow(Icons.Rounded.Share, "Share", accent = palette.accent, onClick = it)
             }

@@ -20,7 +20,12 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -421,6 +426,9 @@ private val LYRICS_LOADING_LINES = listOf(
 
 private const val LYRICS_UNAVAILABLE_HOLD_MS = 5_000L
 private const val LYRICS_UNAVAILABLE_FADE_MS = 900
+// How long the transport block stays hidden once a queue/lyrics scroll rests,
+// so a short pause mid-browse doesn't flash the controls in and out.
+private const val PANEL_REST_MS = 900L
 
 private val BACKING_FONT_SIZE = 19.sp
 private val BACKING_LINE_HEIGHT = 24.sp
@@ -479,6 +487,11 @@ fun NowPlayingScreen(
     lyrics: List<LyricLine>?,
     lyricsSource: LyricsSource?,
     lyricsUnavailable: Boolean,
+    /** Fired as the player is pulled down from the top strip, with the current
+     *  expanded fraction (1 = fully open, 0 = collapsed). */
+    onPull: (Float) -> Unit = {},
+    /** Fired when the pull gesture ends; the host decides whether to snap. */
+    onPullEnd: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -545,6 +558,16 @@ fun NowPlayingScreen(
     var lyricsOpen by remember { mutableStateOf(false) }
     var showSleepTimerSheet by remember { mutableStateOf(false) }
     var showAudioOutputSheet by remember { mutableStateOf(false) }
+    // Apple-style: while the queue or lyrics list is being scrolled the whole
+    // transport block ducks out of the way so the content gets the screen,
+    // then slides back on its own once the list rests. Raised by the lists
+    // themselves (only a real finger-drag counts), never by their auto-scroll.
+    var panelScrollHidden by remember { mutableStateOf(false) }
+    LaunchedEffect(queueOpen, lyricsOpen) {
+        // Never leave the controls stranded behind artwork: closing either
+        // panel means the content no longer needs the borrowed height.
+        if (!queueOpen && !lyricsOpen) panelScrollHidden = false
+    }
     val activeDevice by rememberActiveAudioDevice()
     val palette = rememberArtworkPalette(song.thumbnailUrl)
     val sleepDeadline by SleepTimer.deadline.collectAsStateWithLifecycle()
@@ -912,7 +935,23 @@ fun NowPlayingScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(DISMISS_STRIP_HEIGHT),
+                    .height(DISMISS_STRIP_HEIGHT)
+                    .pointerInput(Unit) {
+                        var down = 0f
+                        val fullH = with(density) { configuration.screenHeightDp.dp.toPx() }
+                        detectVerticalDragGestures(
+                            onDragStart = { down = 0f },
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                if (dragAmount > 0f) {
+                                    down += dragAmount
+                                    onPull((1f - down / fullH).coerceIn(0f, 1f))
+                                }
+                            },
+                            onDragEnd = { onPullEnd() },
+                            onDragCancel = { onPullEnd() },
+                        )
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
@@ -1247,6 +1286,7 @@ fun NowPlayingScreen(
                         positionMs = positionMs,
                         isPlaying = isPlaying,
                         onSeekToLine = onSeek,
+                        onUserScroll = { panelScrollHidden = it },
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = HEADER_HEIGHT + 10.dp),
@@ -1278,6 +1318,7 @@ fun NowPlayingScreen(
                             onRemove = onRemoveFromQueue,
                             onMove = onMoveInQueue,
                             onClear = onClearQueue,
+                            onUserScroll = { panelScrollHidden = it },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -1289,10 +1330,28 @@ fun NowPlayingScreen(
             // of the player. Whatever is left over above it is the artwork's,
             // which is what keeps this row of controls in the same place on
             // every screen instead of being shoved off the bottom of a tall one.
-            Column(
+            //
+            // While a list (queue or lyrics) is being scrolled the block ducks
+            // down out of the way and hands the content the height — resizing
+            // is what lets the weighted artwork area above reclaim the room, so
+            // the content genuinely gets bigger instead of just sitting behind
+            // a translucent bar. It slides back on its own once the list rests.
+            AnimatedVisibility(
+                visible = !(panelScrollHidden && (queueOpen || lyricsOpen)),
+                enter = expandVertically(
+                    expandFrom = Alignment.Bottom,
+                    animationSpec = tween(durationMillis = 340, easing = FastOutSlowInEasing),
+                ) + fadeIn(animationSpec = tween(durationMillis = 220)),
+                exit = shrinkVertically(
+                    shrinkTowards = Alignment.Bottom,
+                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                ) + fadeOut(animationSpec = tween(durationMillis = 200)),
                 modifier = Modifier
                     .widthIn(max = PLAYER_MAX_WIDTH)
                     .fillMaxWidth(),
+            ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
             // Current lyric, one line, directly above the scrubber. It stays in
@@ -1591,6 +1650,7 @@ fun NowPlayingScreen(
                         highlighted = queueOpen,
                     )
                 }
+            }
             }
 
             Spacer(Modifier.height(18.dp))
@@ -2458,6 +2518,7 @@ private fun LyricsPanel(
     positionMs: Long,
     isPlaying: Boolean,
     onSeekToLine: (Long) -> Unit,
+    onUserScroll: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clock = rememberLyricClock(positionMs, isPlaying)
@@ -2493,6 +2554,11 @@ private fun LyricsPanel(
     }
     val listState = rememberLazyListState()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
+    // Tells the player's transport auto-hide whether a finger is genuinely
+    // scrolling this list (down or the fling it left behind) — programmatic
+    // scrolls like auto-follow never count.
+    val panelScrolling = rememberPanelScrolling(listState)
+    LaunchedEffect(panelScrolling) { onUserScroll(panelScrolling) }
     var browsing by remember { mutableStateOf(false) }
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
@@ -3100,6 +3166,58 @@ private fun keepScrollInList(listState: LazyListState) = object : NestedScrollCo
     override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = available
 }
 
+/**
+ * True while a finger is scrolling [listState] — while it is down, and for the
+ * momentum fling it leaves behind.
+ *
+ * Programmatic scrolls never count: the lyrics auto-follow and the queue
+ * settling on the current track move the same list, and they must not duck the
+ * transport, so only a real drag (DragInteraction.Start) raises this.
+ *
+ * It stays true for a beat after the list rests ([PANEL_REST_MS]), so a short
+ * pause mid-browse doesn't flash the controls in and out; letting go after
+ * that stillness is what brings the transport back.
+ */
+@Composable
+private fun rememberPanelScrolling(listState: LazyListState): Boolean {
+    var dragging by remember { mutableStateOf(false) }
+    var scrolling by remember { mutableStateOf(false) }
+
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> {
+                    dragging = true
+                    scrolling = true
+                }
+                is DragInteraction.Stop -> dragging = false
+                is DragInteraction.Cancel -> {
+                    dragging = false
+                    scrolling = false
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { Triple(scrolling, dragging, listState.isScrollInProgress) }
+            .collect { (stillScrolling, fingerDown, moving) ->
+                // A drag has lifted and the list is no longer moving — neither
+                // on its own momentum nor a follow-on (auto) scroll. Wait a
+                // beat, then, if nothing has grabbed it again, it is truly at
+                // rest and the controls can come back.
+                if (stillScrolling && !fingerDown && !moving) {
+                    delay(PANEL_REST_MS)
+                    if (scrolling && !dragging && !listState.isScrollInProgress) {
+                        scrolling = false
+                    }
+                }
+            }
+    }
+    return scrolling
+}
+
 /** A credit that links somewhere, when [browseId] is known. */
 private fun Modifier.opensPage(browseId: String?, onOpen: (String) -> Unit): Modifier =
     if (browseId == null) {
@@ -3173,10 +3291,16 @@ private fun InlineQueue(
     onRemove: (Int) -> Unit,
     onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
+    onUserScroll: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
+    // Tells the player's transport auto-hide whether a finger is genuinely
+    // scrolling this list (down or the fling it left behind) — programmatic
+    // scrolls like auto-follow never count.
+    val panelScrolling = rememberPanelScrolling(listState)
+    LaunchedEffect(panelScrolling) { onUserScroll(panelScrolling) }
     // Where AutoPlay's tracks start. The queue is kept with them last, so this
     // is one boundary rather than a category to test row by row.
     val autoplayStart = remember(queue, currentIndex) {

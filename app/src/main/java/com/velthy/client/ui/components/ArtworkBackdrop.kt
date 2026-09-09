@@ -1,6 +1,5 @@
 ﻿package com.velthy.client.ui.components
 
-import android.os.Build
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -21,11 +20,9 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.velthy.client.data.model.CARD_ART_PX
 import com.velthy.client.data.model.artworkAt
-import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.ui.theme.ArtworkPalette
 
 /**
@@ -66,8 +63,7 @@ fun ArtworkBackdrop(
      */
     artPx: Int = CARD_ART_PX,
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    val canBlur = !reduceDynamicBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val canBlur = rememberCanBlur()
 
     Box(modifier.background(palette.background)) {
         if (canBlur && imageUrl != null) {

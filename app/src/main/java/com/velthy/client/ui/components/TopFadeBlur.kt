@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.velthy.client.data.settings.AppSettings
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
@@ -33,6 +32,7 @@ private val FADE_RUN = 88.dp
 
 /** The bar's own height, above whatever inset it is sitting under. */
 val TopBarContentHeight = 52.dp
+val TopBarContentGap = 12.dp
 
 /**
  * How far down the window the bar actually ends: the status bar inset it is
@@ -41,6 +41,9 @@ val TopBarContentHeight = 52.dp
 @Composable
 fun topBarHeight(): Dp =
     WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + TopBarContentHeight
+
+@Composable
+fun topBarContentPadding(): Dp = topBarHeight() + TopBarContentGap
 
 /**
  * How much blur the fade reaches at its outer edge — short of all of it.
@@ -67,8 +70,10 @@ fun TopFadeBlur(
     modifier: Modifier = Modifier,
     scrimColor: Color = MaterialTheme.colorScheme.background,
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    if (reduceDynamicBlur) return
+    val canBlur = rememberCanBlur()
+    // No real blur to draw — the bar that sits over this strip fills itself
+    // solid instead, so the frosted ramp has nothing left to do.
+    if (!canBlur) return
 
     val height = topBarHeight() + FADE_RUN
 

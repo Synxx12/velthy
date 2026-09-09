@@ -37,7 +37,7 @@ object LocalMediaRepository {
     }
 
     /**
-     * Retrieves all songs in the `Music/Musique` directory, combining app downloads
+     * Retrieves all songs in the `Music/Velthy` directory, combining app downloads
      * with any local audio files present in that folder.
      */
     suspend fun getDownloadedSongs(context: Context): List<Song> = withContext(Dispatchers.IO) {
@@ -91,7 +91,7 @@ object LocalMediaRepository {
                     }
                 }
             }
-        }.onFailure { Log.w(TAG, "Failed scanning Music/Musique directory: ${it.message}") }
+        }.onFailure { Log.w(TAG, "Failed scanning Music/Velthy directory: ${it.message}") }
 
         (appDownloads + extraSongs).distinctBy { it.localUri ?: it.videoId }
     }

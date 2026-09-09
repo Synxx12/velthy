@@ -112,6 +112,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import com.velthy.client.ui.components.thumbnailBorder
+import com.velthy.client.ui.components.AppLanguageDialog
+import com.velthy.client.ui.components.SUPPORTED_LANGUAGES
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Extension
 import com.velthy.client.data.stats.Backup
 import com.velthy.client.data.model.Account
 import com.velthy.client.BuildConfig
@@ -188,7 +193,6 @@ fun SettingsScreen(
     val convertVideoToAudio by AppSettings.convertVideoToAudio.collectAsStateWithLifecycle()
     val swipeToPlayNext by AppSettings.swipeToPlayNext.collectAsStateWithLifecycle()
     val hapticFeedback by AppSettings.hapticFeedback.collectAsStateWithLifecycle()
-    val shareLiveStats by AppSettings.shareLiveStats.collectAsStateWithLifecycle()
     val replayGenres by AppSettings.replayGenres.collectAsStateWithLifecycle()
     val canvasOverCellular by AppSettings.canvasOverCellular.collectAsStateWithLifecycle()
     val downloadQuality by AppSettings.downloadQuality.collectAsStateWithLifecycle()
@@ -244,6 +248,8 @@ fun SettingsScreen(
     var showListenBrainzTokenDialog by remember { mutableStateOf(false) }
     var showLastfmLoginDialog by remember { mutableStateOf(false) }
     var showStorageSettingsSheet by remember { mutableStateOf(false) }
+    var showAppLanguageDialog by remember { mutableStateOf(false) }
+    val dontRepeatSuggestions by AppSettings.dontRepeatSuggestions.collectAsStateWithLifecycle()
     val scrobbleScope = rememberCoroutineScope()
 
     // Coming back from the system Atmos panel is the one moment the answer is
@@ -512,6 +518,18 @@ fun SettingsScreen(
         }
 
         SettingsGroup(header = "Appearance") {
+                        val currentLanguage = remember {
+                val currentTag = AppCompatDelegate.getApplicationLocales().toLanguageTags()
+                SUPPORTED_LANGUAGES.firstOrNull { it.tag == currentTag } ?: SUPPORTED_LANGUAGES.first()
+            }
+            SettingsRow(
+                icon = Icons.Rounded.Language,
+                title = "App language",
+                value = androidx.compose.ui.res.stringResource(currentLanguage.nameRes),
+                trailing = { Chevron() },
+                onClick = { showAppLanguageDialog = true },
+            )
+            RowDivider()
             SettingsRow(icon = Icons.Rounded.Brightness4, title = "Theme")
             SegmentedControl(
                 options = ThemeMode.entries.map { it.label },
@@ -631,25 +649,6 @@ fun SettingsScreen(
                     onClick = onLyricsSources,
                 )
             }
-        }
-
-        SettingsGroup(header = "Privacy & Community") {
-            SettingsRow(
-                icon = Icons.Rounded.Cloud,
-                title = "Share to Web Live Ticker",
-                subtitle = "Broadcast anonymous song metadata to the live now-playing feed on Velthy Web. Zero personal info or ID tracked.",
-                trailing = {
-                    Switch(
-                        checked = shareLiveStats,
-                        onCheckedChange = AppSettings::setShareLiveStats,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setShareLiveStats(!shareLiveStats) },
-            )
         }
 
         val cacheLimitMb = (cacheLimitBytes / (1024 * 1024)).toInt()
@@ -1222,6 +1221,13 @@ fun SettingsScreen(
         )
     }
 
+    
+    if (showAppLanguageDialog) {
+        AppLanguageDialog(
+            hazeState = remember { dev.chrisbanes.haze.HazeState() },
+            onDismiss = { showAppLanguageDialog = false },
+        )
+    }
     if (showStorageSettingsSheet) {
         StorageSettingsSheet(
             onDismissRequest = { showStorageSettingsSheet = false },

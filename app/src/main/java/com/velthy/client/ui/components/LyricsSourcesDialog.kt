@@ -60,7 +60,7 @@ fun LyricsSourcesDialog(
     modifier: Modifier = Modifier,
     hazeState: HazeState = remember { HazeState() },
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val canBlur = rememberCanBlur()
     val selected by AppSettings.lyricsSources.collectAsStateWithLifecycle()
     val shape = RoundedCornerShape(ALERT_CORNER)
 
@@ -80,7 +80,7 @@ fun LyricsSourcesDialog(
                 .width(ALERT_WIDTH)
                 .clip(shape)
                 .then(
-                    if (reduceDynamicBlur) {
+                    if (!canBlur) {
                         Modifier.background(MaterialTheme.colorScheme.surface)
                     } else {
                         Modifier.hazeEffect(

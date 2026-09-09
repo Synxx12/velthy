@@ -99,8 +99,22 @@ function Run-BuildAndLaunch {
     
     .\gradlew.bat assembleDevDebug
     if ($LASTEXITCODE -eq 0) {
-        $apkPath = Get-ChildItem -Path "app\build\outputs\apk\dev\debug\*.apk" | Select-Object -First 1
-        
+        $allApks = @(Get-ChildItem -Path "app\build\outputs\apk\dev\debug\*.apk" -ErrorAction SilentlyContinue)
+
+        # Prefer the universal APK (works on every ABI — emulators + physical devices).
+        # If not found, fall back to the APK whose ABI suffix matches the device's primary ABI.
+        $apkPath = $allApks | Where-Object { $_.Name -match "-universal-" } | Select-Object -First 1
+        if (-not $apkPath) {
+            # Query device ABI list (comma-separated, primary ABI is first)
+            $abiList = adb -s "$device" shell getprop ro.product.cpu.abilist 2>$null
+            $primaryAbi = if ($abiList) { $abiList.Trim().Split(',')[0].Trim() } else { "arm64-v8a" }
+            Write-Host "[*] Perangkat ABI: $primaryAbi — mencari APK yang sesuai..." -ForegroundColor DarkGray
+            # Map ABI to the suffix used in APK filenames (e.g. arm64-v8a, x86_64, armeabi-v7a)
+            $apkPath = $allApks | Where-Object { $_.Name -match [regex]::Escape($primaryAbi) } | Select-Object -First 1
+            # Last resort: just take whatever is available
+            if (-not $apkPath) { $apkPath = $allApks | Select-Object -First 1 }
+        }
+
         if ($apkPath -and (Test-Path $apkPath.FullName)) {
             Write-Host "[+] Memasang APK ($($apkPath.Name)) ke $device..." -ForegroundColor Cyan
             adb -s "$device" install -r -d -t $apkPath.FullName

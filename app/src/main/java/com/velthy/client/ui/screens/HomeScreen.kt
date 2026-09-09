@@ -682,6 +682,7 @@ internal fun ShelfCard(
     onClick: () -> Unit,
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    isPinned: Boolean = false,
 ) {
     val cardModifier = if (modifier == Modifier) Modifier.width(SHELF_CARD_WIDTH) else modifier
     Column(

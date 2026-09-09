@@ -26,7 +26,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.velthy.client.data.settings.AppSettings
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -67,7 +66,7 @@ fun UpdateAvailableDialog(
     onUpdate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val canBlur = rememberCanBlur()
     val shape = RoundedCornerShape(ALERT_CORNER)
 
     Box(
@@ -89,7 +88,7 @@ fun UpdateAvailableDialog(
                 .width(ALERT_WIDTH)
                 .clip(shape)
                 .then(
-                    if (reduceDynamicBlur) {
+                    if (!canBlur) {
                         Modifier.background(MaterialTheme.colorScheme.surface)
                     } else {
                         Modifier.hazeEffect(state = hazeState, style = HazeMaterials.regular(MaterialTheme.colorScheme.surface))

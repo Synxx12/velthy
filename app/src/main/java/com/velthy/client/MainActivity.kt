@@ -17,7 +17,13 @@ import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -30,6 +36,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -52,6 +59,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.Person
@@ -65,6 +73,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -107,6 +117,7 @@ import com.velthy.client.data.model.UiState
 import com.velthy.client.data.model.UserPlaylist
 import com.velthy.client.data.scrobbling.LastFM
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.data.settings.LibrarySort
 import com.velthy.client.data.settings.ThemeMode
 import com.velthy.client.ui.screens.AccountAndScrobblingScreen
 import com.velthy.client.ui.screens.DetailScreen
@@ -114,6 +125,8 @@ import com.velthy.client.ui.screens.DiscordDialog
 import com.velthy.client.ui.screens.DiscordDialogHost
 import com.velthy.client.ui.screens.DiscordScreen
 import com.velthy.client.ui.screens.HistoryScreen
+import com.velthy.client.ui.screens.ExploreScreen
+import com.velthy.client.ui.screens.MoodGenrePlaylistsScreen
 import com.velthy.client.ui.screens.HomeScreen
 import com.velthy.client.ui.screens.LibraryScreen
 import com.velthy.client.ui.screens.LocalMusicScreen
@@ -178,6 +191,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.velthy.client.data.model.Account
 import com.velthy.client.data.model.HomeShelf
+import com.velthy.client.data.model.MoodGenre
+import com.velthy.client.data.model.ShelfItem
 import com.velthy.client.playback.LinkRequest
 import com.velthy.client.playback.MusicLink
 import com.velthy.client.playback.PlayerDeepLink
@@ -254,6 +269,34 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val hazeState = remember { HazeState() }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showNowPlaying by remember { mutableStateOf(false) }
+    // Keeps the player on screen while its close animation shrinks it back to
+    // the mini player; playerPresent is the actual composition, progress runs
+    // 0 (mini-sized) → 1 (full screen).
+    var playerPresent by remember { mutableStateOf(false) }
+    val playerProgress = remember { Animatable(0f) }
+    var miniBounds by remember { mutableStateOf<Rect?>(null) }
+    LaunchedEffect(showNowPlaying) {
+        if (showNowPlaying) {
+            playerProgress.snapTo(0f)
+            playerPresent = true
+            playerProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
+        } else if (playerPresent) {
+            playerProgress.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium,
+                ),
+            )
+            playerPresent = false
+        }
+    }
     var showLogin by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showReplay by remember { mutableStateOf(false) }
@@ -371,9 +414,17 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val savedAccounts by viewModel.savedAccounts.collectAsStateWithLifecycle()
     var showHistory by remember { mutableStateOf(false) }
     var libraryShowAll by remember { mutableStateOf<HomeShelf?>(null) }
+    var showLibrarySortMenu by remember { mutableStateOf(false) }
     val libraryShowAllGridState = rememberLazyGridState()
     val historyState by viewModel.history.collectAsStateWithLifecycle()
     val historyListState = rememberLazyListState()
+    var moodGenre by remember { mutableStateOf<MoodGenre?>(null) }
+    val moodGenreListState = rememberLazyListState()
+    val moodShelvesState by viewModel.moodShelves.collectAsStateWithLifecycle()
+    // Leaving Explore (or closing the category) drops the pushed mood page.
+    LaunchedEffect(selectedTab) {
+        if (selectedTab != TAB_EXPLORE) moodGenre = null
+    }
     var showRecognitionSheet by remember { mutableStateOf(false) }
     var showDownloadSettingsSheet by remember { mutableStateOf(false) }
     val hasCompletedOnboarding by AppSettings.hasCompletedOnboarding.collectAsStateWithLifecycle()
@@ -551,7 +602,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val tabs = remember {
         listOf(
             BottomTab("Home", Icons.Rounded.Home),
-            BottomTab("New", Icons.Rounded.GridView),
+            BottomTab("Explore", Icons.Rounded.GridView),
             BottomTab("Library", Icons.Rounded.LibraryMusic),
             BottomTab("Search", Icons.Rounded.Search),
         )
@@ -814,6 +865,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             showNotifications = false
         }
         BackHandler(enabled = libraryShowAll != null) { libraryShowAll = null }
+        BackHandler(enabled = moodGenre != null) { moodGenre = null }
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
         // which is what actually closes/minimizes the app.
@@ -828,6 +880,9 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         BackHandler(enabled = showUpdateDialog) { showUpdateDialog = false }
         BackHandler(enabled = showListenBrainzLogin) { showListenBrainzLogin = false }
         BackHandler(enabled = showLastfmLogin) { showLastfmLogin = false }
+        // The full player is an in-root overlay now; system back shrinks it
+        // back to the mini player. Registered last so it wins over the tabs.
+        BackHandler(enabled = playerPresent && showNowPlaying) { showNowPlaying = false }
 
         if (!hasCompletedOnboarding) {
             OnboardingScreen(
@@ -843,6 +898,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showDiscord -> "discord"
                 showHistory -> "history"
                 libraryShowAll != null -> "library_show_all"
+                moodGenre != null -> "mood_genre"
                 showAccountScrobbling -> "account_scrobbling"
                 showSettings -> "settings"
                 showNotifications -> "notifications"
@@ -850,11 +906,11 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 detail != null -> detail.browseId
                 else -> "tab:$selectedTab"
             },
-            transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+            transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(220)) },
             modifier = Modifier.hazeSource(hazeState),
             label = "content",
         ) { key ->
-            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" && key != "library_show_all" }
+            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" && key != "library_show_all" && key != "mood_genre" }
             if (key == "history") {
                 HistoryScreen(
                     state = historyState,
@@ -872,6 +928,12 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         gridState = libraryShowAllGridState,
                         onItemClick = { item ->
                             item.browseId?.let { id ->
+                                // Leave the "Show all" page so the pushed detail
+                                // (or history) page can actually surface — the
+                                // content target state checks libraryShowAll
+                                // before detail, so it must be cleared here or
+                                // the app would look stuck on the grid.
+                                libraryShowAll = null
                                 if (id == "app:history" || id == "history" || id == "local:history") {
                                     showHistory = true
                                     viewModel.loadHistory()
@@ -899,6 +961,41 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         onNewPlaylist = if (shelf.title == "Playlists") {
                             { creatingPlaylist = true }
                         } else null,
+                        contentPadding = listPadding,
+                    )
+                }
+            } else if (key == "mood_genre") {
+                moodGenre?.let { target ->
+                    MoodGenrePlaylistsScreen(
+                        title = target.title,
+                        state = moodShelvesState,
+                        listState = moodGenreListState,
+                        onItemClick = { item ->
+                            when {
+                                item.videoId != null -> playRadio(
+                                    Song(
+                                        videoId = item.videoId,
+                                        title = item.title,
+                                        artist = item.subtitle,
+                                        thumbnailUrl = item.thumbnailUrl,
+                                    ),
+                                )
+                                item.browseId != null -> {
+                                    // Leave the mood page so the pushed detail can
+                                    // surface immediately — the content target
+                                    // checks moodGenre before detail, so it must
+                                    // be cleared here or the page waits for back.
+                                    moodGenre = null
+                                    viewModel.openDetail(
+                                        browseId = item.browseId,
+                                        title = item.title,
+                                        subtitle = item.subtitle,
+                                        thumbnailUrl = item.thumbnailUrl,
+                                    )
+                                }
+                            }
+                        },
+                        onRetry = { viewModel.loadMoodGenreShelves(target.browseId, target.params) },
                         contentPadding = listPadding,
                     )
                 }
@@ -1003,16 +1100,20 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     contentPadding = listPadding,
                 )
             } else if (page != null) {
+                val withAlbum: (Song) -> Song = { song ->
+                    if (page.type == BrowseType.ALBUM) {
+                        song.copy(albumName = song.albumName ?: page.title)
+                    } else {
+                        song
+                    }
+                }
                 DetailScreen(
                     page = page,
                     listState = detailListState,
                     onSongClick = play,
-                    onSongLongPress = { songActions = it },
+                    onSongLongPress = { songActions = withAlbum(it) },
                     onSongSwipe = onSongSwipe,
                     onShuffle = { songs ->
-                        // Shuffle goes on first so the queue is built shuffled
-                        // as it is set — the random pick here only decides
-                        // which track leads it.
                         QueueShuffle.enableForNextQueue()
                         play(songs, songs.indices.random())
                     },
@@ -1040,22 +1141,14 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                             )
                         }
                     },
-                    onDownloadAll = { songs ->
-                        val withAlbum = if (page.type == BrowseType.ALBUM) {
-                            songs.map { it.copy(albumName = it.albumName ?: page.title) }
-                        } else {
-                            songs
-                        }
-                        startDownload(withAlbum)
-                    },
-                    onMore = {
+                    onMore = { songs ->
                         browseActions = BrowseTarget(
                             browseId = page.browseId,
                             title = page.title,
                             subtitle = page.subtitle,
                             thumbnailUrl = page.thumbnailUrl,
                             type = page.type,
-                            songs = (page.songs as? UiState.Success)?.data.orEmpty(),
+                            songs = songs.map(withAlbum),
                             playlist = viewModel.editablePlaylist(page.browseId),
                         )
                     },
@@ -1074,6 +1167,9 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                             )
                         }
                     },
+                    onToggleLibrary = if (signedIn) {
+                        { viewModel.toggleLibrary(page.browseId) }
+                    } else null,
                     contentPadding = listPadding,
                 )
             } else when (selectedTab) {
@@ -1109,43 +1205,18 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     loadingMore = homeLoadingMore,
                     onSongLongPress = { songActions = it },
                 )
-                TAB_EXPLORE -> HomeScreen(
+                TAB_EXPLORE -> ExploreScreen(
                     state = exploreState,
                     listState = exploreListState,
-                    title = "New",
-                    onItemClick = { item ->
-                        when {
-                            item.videoId != null -> playRadio(
-                                Song(
-                                    videoId = item.videoId,
-                                    title = item.title,
-                                    artist = item.subtitle,
-                                    thumbnailUrl = item.thumbnailUrl,
-                                ),
-                            )
-                            item.browseId != null -> viewModel.openDetail(
-                                browseId = item.browseId,
-                                title = item.title,
-                                subtitle = item.subtitle,
-                                thumbnailUrl = item.thumbnailUrl,
-                            )
-                        }
+                    onMoodClick = { mood ->
+                        moodGenre = mood
+                        viewModel.loadMoodGenreShelves(mood.browseId, mood.params)
                     },
                     onRetry = viewModel::loadExplore,
                     refreshing = MainViewModel.Feed.EXPLORE in refreshing,
                     onRefresh = { viewModel.refresh(MainViewModel.Feed.EXPLORE) },
                     pullState = explorePull,
                     contentPadding = listPadding,
-                    onSongLongPress = { songActions = it },
-                    onCategoryClick = { browseId, title ->
-                        viewModel.openDetail(
-                            browseId = browseId,
-                            title = title,
-                            subtitle = "Explore",
-                            thumbnailUrl = null,
-                            type = BrowseType.PLAYLIST,
-                        )
-                    },
                 )
                 TAB_SEARCH -> SearchScreen(
                     filter = filter,
@@ -1260,6 +1331,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showDiscord -> "Discord"
                 showHistory -> "History"
                 libraryShowAll != null -> libraryShowAll?.title ?: "Library"
+                moodGenre != null -> moodGenre?.title ?: "Explore"
                 showAccountScrobbling -> "Account & scrobbling"
                 showSettings -> "Settings"
                 showNotifications -> "Notifications"
@@ -1271,6 +1343,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showReplay -> replayListState.firstVisibleItemIndex > 0 || replayListState.firstVisibleItemScrollOffset > 0
                 showHistory -> historyListState.firstVisibleItemIndex > 0 || historyListState.firstVisibleItemScrollOffset > 0
                 libraryShowAll != null -> libraryShowAllGridState.firstVisibleItemIndex > 0 || libraryShowAllGridState.firstVisibleItemScrollOffset > 0
+                moodGenre != null -> moodGenreListState.firstVisibleItemIndex > 0 || moodGenreListState.firstVisibleItemScrollOffset > 0
                 showSettings || showAccountScrobbling || showDiscord || showNotifications -> true
                 detail != null -> detailScrolled
                 else -> scrolled
@@ -1300,6 +1373,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showDiscord -> ({ showDiscord = false })
                 showHistory -> ({ showHistory = false })
                 libraryShowAll != null -> ({ libraryShowAll = null })
+                moodGenre != null -> ({ moodGenre = null })
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSettings -> ({ showSettings = false })
                 showNotifications -> ({ showNotifications = false })
@@ -1316,6 +1390,40 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             },
             modifier = Modifier.align(Alignment.TopCenter),
             actions = {
+                if (libraryShowAll != null) {
+                    Box {
+                        IconButton(onClick = { showLibrarySortMenu = true }) {
+                            Icon(
+                                Icons.Rounded.MoreVert,
+                                contentDescription = "Sort",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showLibrarySortMenu,
+                            onDismissRequest = { showLibrarySortMenu = false },
+                        ) {
+                            LibrarySort.entries.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    onClick = {
+                                        AppSettings.setLibrarySort(option)
+                                        showLibrarySortMenu = false
+                                    },
+                                    trailingIcon = {
+                                        if (AppSettings.librarySort.value == option) {
+                                            Icon(
+                                                Icons.Rounded.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 TopBarDownloadButton(
                     onClick = { showDownloadManager = true },
                 )
@@ -1412,18 +1520,32 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             player.song?.let { song ->
-                MiniPlayer(
-                    song = song,
-                    isPlaying = player.isPlaying,
-                    isLoading = player.isLoading,
-                    hazeState = hazeState,
-                    onPlayPause = {
-                        controller?.let { if (it.playWhenReady || it.isPlaying) it.pause() else it.play() }
-                    },
-                    onNext = { controller?.seekToNextMediaItem() },
-                    onExpand = { showNowPlaying = true },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coords ->
+                            val p = coords.positionInRoot()
+                            miniBounds = Rect(
+                                p.x,
+                                p.y,
+                                p.x + coords.size.width,
+                                p.y + coords.size.height,
+                            )
+                        },
+                ) {
+                    MiniPlayer(
+                        song = song,
+                        isPlaying = player.isPlaying,
+                        isLoading = player.isLoading,
+                        hazeState = hazeState,
+                        onPlayPause = {
+                            controller?.let { if (it.playWhenReady || it.isPlaying) it.pause() else it.play() }
+                        },
+                        onNext = { controller?.seekToNextMediaItem() },
+                        onExpand = { showNowPlaying = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
             FloatingBottomBar(
                 tabs = tabs,
@@ -1453,7 +1575,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         }
 
         // ---- Now Playing ----
-        if (showNowPlaying && player.song != null) {
+        if (playerPresent && player.song != null) {
             // Whatever started this track knew its title and its artwork, but
             // rarely which album or artist page it belongs to. Fill that in
             // once the player is up, so the credits can be tapped through.
@@ -1483,16 +1605,19 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             LaunchedEffect(song) {
                 if (songActions?.videoId == song.videoId) songActions = song
             }
-            ModalBottomSheet(
-                onDismissRequest = { showNowPlaying = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                // The player fills the screen and paints its own background to
-                // the very top, so the sheet's default 28.dp top corners would
-                // only cut two notches out of the artwork behind the status bar.
-                shape = androidx.compose.ui.graphics.RectangleShape,
-                containerColor = Color.Transparent,
-                dragHandle = null,
-                contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
+            // The player rises out of the mini player's spot — a continuous,
+            // finger-tracked sheet instead of a hard snap: [playerProgress] is 1
+            // when fully open and 0 when collapsed back to the mini player, so a
+            // pull can park it halfway and the host decides where it snaps.
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val p = playerProgress.value.coerceIn(0f, 1f)
+                        val h = size.height.toFloat()
+                        translationY = (1f - p) * h
+                        alpha = (p * 1.2f).coerceIn(0f, 1f)
+                    },
             ) {
                 NowPlayingScreen(
                     song = song,
@@ -1500,6 +1625,23 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     isLoading = player.isLoading,
                     positionMs = player.positionMs,
                     durationMs = player.durationMs,
+                    onPull = { progress -> scope.launch { playerProgress.stop(); playerProgress.snapTo(progress) } },
+                    onPullEnd = {
+                        scope.launch {
+                            if (playerProgress.value < 0.5f) {
+                                playerProgress.snapTo(0f)
+                                showNowPlaying = false
+                            } else {
+                                playerProgress.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow,
+                                    ),
+                                )
+                            }
+                        }
+                    },
                     onPlayPause = {
                         controller?.let { if (it.playWhenReady || it.isPlaying) it.pause() else it.play() }
                     },

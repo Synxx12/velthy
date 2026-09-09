@@ -6,10 +6,12 @@ import com.velthy.client.data.innertube.InnertubeParser
 import com.velthy.client.data.model.Account
 import com.velthy.client.data.model.ArtistPage
 import com.velthy.client.data.model.HistorySection
+import java.util.concurrent.ConcurrentHashMap
 import com.velthy.client.data.model.HomeFeed
 import com.velthy.client.data.model.HomeShelf
 import com.velthy.client.data.model.LibraryPage
 import com.velthy.client.data.model.LikeStatus
+import com.velthy.client.data.model.MoodGenreSection
 import com.velthy.client.data.model.PlaylistPrivacy
 import com.velthy.client.data.model.SearchFilter
 import com.velthy.client.data.model.SearchResult
@@ -144,17 +146,40 @@ object YtMusicRepository {
         InnertubeParser.parseHome(Innertube.browse(browseId))
 
     /**
-     * Explore: moods & genres from FEmusic_explore, plus the Daily/Weekly/
-     * Trending charts, which YouTube Music serves from a separate browse id
-     * and surfaces under Explore rather than Home.
+     * The mood & genre sections of the Explore page, straight from BitChord's
+     * approach: one browse of the moods-and-genres hub parsed into headed
+     * groups of mood buttons.
      */
-    suspend fun explore(): Result<List<HomeShelf>> = call("explore") {
-        coroutineScope {
-            val feeds = listOf("FEmusic_explore", "FEmusic_charts", "FEmusic_new_releases")
-                .map { id -> async { runCatching { shelvesOf(id) }.getOrDefault(emptyList()) } }
-                .awaitAll()
-            val seen = mutableSetOf<String>()
-            feeds.flatten().filter { seen.add(it.title.lowercase()) }
+    suspend fun moodAndGenres(): Result<List<MoodGenreSection>> = call("moods-and-genres") {
+        InnertubeParser.parseMoodAndGenres(Innertube.browse("FEmusic_moods_and_genres"))
+    }
+
+    /**
+     * The playlist shelves behind one mood/genre category — what BitChord's
+     * Explore opens when a mood button is tapped. The mood's [params] are part
+     * of its browse request; without them YouTube answers 404.
+     */
+    suspend fun moodGenreShelves(browseId: String, params: String?): Result<List<HomeShelf>> =
+        call("mood-genre:$browseId") {
+            InnertubeParser.parseHome(Innertube.browse(browseId, params))
+        }
+
+    private val moodThumbCache = ConcurrentHashMap<String, String?>()
+
+    /**
+     * The cover of the first song/album inside this mood: the first item in
+     * the category's shelves that actually carries a thumbnail. Cached.
+     */
+    suspend fun moodGenreArtwork(browseId: String, params: String?): Result<String?> {
+        val key = "$browseId|${params.orEmpty()}"
+        moodThumbCache[key]?.let { return Result.success(it) }
+        return call("mood-art:$browseId") {
+            val thumb = moodGenreShelves(browseId, params).getOrNull()
+                ?.firstNotNullOfOrNull { shelf ->
+                    shelf.items.firstNotNullOfOrNull { it.thumbnailUrl }
+                }
+            moodThumbCache[key] = thumb
+            thumb
         }
     }
 
@@ -374,6 +399,11 @@ object YtMusicRepository {
      * than one page of playlists is rare, and the picker is a list to scroll
      * rather than a feed to follow.
      */
+    
+    /** Saves an album or playlist to the library, or removes it. */
+    suspend fun setSaved(playlistId: String, saved: Boolean): Result<Unit> =
+        call("library:$playlistId") { com.velthy.client.data.innertube.Innertube.ratePlaylist(playlistId, saved) }
+
     suspend fun userPlaylists(): Result<List<UserPlaylist>> = call("playlists") {
         InnertubeParser.parseUserPlaylists(Innertube.browse(LIBRARY_PLAYLISTS))
     }

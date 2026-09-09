@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.velthy.client.data.settings.AppSettings
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
@@ -73,10 +72,10 @@ fun BottomFadeBlur(
      */
     pageColor: Color = MaterialTheme.colorScheme.background,
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    // The floating bars fill themselves solid instead when blur is reduced,
+    val canBlur = rememberCanBlur()
+    // The floating bars fill themselves solid instead when blur is unavailable,
     // so this frosted floor underneath them has nothing left to do.
-    if (reduceDynamicBlur) return
+    if (!canBlur) return
 
     // The gesture bar sits below the tab pill and wants blurring too, so it is
     // added on rather than being part of the fade's own run.

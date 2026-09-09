@@ -8,6 +8,67 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ### [Unreleased]
 
+#### 🐛 Perbaikan Masalah
+- **Instalasi ke Emulator Kini Selalu Berhasil**: Proses *build & deploy* otomatis kini secara cerdas memilih APK universal yang kompatibel dengan semua arsitektur prosesor — menyelesaikan kegagalan instalasi `INSTALL_FAILED_NO_MATCHING_ABIS` yang sebelumnya muncul saat memasang ke emulator x86_64. Jika APK universal tidak tersedia, sistem secara otomatis mendeteksi ABI primer perangkat dan memilih APK yang tepat.
+
+#### ✨ Fitur Baru & Tampilan
+- **Integrasi Spotify Canvas & Motion Artwork Lengkap (*Dynamic Spotify Canvas Motion Art & Live Background Tinting*)**:
+  - Menghadirkan dukungan penuh klip video animasi bergerak Spotify Canvas yang berputar dinamis di latar belakang pemutar musik (*Now Playing hero & sleeve*) dan sampul header album (*Album Detail screen*).
+  - Sinkronisasi warna latar pemutar (*dynamic backdrop mesh re-tinting*): palet warna gradien di pemutar otomatis menyesuaikan diri secara berkala mengikuti pendaran warna bingkai video Spotify Canvas yang sedang berputar.
+  - Integrasi otentikasi Spotify Canvas mandiri di menu Pengaturan untuk menghubungkan sesi akun secara aman tanpa server perantara.
+- **Pencarian Dalam Halaman & Tata Letak Adaptif Halaman Detail (*Detail Page In-Page Filtering, Canvas Header & Library Toggle*)**:
+  - Bilah pencarian instan di halaman album, playlist, dan artis untuk memfilter daftar lagu secara langsung tanpa memuat ulang feed — tombol search di header membuka field filter dengan animasi halus dan menyimpan state per halaman.
+  - Deretan chip statistik artis (*Monthly Listeners, Subscribers*) dan bagian biografi interaktif dengan pratinjau teks yang dapat diperluas.
+  - Dukungan canvas motion artwork di header halaman album — klip video Spotify Canvas ditampilkan sebagai latar header yang hidup dan bergerak, setara dengan pengalaman Now Playing.
+  - Tombol **Simpan ke Pustaka** / **Hapus dari Pustaka** (ikon bookmark) hadir di header halaman album dan playlist untuk pengguna yang masuk — sinkronisasi dua arah dengan pustaka YouTube Music.
+  - Tata letak responsif dua panel (*responsive dual-pane layout*) yang memisahkan sampul dan daftar lagu saat perangkat diputar ke mode lanskap atau di tablet/layar lipat.
+- **Tampilan Kisi Lengkap & Rak Koleksi Offline Pustaka (*Library Grid Page & Offline Collections Shelf*)**:
+  - Tombol interaktif **"Show all"** di setiap rak koleksi (*Playlists, Albums, Artists, Offline Collections*) untuk membuka seluruh item dalam tampilan kisi yang elegan dan adaptif.
+  - Rak baru untuk koleksi offline dan playlist lokal yang tersimpan di perangkat.
+- **Suite Statistik & Kilas Balik Mendengarkan Musik (*Music Replay Suite & Yearly Stories*)**:
+  - Fitur Kilas Balik Musik (*Replay Stories*) bergaya cerita animasi interaktif dengan kartu rangkuman artis teratas, lagu favorit, total jam mendengarkan, serta genre dominan.
+  - Kartu poster berbagi grafis beresolusi tinggi (*Replay Poster & Share Sheet*) yang siap dibagikan ke media sosial.
+- **Widget Layar Utama Interaktif (*Interactive Home Screen Media Widgets*)**:
+  - Widget pemutar media baru dengan desain minimalis frosted glass dan dukungan kontrol transport instan (*play, pause, skip, artwork display*) langsung dari layar beranda Android.
+- **Pembaruan Aplikasi Otomatis Dalam Aplikasi (*In-App APK Updater & Rich Markdown Notes*)**:
+  - Pembaruan aplikasi kini dapat diunduh dan dipasang langsung di dalam aplikasi dengan indikator progres unduhan dan tampilan catatan rilis format markdown yang kaya.
+- **Dukungan Multi-Bahasa Aplikasi (*In-App Multi-Language Switcher*)**:
+  - Menambahkan dialog pemilih bahasa terintegrasi di Pengaturan dengan dukungan multibahasa lengkap (Bahasa Indonesia, Inggris, Spanyol, Prancis, Jerman, Portugis, Hindi, Jepang, Rusia, dan Mandarin).
+- **Penyempurnaan Menu Pengaturan Terpadu (*Unified Smart Settings Hub*)**:
+  - Mengintegrasikan seluruh kontrol canggih BitChord (kelola sumber musik & ekstensi, setup cookie Spotify Canvas, pemilih bahasa aplikasi, kelola penyimpanan/cache, dan filter antrean radio cerdas) ke dalam tata letak pengaturan bergaya Apple Music.
+  - Mempertahankan seluruh fitur eksklusif Velthy: integrasi multi-akun Google/YouTube Music, status Discord Rich Presence, scrobbling Last.fm/ListenBrainz, dukungan audio spasial Dolby Atmos, equalizer sistem, pengaturan kecepatan putar, sakelar audio video asli, serta konfigurasi penghentian musik saat aplikasi ditutup.
+- **Efek Gradien Dasar Layar Super Mulus (*Hardware-Accelerated Zero-Lag Scrim*)**:
+  - Menghadirkan transisi gradien warna bawah layar 16-stop dengan akselerasi perangkat keras, memberikan frame rate mulus 60–120 FPS saat menggulir feed konten tanpa beban render GPU.
+
+#### 🎵 Pemutar Audio & Sinkronisasi
+- **Ekosistem Sumber Audio Kualitas Tinggi & QuickJS Engine (*JioSaavn 320kbps & Spine Extension Modules*)**:
+  - Integrasi sumber streaming audio JioSaavn dengan dukungan resolusi hingga 320 kbps AAC/MP4 berkecepatan tinggi dan dekripsi stream lokal in-memory.
+  - Dukungan modul ekstensi QuickJS (*Spine JavaScript modules*) untuk memperluas penyedia sumber audio pihak ketiga secara dinamis dan aman.
+- **Pemulihan Otomatis Lagu Tidak Tersedia (*Unplayable Track Recovery & Fallback Resolver*)**:
+  - Ketika sebuah lagu tidak dapat diputar pada sumber utama karena pembatasan wilayah atau stream kadaluarsa, pemutar otomatis mencari rekaman pengganti berkualitas setara dari sumber alternatif tanpa menghentikan antrean.
+- **Analisis Pintar Audio Lokal (*Automix & Smart Fade Local File Support*)**:
+  - Mendukung analisis tempo (BPM), beat grid, dan struktur ritme langsung dari berkas audio lokal di penyimpanan perangkat untuk transisi cerdas Automix dan Smart Fade tanpa jeda.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Sistem Caching Disk Klip Video Canvas (*Canvas Video Disk Cache Engine*)**:
+  - Mencegah pengunduhan ulang video animasi berulang kali saat lagu diputar berulang dengan mengimplementasikan cache disk Media3 lokal (hingga 150MB), menghemat data seluler dan baterai secara signifikan.
+- **Manajemen Siklus Hidup Render Hemat Daya (*Foreground Gated Video Decoding*)**:
+  - Menghentikan proses decoding video animasi secara cerdas saat layar mati atau saat aplikasi berada di latar belakang (*background*), dan memulihkan frame video seketika saat aplikasi dibuka kembali tanpa layar hitam.
+- **Manajemen Penyimpanan & Ekspor Berkas Musik (*Storage Management & Music Export*)**:
+  - Opsi pengaturan penyimpanan untuk menyesuaikan struktur folder unduhan (*Flat, Artist/Album, Playlist*), mengekspor semua unduhan ke folder musik publik, serta pembersih cache audio pintar.
+
+#### 🐛 Perbaikan Masalah
+- **Penyempurnaan Rasio Gambar Aktivitas Discord (*Discord Rich Presence Aspect Ratio Fix*)**:
+  - Memperbaiki masalah bilah hitam di atas dan bawah foto lagu pada status profil Discord dengan memprioritaskan sampul 1:1 bujursangkar beresolusi tinggi murni.
+- **Pemulihan Navigasi Bar Atas & Ikon Notifikasi (*Frosted Top Bar Wordmark & Notifications*)**:
+  - Mengembalikan logo dan teks judul "Velthy" pada bilah atas saat berada di awal halaman utama, serta menyematkan kembali tombol akses cepat panel notifikasi lonceng.
+- **Pemulihan Tata Letak Pemutar Penuh & 4 Tombol Kontrol Bawah (*Full Player 4-Button Row & Synced Lyrics*)**:
+  - Mengembalikan deretan 4 tombol kontrol bawah khas pemutar Velthy: tombol Lirik dengan animasi kata demi kata Apple Music, pengatur waktu tidur (*Sleep Timer*) dengan badge hitung mundur menit/detik, pemilih rute output audio perangkat aktif, dan tombol antrean musik (*Queue*).
+- **Pencarian Live Instan (*Instant Live Music Search*)**:
+  - Mengetik di bilah pencarian kini langsung menampilkan hasil lagu, video klip, album, playlist, dan artis secara instan tanpa terhalang daftar teks saran autocomplete.
+- **Konfigurasi Default Penghentian Musik Saat Aplikasi Ditutup (*Default Stop On Close From Recent Apps*)**:
+  - Pengaturan *"Stop music on close from recent"* kini aktif secara default (*default ON*) untuk konsistensi pemutaran audio di background.
+
 ### [native-v1.4.5] — 2026-08-29
 
 #### ✨ Fitur Baru & Tampilan

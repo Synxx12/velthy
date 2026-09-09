@@ -34,7 +34,6 @@ import coil3.compose.AsyncImage
 import com.velthy.client.data.model.ROW_ART_PX
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.artworkAt
-import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
@@ -91,7 +90,7 @@ fun MiniPlayer(
     onExpand: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val canBlur = rememberCanBlur()
     val haptics = rememberHaptics()
     val shape = RoundedCornerShape(percent = 50)
     Box(
@@ -99,7 +98,7 @@ fun MiniPlayer(
             .padding(horizontal = PAGE_GUTTER)
             .clip(shape)
             .then(
-                if (reduceDynamicBlur) {
+                if (!canBlur) {
                     Modifier.background(MaterialTheme.colorScheme.surface)
                 } else {
                     Modifier.hazeEffect(state = hazeState, style = HazeMaterials.thin(MaterialTheme.colorScheme.surface))

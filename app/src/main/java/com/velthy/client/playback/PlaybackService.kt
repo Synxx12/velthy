@@ -118,7 +118,7 @@ class PlaybackService : MediaSessionService() {
     private val ghostTransitionFilter = TransitionFilterProcessor()
 
     /** Smart Fade's DSP analyzer — see [com.velthy.client.playback.smart.TrackAnalyzer]. */
-    private val trackAnalyzer = com.velthy.client.playback.smart.TrackAnalyzer(this, AudioCache)
+    private val trackAnalyzer by lazy { com.velthy.client.playback.smart.TrackAnalyzer(this, AudioCache) }
 
     /** Shared with the crossfade's tail player, so both read the same disk cache. */
     private var mediaSourceFactory: DefaultMediaSourceFactory? = null
@@ -441,11 +441,10 @@ class PlaybackService : MediaSessionService() {
                     com.velthy.client.data.stats.ListeningRecorder.onStopped()
                 }
 
-                // ListenBrainz & Live Web Stats: "now playing" on play/resume too, not just on
+                // ListenBrainz: "now playing" on play/resume too, not just on
                 // transition — a track started from idle or resumed from pause
                 // otherwise stays silent on the site.
                 if (isPlaying && song != null) {
-                    com.velthy.client.data.LiveStatsReporter.report(song)
                     if (listenBrainzSong == null) {
                         listenBrainzSong = song
                         listenBrainzStartMs = System.currentTimeMillis()
@@ -534,10 +533,6 @@ class PlaybackService : MediaSessionService() {
                 scrobbleManager?.onSongStop()
                 scrobbleManager?.onSongStart(newSong, durationMs.takeIf { it > 0 })
                 val isRepeat = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
-                if (isRepeat) {
-                    com.velthy.client.data.LiveStatsReporter.reset()
-                }
-                com.velthy.client.data.LiveStatsReporter.report(newSong)
 
                 // ListenBrainz: submit finished for old song, playing_now for new song.
                 // The finished listen only counts when the track actually ended —

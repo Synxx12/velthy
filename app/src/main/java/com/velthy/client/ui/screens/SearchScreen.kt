@@ -1,7 +1,9 @@
 package com.velthy.client.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,14 +80,29 @@ fun SearchScreen(
     results: UiState<List<SearchResult>>?,
     listState: LazyListState,
     recentSongs: List<Song> = emptyList(),
+    /**
+     * Incremented by the nav bar each time the user re-taps the Search tab
+     * while already on it. A [LaunchedEffect] watches it and requests focus
+     * on the field, opening the keyboard so the user can start typing without
+     * hunting for the field.
+     */
+    focusTrigger: Int = 0,
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onSongSwipe: (Song) -> Unit,
     onBrowseClick: (BrowseItem) -> Unit,
+    /**
+     * Holding an album or playlist hit rather than tapping it — the same menu
+     * the shelves open, so a release found by searching can go on the queue
+     * without a trip through its page.
+     */
+    onBrowseLongPress: ((BrowseItem) -> Unit)? = null,
     history: List<String>,
+    suggestions: List<String> = emptyList(),
     onHistoryClick: (String) -> Unit,
     onHistoryRemove: (String) -> Unit,
     onHistoryClear: () -> Unit,
+    onSuggestionClick: (String) -> Unit = {},
     onCategoryClick: (browseId: String, title: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues,
@@ -158,6 +175,7 @@ fun SearchScreen(
                         is SearchResult.Browse -> BrowseRow(
                             item = row.item,
                             onClick = { onBrowseClick(row.item) },
+                            onLongPress = onBrowseLongPress?.let { cb -> { cb(row.item) } },
                         )
                     }
                     if (index < results.data.lastIndex) {
@@ -539,12 +557,17 @@ private fun ExploreCategoryCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BrowseRow(item: BrowseItem, onClick: () -> Unit) {
+private fun BrowseRow(
+    item: BrowseItem,
+    onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
             .padding(horizontal = PAGE_GUTTER, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

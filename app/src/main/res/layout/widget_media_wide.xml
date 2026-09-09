@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The 4×2 widget, and the shape either widget takes at
+  MediaWidget.WIDE_LAYOUT_MIN_DP or wider. Same full-bleed cover and same baked
+  blur as widget_media_compact; the extra width goes to the track, because three
+  glyphs spread across four cells reads as an empty bar.
+
+  See widget_media_compact for why the band's height has to match the blurred
+  region, and why nothing in it is clickable except the buttons themselves.
+-->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"

@@ -42,14 +42,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.BuildConfig
 import com.velthy.client.R
-import com.velthy.client.data.settings.AppSettings
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
-import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
 /**
@@ -75,7 +77,7 @@ fun FrostedTopBar(
     searchBar: (@Composable () -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val canBlur = rememberCanBlur()
     val titleAlpha by animateFloatAsState(
         targetValue = if (scrolled) 1f else 0f,
         animationSpec = tween(220),
@@ -83,7 +85,7 @@ fun FrostedTopBar(
     )
     val dividerColor by animateColorAsState(
         targetValue = MaterialTheme.colorScheme.outline.copy(
-            alpha = if (scrolled && reduceDynamicBlur) 0.6f else 0f,
+            alpha = if (scrolled && !canBlur) 0.6f else 0f,
         ),
         animationSpec = tween(220),
         label = "topBarDivider",
@@ -96,7 +98,7 @@ fun FrostedTopBar(
                 detectTapGestures { /* Absorb any taps in top bar empty space so they never trigger items underneath */ }
             }
             .then(
-                if (reduceDynamicBlur) Modifier.background(MaterialTheme.colorScheme.surface)
+                if (!canBlur) Modifier.background(MaterialTheme.colorScheme.surface)
                 else Modifier,
             ),
     ) {

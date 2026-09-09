@@ -425,7 +425,7 @@ private fun SyncIntegrationsStep(
         Spacer(Modifier.height(6.dp))
 
         Text(
-            text = "Connect live telemetry, automatic updates, and cloud privileges.",
+            text = "Connect automatic updates, sync, and cloud privileges.",
             color = colors.textSecondary,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -523,15 +523,6 @@ private fun SyncIntegrationsStep(
             icon = Icons.Rounded.CloudSync,
             title = "Continuous In-App Updates",
             subtitle = "Automatic background checks for release APKs and instant patch updates.",
-            colors = colors,
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        FeatureRow(
-            icon = Icons.Rounded.GraphicEq,
-            title = "Live Sync & Telemetry",
-            subtitle = "Broadcast real-time now-playing telemetry to your official live ticker on velthy.my.id/stats.",
             colors = colors,
         )
 
@@ -1250,7 +1241,7 @@ private fun AllSetStep(
                     SummaryCheckItem(
                         icon = Icons.Rounded.CloudSync,
                         title = "Sync & Integrations",
-                        subtitle = "Telemetry & In-App Updates",
+                        subtitle = "In-App Updates & Cloud Sync",
                         colors = colors,
                     )
 
