@@ -111,12 +111,7 @@ jobs:
             exit 1
           fi
           echo "${KEYSTORE_BASE64}" | base64 --decode > app/release.jks
-          cat <<EOF > keystore.properties
-        storeFile=release.jks
-        storePassword=${KEYSTORE_PASSWORD}
-        keyAlias=${KEY_ALIAS}
-        keyPassword=${KEY_PASSWORD}
-        EOF
+          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "${KEYSTORE_PASSWORD}" "${KEY_ALIAS}" "${KEY_PASSWORD}" > keystore.properties
           echo "✅ Keystore restored from Secrets."
 
       - name: Setup Local Properties & Secrets
