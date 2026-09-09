@@ -126,6 +126,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.State
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -138,6 +139,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -153,7 +155,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -435,6 +439,14 @@ private val BACKING_LINE_HEIGHT = 24.sp
 private const val BACKING_ALPHA = 0.72f
 
 /**
+ * How visible the player's own sleeve/banner should be while the host's cover
+ * morph is running. Reads the morph's [State] inside the artwork layers' draw
+ * lambdas, so it updates every frame without recomposing the whole screen.
+ */
+private fun artRevealOf(morph: State<Float>?): Float =
+    coverArtReveal(morph?.value ?: 1f)
+
+/**
  * Apple Music's Now Playing, closely: artwork that shrinks when paused, a
  * hairline scrubber with elapsed / remaining either side, oversized transport
  * glyphs, a volume capsule flanked by speaker icons, and lyrics / AirPlay /
@@ -492,12 +504,23 @@ fun NowPlayingScreen(
     onPull: (Float) -> Unit = {},
     /** Fired when the pull gesture ends; the host decides whether to snap. */
     onPullEnd: () -> Unit = {},
+    /**
+     * The open/close progress (1 = fully open) driving the mini → full cover
+     * morph. While < 1 the player's own artwork stays hidden behind the moving
+     * cover drawn by the host (see [coverArtReveal]); the mesh, credits and
+     * controls fade in on their own gentler curve.
+     */
+    morph: State<Float>? = null,
+    /** Reports where this player's artwork will sit once fully open, in window
+     *  pixels, so the host can aim the morph's travelling cover at it. */
+    onArtTargetChanged: ((CoverTarget?) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val isCompactScreen = configuration.screenHeightDp < 740
+    var sleeveRootRect by remember { mutableStateOf<Rect?>(null) }
 
     val syncedLyricsEnabled by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
@@ -778,6 +801,12 @@ fun NowPlayingScreen(
     var heroHeight by remember { mutableStateOf(0.dp) }
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
+    // Where the artwork a morph should aim at finally sits: the square sleeve,
+    // which on a phone sits inside the full-bleed banner's region. Reported
+    // whenever it moves so the host's travelling cover can follow it.
+    val coverTarget: CoverTarget? = sleeveRootRect?.let { CoverTarget(isHero = false, rect = it) }
+    LaunchedEffect(coverTarget) { onArtTargetChanged?.invoke(coverTarget) }
+
     Box(modifier = modifier.fillMaxSize()) {
         // Keyed on the track: the backdrop drifts when the player opens and on
         // every skip, then rests. Position ticks recompose this screen twice a
@@ -834,7 +863,8 @@ fun NowPlayingScreen(
                             // over, and takes it straight back if there is no
                             // clip mounted to hand it to.
                             alpha = heroT *
-                                (1f - if (heroClip != null) canvasCover.floatValue else 0f)
+                                (1f - if (heroClip != null) canvasCover.floatValue else 0f) *
+                                artRevealOf(morph)
                             // The mask below erases part of what this layer
                             // drew, which it can only do in a buffer of its own.
                             compositingStrategy = CompositingStrategy.Offscreen
@@ -870,7 +900,8 @@ fun NowPlayingScreen(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .fillMaxWidth()
-                            .height(heroHeight),
+                            .height(heroHeight)
+                            .graphicsLayer { alpha = artRevealOf(morph) },
                     )
                 }
             }
@@ -938,15 +969,19 @@ fun NowPlayingScreen(
                     .height(DISMISS_STRIP_HEIGHT)
                     .pointerInput(Unit) {
                         var down = 0f
-                        val fullH = with(density) { configuration.screenHeightDp.dp.toPx() }
+                        // Use a short fixed travel distance so a quick flick of
+                        // ~200 dp is enough to close the player — the old code
+                        // divided by the full screen height which made it feel
+                        // impossibly stiff.
+                        val dismissTravelPx = with(density) { 200.dp.toPx() }
                         detectVerticalDragGestures(
                             onDragStart = { down = 0f },
                             onVerticalDrag = { change, dragAmount ->
                                 change.consume()
-                                if (dragAmount > 0f) {
-                                    down += dragAmount
-                                    onPull((1f - down / fullH).coerceIn(0f, 1f))
-                                }
+                                // Signed: pulling down grows `down` (closing),
+                                // pulling back up shrinks it again (cancel).
+                                down = (down + dragAmount).coerceAtLeast(0f)
+                                onPull((1f - down / dismissTravelPx).coerceIn(0f, 1f))
                             },
                             onDragEnd = { onPullEnd() },
                             onDragCancel = { onPullEnd() },
@@ -1059,7 +1094,8 @@ fun NowPlayingScreen(
                             } else {
                                 Modifier
                             },
-                        ),
+                        )
+                        .onGloballyPositioned { sleeveRootRect = it.boundsInRoot() },
                     contentAlignment = Alignment.Center,
                 ) {
                     // The sleeve proper. Separated from the box around it so
@@ -1068,7 +1104,7 @@ fun NowPlayingScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .graphicsLayer { alpha = 1f - heroT }
+                            .graphicsLayer { alpha = (1f - heroT) * artRevealOf(morph) }
                             // A drop shadow grounds a photo; on the flat
                             // placeholder tile it has nothing to sit behind, so
                             // it just reads as a second, darker square ringing
@@ -1152,7 +1188,7 @@ fun NowPlayingScreen(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
-                                .graphicsLayer { alpha = 1f - p * 2f },
+                                .graphicsLayer { alpha = (1f - p * 2f) * artRevealOf(morph) },
                         ) {
                             nerdStats?.describe()?.let { stats ->
                                 Text(
