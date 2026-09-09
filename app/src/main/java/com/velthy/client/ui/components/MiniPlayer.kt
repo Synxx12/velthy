@@ -26,7 +26,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -88,6 +91,12 @@ fun MiniPlayer(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onExpand: () -> Unit,
+    /**
+     * Reports the artwork's bounds in window pixels, used as the origin of the
+     * mini → full morph. Optional so a preview that has no player never pays
+     * for the measurement.
+     */
+    onArtBounds: ((Rect) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val canBlur = rememberCanBlur()
@@ -123,7 +132,17 @@ fun MiniPlayer(
                     .size(40.dp)
                     .clip(RoundedCornerShape(ART_CORNER))
                     .thumbnailBorder(RoundedCornerShape(ART_CORNER))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .onGloballyPositioned { coords ->
+                        onArtBounds?.invoke(
+                            Rect(
+                                coords.positionInRoot().x,
+                                coords.positionInRoot().y,
+                                coords.positionInRoot().x + coords.size.width,
+                                coords.positionInRoot().y + coords.size.height,
+                            ),
+                        )
+                    },
             )
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {

@@ -19,6 +19,7 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -33,6 +34,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -173,7 +175,10 @@ import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.icons.VelthyIcons
 import androidx.media3.common.Player
 import com.velthy.client.data.YtMusicRepository
+import com.velthy.client.ui.player.CoverMorphOverlay
+import com.velthy.client.ui.player.CoverTarget
 import com.velthy.client.ui.player.NowPlayingScreen
+import com.velthy.client.ui.player.coverChromeReveal
 import com.velthy.client.ui.screens.AppUpdateSheet
 import com.velthy.client.ui.screens.DetailScreen
 import com.velthy.client.ui.screens.HomeScreen
@@ -274,7 +279,17 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     // 0 (mini-sized) → 1 (full screen).
     var playerPresent by remember { mutableStateOf(false) }
     val playerProgress = remember { Animatable(0f) }
+    // Bounds of the mini player's artwork (window pixels) — where the cover
+    // begins its journey when the full player opens.
     var miniBounds by remember { mutableStateOf<Rect?>(null) }
+    // [playerProgress] surfaced as a State: the reveal curves and the morph
+    // overlay read it every frame, and reading it through State confines the
+    // recomposition to the overlay instead of the whole app.
+    val morph = remember { derivedStateOf { playerProgress.value.coerceIn(0f, 1f) } }
+    // Where the full player's own artwork sits once open (reported by the
+    // player), and this overlay's own window position.
+    var coverTarget by remember { mutableStateOf<CoverTarget?>(null) }
+    var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
     LaunchedEffect(showNowPlaying) {
         if (showNowPlaying) {
             playerProgress.snapTo(0f)
@@ -1523,13 +1538,18 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .onGloballyPositioned { coords ->
-                            val p = coords.positionInRoot()
-                            miniBounds = Rect(
-                                p.x,
-                                p.y,
-                                p.x + coords.size.width,
-                                p.y + coords.size.height,
+                        .pointerInput(Unit) {
+                            var up = 0f
+                            val openPx = 60.dp.toPx()
+                            detectVerticalDragGestures(
+                                onDragStart = { up = 0f },
+                                onVerticalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    if (dragAmount < 0f) up += -dragAmount
+                                },
+                                onDragEnd = {
+                                    if (up > openPx && !showNowPlaying) showNowPlaying = true
+                                },
                             )
                         },
                 ) {
@@ -1543,6 +1563,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         },
                         onNext = { controller?.seekToNextMediaItem() },
                         onExpand = { showNowPlaying = true },
+                        onArtBounds = { miniBounds = it },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1605,19 +1626,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             LaunchedEffect(song) {
                 if (songActions?.videoId == song.videoId) songActions = song
             }
-            // The player rises out of the mini player's spot — a continuous,
-            // finger-tracked sheet instead of a hard snap: [playerProgress] is 1
-            // when fully open and 0 when collapsed back to the mini player, so a
-            // pull can park it halfway and the host decides where it snaps.
-            BoxWithConstraints(
+            // The player's chrome fades in behind a single travelling cover —
+            // CoverMorphOverlay below — so the cover grows out of the mini
+            // player's artwork and the player's own sleeve/banner takes over
+            // only when the cover has landed on it. [playerProgress] is 1 when
+            // fully open and 0 when collapsed back, and a pull can park it
+            // halfway while the host decides where it snaps.
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer {
-                        val p = playerProgress.value.coerceIn(0f, 1f)
-                        val h = size.height.toFloat()
-                        translationY = (1f - p) * h
-                        alpha = (p * 1.2f).coerceIn(0f, 1f)
-                    },
+                    .onGloballyPositioned { overlayOrigin = it.positionInRoot() },
             ) {
                 NowPlayingScreen(
                     song = song,
@@ -1733,6 +1751,18 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     lyrics = lyrics,
                     lyricsSource = lyricsSource,
                     lyricsUnavailable = lyricsChecked && lyrics.isNullOrEmpty(),
+                    morph = morph,
+                    onArtTargetChanged = { coverTarget = it },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = coverChromeReveal(morph.value) },
+                )
+                CoverMorphOverlay(
+                    song = song,
+                    mini = miniBounds,
+                    target = coverTarget,
+                    morph = morph,
+                    overlayOrigin = overlayOrigin,
                 )
             }
         }

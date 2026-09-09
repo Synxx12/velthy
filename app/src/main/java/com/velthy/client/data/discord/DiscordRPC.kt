@@ -105,10 +105,16 @@ class DiscordRPC(
 
         val name = activityName.ifEmpty { appName() }
 
-        val artworkUrl = if (song.videoId.isNotEmpty() && !song.videoId.startsWith("local:")) {
-            "https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg"
-        } else {
-            song.artworkAt(ART_PX)
+        // Discord draws the large image in a square, contain-fit slot, so any
+        // non-square source — the 4:3 YouTube frame in particular — comes back
+        // letterboxed with black bars top and bottom. Prefer the track's own
+        // square artwork (YouTube Music's size-hinted thumbnails are square)
+        // and only fall back to a video frame when there is nothing else.
+        val artworkUrl = when {
+            song.videoId.isEmpty() || song.videoId.startsWith("local:") -> song.artworkAt(ART_PX)
+            song.thumbnailUrl != null && song.thumbnailUrl.contains(SQUARE_SIZE_HINT) ->
+                song.artworkAt(ART_PX)
+            else -> "https://i.ytimg.com/vi/${song.videoId}/hqdefault.jpg"
         }
 
         setActivity(
@@ -164,6 +170,9 @@ class DiscordRPC(
 
         /** Discord draws the sleeve at roughly 96dp; 480px covers it on any density. */
         private const val ART_PX = 480
+
+        /** YouTube Music's artwork URLs carry a `w<N>-h<N>` size hint and are square. */
+        private val SQUARE_SIZE_HINT = Regex("""w\d+-h\d+""")
 
         fun watchUrl(song: Song): String =
             "https://music.youtube.com/watch?v=${song.videoId}"
