@@ -15,6 +15,11 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 #### 🐛 Perbaikan Masalah
 - **Geser ke Bawah untuk Tutup Pemutar Kembali Responsif**: Memperbaiki masalah di mana menutup layar pemutar penuh (*Now Playing*) memerlukan tarikan yang sangat jauh ke bawah hingga hampir setengah tinggi layar. Kini cukup dengan tarikan singkat ~200 dp, layar pemutar langsung menutup dengan mulus dan alami — sesuai ekspektasi pengguna yang terbiasa dengan gestur iOS/Android modern.
+- **Foto Profil Discord Kini Selalu Berbentuk Kotak**: Memperbaiki bug di mana sampul lagu di Rich Presence Discord tampil dengan bar hitam di atas dan bawah (*letterbox*) karena menggunakan thumbnail video YouTube berformat 4:3. Pemutar kini secara cerdas memprioritaskan thumbnail kotak (*square*) langsung dari YouTube Music — hasil yang jauh lebih bersih dan profesional di profil Discord.
+
+#### ✨ Fitur Baru & Tampilan
+- **Animasi Morph Cover Seamless (Mini → Full Player)**: Sampul lagu kini "terbang" secara halus dari posisi mini player menuju layar penuh saat pemutar dibuka — transisi yang kontinu dan mengikuti jari, bukan sekadar fade biasa.
+- **Geser ke Atas untuk Buka Pemutar dari Mini Player**: Selain mengetuk, kini pengguna dapat menggeser mini player ke atas untuk membuka layar pemutar penuh secara intuitif.
 
 #### 🐛 Perbaikan Masalah
 - **Instalasi ke Emulator Kini Selalu Berhasil**: Proses *build & deploy* otomatis kini secara cerdas memilih APK universal yang kompatibel dengan semua arsitektur prosesor — menyelesaikan kegagalan instalasi `INSTALL_FAILED_NO_MATCHING_ABIS` yang sebelumnya muncul saat memasang ke emulator x86_64. Jika APK universal tidak tersedia, sistem secara otomatis mendeteksi ABI primer perangkat dan memilih APK yang tepat.
