@@ -16,8 +16,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.spring
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -97,6 +97,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import com.velthy.client.ui.components.LaunchSplashScreen
 import com.velthy.client.ui.onboarding.OnboardingScreen
 import androidx.compose.ui.Alignment
@@ -178,6 +179,7 @@ import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.ui.player.CoverMorphOverlay
 import com.velthy.client.ui.player.CoverTarget
 import com.velthy.client.ui.player.NowPlayingScreen
+import com.velthy.client.ui.player.bottomChromeReveal
 import com.velthy.client.ui.player.coverChromeReveal
 import com.velthy.client.ui.screens.AppUpdateSheet
 import com.velthy.client.ui.screens.DetailScreen
@@ -205,7 +207,9 @@ import com.velthy.client.ui.screens.LibraryGridPage
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -267,6 +271,63 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The mini → full player morph, opening and closing.
+ *
+ * Both ends are evenly damped and close to the same stiffness on purpose. The
+ * old pair had the opening on a soft spring and the close on a much stiffer
+ * one, so the player drifted open and then snapped shut — the two halves of
+ * one gesture read as two different animations. Low stiffness rather than a
+ * tween because the distance travelled is whatever the layout reports and not
+ * a fixed number of pixels; a spring is the only spec that can be told "take
+ * this long to settle" without working out that distance first.
+ *
+ * Soft, and softer than they look: this runs the length of the screen, and a
+ * stiff spring covers that in a couple of frames and then sits still, which is
+ * what made the whole thing read as a jump cut rather than a movement. No
+ * bounce either — the morph clamps at 1, so the cover has already handed over
+ * to the real artwork by the time an overshoot would land, and all the bounce
+ * would buy is slack in the timing.
+ */
+private val PLAYER_OPEN_SPEC: SpringSpec<Float> = spring(dampingRatio = 1f, stiffness = 170f)
+private val PLAYER_CLOSE_SPEC: SpringSpec<Float> = spring(dampingRatio = 1f, stiffness = 200f)
+
+/**
+ * How long the open waits for the player to compose, lay out and decode its
+ * cover before the flight is allowed to start regardless.
+ *
+ * A safety net, not a budget. The wait normally ends on the first frame after
+ * the player lays out, and the cover is nearly always a decode from disk rather
+ * than a fetch — the mini player's thumbnail already put the source there — so
+ * the realistic wait is a frame or two. The bound exists so that a track whose
+ * artwork never arrives opens anyway instead of leaving the app sitting behind
+ * an invisible player.
+ *
+ * Worth knowing what the wait looks like, because it is not an empty screen:
+ * at progress 0 the player is fully transparent and the page and mini player
+ * are at their ordinary resting state. However long this takes, the app looks
+ * exactly like it does the moment before you tapped.
+ */
+private const val PLAYER_READY_TIMEOUT_MS = 600L
+
+/**
+ * How far the mini player and tab bar are allowed to be dragged up before the
+ * player opens, and how much of the finger's travel they take. Well short of
+ * 1:1 so the bar feels attached to something rather than free in the air, and
+ * the ceiling keeps it from climbing into the page behind it.
+ */
+private val MINI_LIFT_DAMPING = 0.5f
+private val MINI_LIFT_MAX = 30.dp
+
+/**
+ * How far below its resting place the tab bar and mini player start while the
+ * player is open, so they rise into position instead of simply fading.
+ *
+ * Small on purpose: this is furniture that the player does not really move,
+ * and the point is only that it settles rather than appears.
+ */
+private val BOTTOM_CHROME_DROP = 22.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()) {
@@ -279,36 +340,105 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     // 0 (mini-sized) → 1 (full screen).
     var playerPresent by remember { mutableStateOf(false) }
     val playerProgress = remember { Animatable(0f) }
+    // The mini player's own travel while the swipe-up gesture is in flight.
+    val miniLift = remember { Animatable(0f) }
+    /**
+     * Where a finger has dragged the player to, or null while nobody is
+     * dragging and [playerProgress] is the truth.
+     *
+     * A drag deliberately does *not* write to [playerProgress]. It used to:
+     * the gesture called `stop()` on it and then snapped it to the dragged
+     * value, from a coroutine of its own. `stop()` cancels whatever animation
+     * is running on the animatable — and the animation running at that moment
+     * is the host's own close, started by the effect that also sets
+     * `playerPresent = false` when it finishes. Cancelling it cancelled that
+     * whole effect coroutine, so the player was left composed with the morph
+     * parked part-way: the travelling cover still drawn (it is only hidden
+     * once the morph reaches 1) and the player's own sleeve still at alpha 0
+     * (it is only revealed at the same threshold). A player showing no artwork
+     * with a loose cover floating over it, which is exactly the bug.
+     *
+     * So the drag gets its own value and the two are never mixed: the host owns
+     * [playerProgress] and nothing on the gesture path can interrupt it.
+     */
+    var pullProgress by remember { mutableStateOf<Float?>(null) }
     // Bounds of the mini player's artwork (window pixels) — where the cover
     // begins its journey when the full player opens.
     var miniBounds by remember { mutableStateOf<Rect?>(null) }
-    // [playerProgress] surfaced as a State: the reveal curves and the morph
-    // overlay read it every frame, and reading it through State confines the
-    // recomposition to the overlay instead of the whole app.
-    val morph = remember { derivedStateOf { playerProgress.value.coerceIn(0f, 1f) } }
+    // Surfaced as a State: the reveal curves and the morph overlay read it every
+    // frame, and reading it through State confines the recomposition to the
+    // overlay instead of the whole app.
+    val morph = remember {
+        derivedStateOf { (pullProgress ?: playerProgress.value).coerceIn(0f, 1f) }
+    }
+    /**
+     * What the mini player answers to.
+     *
+     * Forced to 0 whenever the player is not on screen: the bar's own cover is
+     * only ever hidden while the player is up and the cover has been drawn out
+     * of it, so a progress value left mid-flight must not be able to leave the
+     * mini player without its artwork.
+     */
+    val miniMorph = remember { derivedStateOf { if (playerPresent) morph.value else 0f } }
+    // Whether the travelling cover has finished its journey (or not started it).
+    // Derived so it flips twice per transition instead of on every frame — and
+    // so a settled player isn't carrying a second copy of the artwork in a
+    // layer nobody can see.
+    val coverSettled by remember {
+        derivedStateOf { (pullProgress ?: playerProgress.value) >= 0.999f }
+    }
     // Where the full player's own artwork sits once open (reported by the
     // player), and this overlay's own window position.
     var coverTarget by remember { mutableStateOf<CoverTarget?>(null) }
     var overlayOrigin by remember { mutableStateOf(Offset.Zero) }
+    // Whether the overlay's own copy of the cover has decoded. Part of the
+    // open's readiness gate: the overlay asks for the artwork at the player's
+    // 1200px, which the mini player's 160px thumbnail does not share, so on a
+    // cold track there is a real fetch behind this.
+    var coverArtReady by remember { mutableStateOf(false) }
     LaunchedEffect(showNowPlaying) {
         if (showNowPlaying) {
-            playerProgress.snapTo(0f)
-            playerPresent = true
-            playerProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
-            )
+            // Only a player that is genuinely starting from the mini player
+            // restarts the flight. One that is already on screen is catching a
+            // close that was still under way — a drag can put it back, so this
+            // picks the morph up from wherever it had got to instead of
+            // resetting it to 0 and replaying the whole journey from the top.
+            if (!playerPresent) {
+                coverArtReady = false
+                playerProgress.snapTo(0f)
+                playerPresent = true
+                // Hold the clock until the player has actually composed and told
+                // us where both ends of the flight are.
+                //
+                // This is the whole reason the morph used to stall and then jump.
+                // Animatable advances on wall-clock time sampled per frame, and
+                // the player's first composition is the heaviest thing in the app
+                // (mesh backdrop, artwork, lyrics, queue, volume observer).
+                // Starting the animation in the same breath as hanging that
+                // subtree meant the frames it spent composing were frames of the
+                // flight nobody ever saw: the spring was already at 60% by the
+                // time the screen could draw, so the cover appeared to sit still
+                // and then leap. Waiting for the target costs nothing the user can
+                // perceive — the screen is hidden at progress 0 either way — and
+                // it makes the first drawn frame of the player the first frame of
+                // the animation.
+                //
+                // Bounded, so a player that somehow never reports its artwork can
+                // still open rather than leaving the app stuck behind an invisible
+                // screen.
+                withTimeoutOrNull(PLAYER_READY_TIMEOUT_MS) {
+                    snapshotFlow { miniBounds != null && coverTarget != null && coverArtReady }
+                        .first { it }
+                }
+            }
+            playerProgress.animateTo(targetValue = 1f, animationSpec = PLAYER_OPEN_SPEC)
         } else if (playerPresent) {
-            playerProgress.animateTo(
-                targetValue = 0f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMedium,
-                ),
-            )
+            // Always a real animation, however the close was asked for. The
+            // gesture used to park the progress wherever the finger let go and
+            // then vanish from there, which is the snap this exists to avoid.
+            // No readiness wait on this side: the player is already composed,
+            // so there is nothing to wait for.
+            playerProgress.animateTo(targetValue = 0f, animationSpec = PLAYER_CLOSE_SPEC)
             playerPresent = false
         }
     }
@@ -1521,13 +1651,32 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             // easing out of it and into this, so this is what is actually
             // under the tab bar.
             pageColor = if (isDetailVisible) detailPalette.background else MaterialTheme.colorScheme.background,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            // Revealed with the bars rather than left standing on its own: the
+            // frosted floor is the bottom of the player as far as the page is
+            // concerned, so it has to arrive with the furniture it carries.
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .graphicsLayer { alpha = bottomChromeReveal(morph.value) },
         )
 
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                // One layer over the bar pair, so the mini player and the tab
+                // bar underneath it are never at different points of the
+                // transition. This is the other half of the player's fade: as
+                // the player gives the screen up, this takes it over, and the
+                // two being exact complements leaves no frame where the cover
+                // is alone on the page.
+                //
+                // Alpha only — no offset. A transform here would move the mini
+                // player's artwork with it, and that artwork's position is what
+                // the morph aims the cover at: it would be reported from a new
+                // place every frame, dragging the whole overlay's composition
+                // along with it. The tab bar carries the movement instead; it
+                // has no geometry anyone is measuring.
+                .graphicsLayer { alpha = bottomChromeReveal(morph.value) }
                 .pointerInput(Unit) {
                     detectTapGestures { /* Absorb empty space taps in navbar/miniplayer area */ }
                 },
@@ -1541,15 +1690,44 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         .pointerInput(Unit) {
                             var up = 0f
                             val openPx = 60.dp.toPx()
+                            val liftCap = MINI_LIFT_MAX.toPx()
+                            // Returned to rest rather than left where the finger
+                            // let go — an abandoned drag must not leave the bar
+                            // floating above its slot.
+                            fun settle() {
+                                scope.launch {
+                                    miniLift.animateTo(0f, PLAYER_CLOSE_SPEC)
+                                }
+                            }
                             detectVerticalDragGestures(
                                 onDragStart = { up = 0f },
                                 onVerticalDrag = { change, dragAmount ->
                                     change.consume()
-                                    if (dragAmount < 0f) up += -dragAmount
+                                    if (dragAmount < 0f) {
+                                        up += -dragAmount
+                                        // Damped and capped, so the bar answers
+                                        // the finger without leaving the page.
+                                        scope.launch {
+                                            miniLift.snapTo(
+                                                (up * MINI_LIFT_DAMPING).coerceAtMost(liftCap),
+                                            )
+                                        }
+                                    }
                                 },
                                 onDragEnd = {
-                                    if (up > openPx && !showNowPlaying) showNowPlaying = true
+                                    if (up > openPx && !showNowPlaying) {
+                                        // The bar is already receding behind the
+                                        // opening player, so dropping the lift
+                                        // outright is invisible — and it keeps
+                                        // the morph from starting off a bounds
+                                        // that is still sliding back down.
+                                        scope.launch { miniLift.snapTo(0f) }
+                                        showNowPlaying = true
+                                    } else {
+                                        settle()
+                                    }
                                 },
+                                onDragCancel = { settle() },
                             )
                         },
                 ) {
@@ -1564,6 +1742,8 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         onNext = { controller?.seekToNextMediaItem() },
                         onExpand = { showNowPlaying = true },
                         onArtBounds = { miniBounds = it },
+                        morph = miniMorph,
+                        lift = miniLift,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1572,6 +1752,10 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 tabs = tabs,
                 selectedIndex = selectedTab,
                 hazeState = hazeState,
+                modifier = Modifier.graphicsLayer {
+                    translationY = (1f - bottomChromeReveal(morph.value)) *
+                        BOTTOM_CHROME_DROP.toPx()
+                },
                 onTabSelected = { index ->
                     // Re-tapping the search tab while already on it focuses the
                     // input field and opens the keyboard rather than resetting.
@@ -1643,20 +1827,42 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     isLoading = player.isLoading,
                     positionMs = player.positionMs,
                     durationMs = player.durationMs,
-                    onPull = { progress -> scope.launch { playerProgress.stop(); playerProgress.snapTo(progress) } },
+                    // The finger owns the morph outright while it is down. No
+                    // stop(), no coroutine, nothing that could reach the host's
+                    // own animation — see [pullProgress].
+                    onPull = { progress -> pullProgress = progress },
                     onPullEnd = {
-                        scope.launch {
-                            if (playerProgress.value < 0.5f) {
-                                playerProgress.snapTo(0f)
-                                showNowPlaying = false
-                            } else {
-                                playerProgress.animateTo(
-                                    targetValue = 1f,
-                                    animationSpec = spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMediumLow,
-                                    ),
-                                )
+                        // Read once: the finger's value only stands in for the
+                        // animatable while it is down, and it is handed over in
+                        // the same coroutine that starts the animation, so
+                        // there is never a frame showing both or neither.
+                        val released = pullProgress
+                        if (released != null) {
+                            scope.launch {
+                                // The newest word on where the player is, so it
+                                // replaces whatever the animatable was doing.
+                                playerProgress.snapTo(released)
+                                // Only now does the finger stop being the truth
+                                // — clearing it first would flash the morph back
+                                // to the animatable's stale value.
+                                pullProgress = null
+                                if (released < 0.5f) {
+                                    // Handed to the effect that owns every other
+                                    // close, so it glides home from wherever the
+                                    // finger left it instead of vanishing.
+                                    showNowPlaying = false
+                                } else {
+                                    // A drag can catch a close that was already
+                                    // under way, so the flag is put back as well
+                                    // as the morph. Safe to do here: the effect
+                                    // leaves a player that is already on screen
+                                    // alone rather than restarting it from zero.
+                                    showNowPlaying = true
+                                    playerProgress.animateTo(
+                                        targetValue = 1f,
+                                        animationSpec = PLAYER_OPEN_SPEC,
+                                    )
+                                }
                             }
                         }
                     },
@@ -1757,13 +1963,20 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         .fillMaxSize()
                         .graphicsLayer { alpha = coverChromeReveal(morph.value) },
                 )
-                CoverMorphOverlay(
-                    song = song,
-                    mini = miniBounds,
-                    target = coverTarget,
-                    morph = morph,
-                    overlayOrigin = overlayOrigin,
-                )
+                // Only while there is a journey to draw. Once the cover has
+                // landed the player's own artwork is what's on screen, and a
+                // second copy held at zero alpha is a bitmap and a layer the
+                // compositor still has to carry.
+                if (!coverSettled) {
+                    CoverMorphOverlay(
+                        song = song,
+                        mini = miniBounds,
+                        target = coverTarget,
+                        morph = morph,
+                        overlayOrigin = overlayOrigin,
+                        onArtReady = { coverArtReady = true },
+                    )
+                }
             }
         }
     }

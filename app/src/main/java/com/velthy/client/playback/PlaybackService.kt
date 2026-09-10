@@ -2336,6 +2336,7 @@ class PlaybackService : MediaSessionService() {
         scope.launch {
             combine<Any, List<Any>>(
                 AppSettings.discordUseDetails,
+                AppSettings.discordSecondLine,
                 AppSettings.discordStatus,
                 AppSettings.discordActivityType,
                 AppSettings.discordActivityName,
@@ -2402,6 +2403,7 @@ class PlaybackService : MediaSessionService() {
                 button2Visible = AppSettings.discordButton2Visible.value,
                 activityType = AppSettings.discordActivityType.value,
                 activityName = AppSettings.discordActivityName.value,
+                secondLineMode = AppSettings.discordSecondLine.value,
             ).onFailure {
                 TrackLog.d("Musique", "Discord presence failed: ${it.message}")
             }

@@ -1261,7 +1261,17 @@ fun NowPlayingScreen(
                         .fillMaxWidth()
                         .offset(y = titleTop)
                         .padding(start = titleStart)
-                        .height(HEADER_HEIGHT),
+                        .height(HEADER_HEIGHT)
+                        // The credits rise the last stretch into place behind
+                        // the backdrop, on their own run. Sibling of the
+                        // artwork, never its ancestor: a transform over the
+                        // sleeve's own box would move the bounds the morph aims
+                        // its cover at, and every frame of the flight would
+                        // then push a new target back up to the host.
+                        .graphicsLayer {
+                            translationY = (1f - playerCreditsReveal(morph?.value ?: 1f)) *
+                                18.dp.toPx()
+                        },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -1387,7 +1397,17 @@ fun NowPlayingScreen(
                     .fillMaxWidth(),
             ) {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // The transport rises on the longest run of the three, so
+                    // it is still settling as the credits land and the
+                    // backdrop finishes — the last thing to arrive, a beat
+                    // after the title it belongs to. Drawn, not composed: this
+                    // moves on every frame of the morph.
+                    .graphicsLayer {
+                        translationY = (1f - playerControlsReveal(morph?.value ?: 1f)) *
+                            28.dp.toPx()
+                    },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
             // Current lyric, one line, directly above the scrubber. It stays in

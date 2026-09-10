@@ -7,6 +7,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import com.velthy.client.BuildConfig
 import com.velthy.client.auth.AuthStore
+import com.velthy.client.data.discord.DiscordRPC
 import com.velthy.client.data.lyrics.LyricsSource
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -301,6 +302,19 @@ object AppSettings {
     /** Put the track title on the bold profile line, in place of the artist. */
     val discordUseDetails = MutableStateFlow(false)
 
+    /**
+     * What the card's second line carries — the artist alone, or the album with
+     * it. One of the `SECOND_LINE_*` modes in
+     * [DiscordRPC][com.velthy.client.data.discord.DiscordRPC].
+     *
+     * Defaults to showing both. Discord's card has exactly two text lines and
+     * the title already owns the first, so an album has nowhere else to go:
+     * held back to the artwork's hover text, as it was, it is a field nobody
+     * ever sees. The artist-alone mode is kept for anyone who wants the card
+     * the way it used to read.
+     */
+    val discordSecondLine = MutableStateFlow(DiscordRPC.SECOND_LINE_ARTIST_ALBUM)
+
     /** Reveals the presence-shape controls: status, activity type/name, buttons. */
     val discordAdvancedMode = MutableStateFlow(false)
 
@@ -442,6 +456,10 @@ object AppSettings {
         discordAvatar.value = prefs.getString(KEY_DISCORD_AVATAR, "").orEmpty()
         discordRpcEnabled.value = prefs.getBoolean(KEY_DISCORD_RPC_ENABLED, true)
         discordUseDetails.value = prefs.getBoolean(KEY_DISCORD_USE_DETAILS, false)
+        discordSecondLine.value = prefs.getString(
+            KEY_DISCORD_SECOND_LINE,
+            DiscordRPC.SECOND_LINE_ARTIST_ALBUM,
+        ).orEmpty().ifEmpty { DiscordRPC.SECOND_LINE_ARTIST_ALBUM }
         discordAdvancedMode.value = prefs.getBoolean(KEY_DISCORD_ADVANCED_MODE, false)
         discordStatus.value = prefs.getString(KEY_DISCORD_STATUS, "online").orEmpty()
         discordActivityType.value = prefs.getString(KEY_DISCORD_ACTIVITY_TYPE, "listening").orEmpty()
@@ -858,6 +876,11 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_DISCORD_USE_DETAILS, value).apply()
     }
 
+    fun setDiscordSecondLine(value: String) {
+        discordSecondLine.value = value
+        prefs.edit().putString(KEY_DISCORD_SECOND_LINE, value).apply()
+    }
+
     fun setDiscordAdvancedMode(value: Boolean) {
         discordAdvancedMode.value = value
         prefs.edit().putBoolean(KEY_DISCORD_ADVANCED_MODE, value).apply()
@@ -961,6 +984,7 @@ object AppSettings {
     private const val KEY_DISCORD_AVATAR = "discord_avatar"
     private const val KEY_DISCORD_RPC_ENABLED = "discord_rpc_enabled"
     private const val KEY_DISCORD_USE_DETAILS = "discord_use_details"
+    private const val KEY_DISCORD_SECOND_LINE = "discord_second_line"
     private const val KEY_DISCORD_ADVANCED_MODE = "discord_advanced_mode"
     private const val KEY_DISCORD_STATUS = "discord_status"
     private const val KEY_DISCORD_ACTIVITY_TYPE = "discord_activity_type"

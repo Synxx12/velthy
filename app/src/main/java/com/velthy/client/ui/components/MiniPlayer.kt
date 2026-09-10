@@ -21,13 +21,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,6 +44,8 @@ import com.velthy.client.data.model.artworkAt
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
+import com.velthy.client.ui.player.coverDeparture
+import com.velthy.client.ui.player.miniContentSettle
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -97,6 +103,20 @@ fun MiniPlayer(
      * for the measurement.
      */
     onArtBounds: ((Rect) -> Unit)? = null,
+    /**
+     * The host's open/close progress (1 = the player is fully open). The bar
+     * reads it only inside draw layers, so the morph costs it no recomposition:
+     * its cover is handed to the travelling one, and its contents slide the
+     * last few dp into place behind them. The bar's own fade belongs to the
+     * host, which reveals it together with the tab bar underneath it.
+     */
+    morph: State<Float>? = null,
+    /**
+     * How far the bar has been dragged up, in pixels, while the swipe-to-open
+     * gesture is in flight. Set by the host so the bar travels with the finger
+     * instead of sitting still until it snaps open.
+     */
+    lift: Animatable<Float, AnimationVector1D>? = null,
     modifier: Modifier = Modifier,
 ) {
     val canBlur = rememberCanBlur()
@@ -105,6 +125,11 @@ fun MiniPlayer(
     Box(
         modifier = modifier
             .padding(horizontal = PAGE_GUTTER)
+            .graphicsLayer {
+                // Read in the draw phase so a frame of the swipe costs the bar a
+                // repaint rather than a recomposition.
+                translationY = -(lift?.value ?: 0f)
+            }
             .clip(shape)
             .then(
                 if (!canBlur) {
@@ -130,6 +155,11 @@ fun MiniPlayer(
                 contentDescription = null,
                 modifier = Modifier
                     .size(40.dp)
+                    // Hands its cover over to the travelling one the instant
+                    // that copy has cleared it. Without this the bar keeps
+                    // painting the same square the morph is flying away with,
+                    // and the two diverge across the screen.
+                    .graphicsLayer { alpha = 1f - coverDeparture(morph?.value ?: 0f) }
                     .clip(RoundedCornerShape(ART_CORNER))
                     .thumbnailBorder(RoundedCornerShape(ART_CORNER))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -145,62 +175,86 @@ fun MiniPlayer(
                     },
             )
             Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = song.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = song.artist,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (isLoading) {
-                Box(Modifier.size(GLYPH_SLOT), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
+            // Everything but the artwork, so the cover stays the fixed point
+            // the stretch slides in behind. Weighted as one block, which is
+            // where the credits column's own weight used to sit.
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .miniContentStagger(morph),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = song.title,
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(SPINNER_SIZE),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = song.artist,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
-            } else {
+                if (isLoading) {
+                    Box(Modifier.size(GLYPH_SLOT), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onBackground,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(SPINNER_SIZE),
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = {
+                            haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
+                            onPlayPause()
+                        },
+                        modifier = Modifier.size(GLYPH_SLOT),
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(GLYPH_SIZE),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(TRANSPORT_GAP))
                 IconButton(
                     onClick = {
-                        haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
-                        onPlayPause()
+                        haptics.play(Haptic.SkipNext)
+                        onNext()
                     },
                     modifier = Modifier.size(GLYPH_SLOT),
                 ) {
                     Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        Icons.Rounded.SkipNext,
+                        contentDescription = "Next",
                         tint = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.size(GLYPH_SIZE),
                     )
                 }
             }
-            Spacer(Modifier.width(TRANSPORT_GAP))
-            IconButton(
-                onClick = {
-                    haptics.play(Haptic.SkipNext)
-                    onNext()
-                },
-                modifier = Modifier.size(GLYPH_SLOT),
-            ) {
-                Icon(
-                    Icons.Rounded.SkipNext,
-                    contentDescription = "Next",
-                    tint = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.size(GLYPH_SIZE),
-                )
-            }
         }
+    }
+}
+
+/**
+ * Slides the bar's contents up into their row as [miniContentSettle] runs.
+ *
+ * Read inside the layer block, never in composition: this moves on every frame
+ * of the morph, and a value read in the body would recompose the title, the
+ * artist and both transport buttons sixty times a second to move them a few dp.
+ */
+private fun Modifier.miniContentStagger(morph: State<Float>?): Modifier {
+    if (morph == null) return this
+    return this.graphicsLayer {
+        translationY = (1f - miniContentSettle(morph.value)) * 10.dp.toPx()
     }
 }
 

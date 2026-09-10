@@ -10,6 +10,32 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ---
 
+### [1.4.6.2] — Penyempurnaan Animasi & Discord
+> 📅 2026-09-10
+
+#### ✨ Fitur Baru & Tampilan
+- **Pengaturan Baris Kedua Kartu Discord (*Discord Second Line / Album*)**: Kini dapat memilih apa yang tampil di baris kedua profil Discord — **Artist**, **Artist · Album**, **Album**, atau **Album · Artist**. Album lagu akhirnya bisa muncul di kartu Discord; sebelumnya informasi album tidak pernah terlihat sama sekali. Pilihan ini tersedia di Pengaturan → Discord, lengkap dengan pratinjau kartu yang berubah seketika saat kamu memilih.
+- **Pratinjau Kartu Discord Kini Jujur Sesuai Kenyataan**: Pratinjau di layar pengaturan sekarang menggambarkan kartu Discord persis seperti yang akan dilihat orang lain — dua baris teks, bukan tiga. Sebelumnya pratinjau menampilkan baris album yang di Discord asli tidak pernah muncul, sehingga pilihan yang diambil bisa membingungkan.
+- **Transisi Pemutar Mini → Layar Penuh Serba Halus**: Seluruh pengalaman membuka dan menutup pemutar dirombak agar terasa hidup dan menyatu:
+  - Sampul lagu kini terbang dengan kedalaman nyata — terangkat dari mini player dengan bayangan yang mengembang di tengah perjalanan, lalu mendarat mulus ke posisi sampul di layar penuh.
+  - Sudut sampul yang bergerak kini mengikuti bentuk aslinya di setiap titik perjalanan, sehingga tidak lagi terlihat kotak kaku saat hampir menyentuh mini player.
+  - Judul, nama artis, dan seluruh kontrol pemutar ikut bergerak dan muncul bergantian dengan irama yang tertata — bukan lagi muncul serentak sebagai satu bidang datar.
+  - Mini player turut bereaksi: kontennya menyusul naik ke tempat saat pemutar ditutup, bukan sekadar diam lalu muncul.
+  - Bilah navigasi bawah bergerak naik dengan halus untuk menyambut pemutar yang menutup, sehingga transisi terasa sebagai satu gerakan yang utuh.
+- **Mini Player Mengikuti Jari Saat Digeser ke Atas**: Menggeser mini player ke atas kini membuat bar-nya benar-benar terangkat mengikuti jari secara terkendali, lalu kembali ke tempatnya dengan lembut bila guratan tidak dilanjutkan — sebelumnya bar hanya diam menunggu dan baru bergerak di akhir.
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Bilah Navigasi Bawah Jauh Lebih Ringan (*Zero-Lag Navigation Bar*)**: Seluruh animasi pil kaca yang meluncur antar tab kini digambar langsung di lapisan render, bukan dihitung ulang tata letaknya setiap frame. Hasilnya bar terasa ringan dan responsif, tidak lagi berat saat berpindah tab — terutama di perangkat kelas menengah.
+- **Animasi Pemutar Berjalan Lebih Stabil dan Tidak Patah-Patah**: Seluruh pergerakan pada transisi pemutar dijalankan pada lapisan render terpisah, sehingga setiap frame hanya menggambar ulang tanpa membangun komponen dari nol. Animasi kini konsisten mulus dari frame pertama hingga terakhir, tanpa tersendat atau meloncat.
+- **Waktu Animasi Pemutar Lebih Natural**: Kecepatan membuka dan menutup pemutar disetel ulang dan diseragamkan, sehingga terasa mengalir dan tidak lagi terlalu cepat atau kaku. Animasi tidak lagi dimulai sebelum gambar sampul siap, sehingga tidak ada lagi momen sampul tampak melompat.
+
+#### 🐛 Perbaikan Masalah
+- **Sampul Lagu Tidak Lagi Hilang Setelah Menutup Pemutar**: Memperbaiki masalah intermiten di mana setelah pemutar ditutup dengan gestur, sampul lagu sempat tidak muncul di layar penuh maupun mini player — hanya menyisakan gambar yang melayang. Akar masalahnya adalah gestur jari dapat membatalkan animasi penutup di tengah jalan, meninggalkan pemutar dalam kondisi setengah jadi. Gestur kini sepenuhnya terpisah dari animasi tersebut, dan mini player dijamin selalu menampilkan sampulnya.
+- **Animasi Pemutar Tidak Lagi Terasa Meloncat Saat Dibuka**: Memperbaiki masalah di mana animasi pembukaan pemutar terasa diam sejenak lalu melesat cepat. Animasi kini menunggu sampai layar pemutar benar-benar siap digambar sebelum dimulai, sehingga setiap frame animasi selalu terlihat.
+- **Kartu Discord Tidak Lagi Kehilangan Informasi Album**: Album lagu yang tersedia kini benar-benar tampil di kartu Discord, tidak lagi tersimpan di balik teks yang tidak pernah dirender.
+
+---
+
 ### [1.4.6.1] — Hotfix
 > 📅 2026-09-10
 

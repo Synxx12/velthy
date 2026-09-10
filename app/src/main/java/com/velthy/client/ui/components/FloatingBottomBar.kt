@@ -2,7 +2,6 @@ package com.velthy.client.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -24,7 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -42,9 +40,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -68,6 +70,51 @@ data class BottomTab(
     val label: String,
     val icon: ImageVector,
 )
+
+/**
+ * The pill's two gradients, hoisted out of the draw lambda.
+ *
+ * They used to be built inline for every frame of every slide — five
+ * `Color.copy` calls each, twice over, sixty times a second. Only the
+ * gradient's start and end travel with the capsule, so its colours are
+ * constants and there is nothing per-frame left to build.
+ */
+private val PILL_GLASS_COLORS = listOf(
+    Color.White.copy(alpha = 0.16f),
+    Color(0xFF8CE8FF).copy(alpha = 0.14f), // Soft prismatic cyan
+    Color(0xFFE8B5FF).copy(alpha = 0.14f), // Soft prismatic violet
+    Color(0xFFFFC085).copy(alpha = 0.12f), // Soft prismatic peach
+    Color.White.copy(alpha = 0.10f),
+)
+
+private val PILL_SHEEN_COLORS = listOf(
+    Color.White.copy(alpha = 0.38f),
+    Color(0xFF8CE8FF).copy(alpha = 0.30f), // Prismatic cyan sheen
+    Color(0xFFE8B5FF).copy(alpha = 0.30f), // Prismatic violet sheen
+    Color(0xFFFFD59E).copy(alpha = 0.25f), // Prismatic gold sheen
+    Color.White.copy(alpha = 0.35f),
+)
+
+/** The hairline the pill is ringed with. */
+private val PILL_HAIRLINE = 0.75.dp
+
+/**
+ * The pill's slide, one spec for everything that moves on it.
+ *
+ * It used to be two: the position was on a `dampingRatio` of 0.78 and the width
+ * on 0.80, so the capsule's left edge and its right edge settled at slightly
+ * different moments. That lag between the two ends of one shape is what read as
+ * wobble — the pill looked like it was still deciding where it wanted to be.
+ * One spec means the whole capsule arrives together.
+ *
+ * The numbers themselves are a compromise between the two things that were
+ * wrong with the old pair: `StiffnessMediumLow` (400) took long enough that a
+ * tab change felt like waiting, and the 0.78 damping left it ringing after it
+ * got there. 800 is roughly twice as quick and arrives in a little over a
+ * third of a second; 0.85 keeps just enough overshoot to feel liquid rather
+ * than motorised, and settles in one movement instead of two.
+ */
+private val PILL_SLIDE = spring<Float>(dampingRatio = 0.85f, stiffness = 800f)
 
 /**
  * Apple Music / Cider-Style Dual-Island Floating Bottom Bar.
@@ -113,7 +160,6 @@ fun FloatingBottomBar(
     val gapMainPx = with(density) { 6.dp.toPx() }
     val islandGapPx = with(density) { islandGapDp.toPx() }
     val barHeightPx = with(density) { barHeight.toPx() }
-    val pillHeightDp = barHeight - (innerVerticalPadDp * 2)
 
     val leftInnerWidthPx = (leftIslandSize.width - innerPadPx * 2).coerceAtLeast(0f)
     val tabWidthPx = if (leftInnerWidthPx > 0f && n > 0) {
@@ -157,34 +203,31 @@ fun FloatingBottomBar(
         tabWidthPx
     }
 
-    val targetRadiusDp = if (isSearchOrNearSearch) 24.dp else 25.dp
-
-    val animatedPillX by animateFloatAsState(
+    // Deliberately State objects rather than unwrapped with `by`.
+    //
+    // Both of them are read inside the pill's draw lambda and nowhere else, so
+    // a frame of the slide repaints the capsule instead of recomposing the bar.
+    // Unwrapped with `by`, the same read happens in composition and every frame
+    // of every tab change rebuilds the islands, the four tab items and the
+    // search button around it.
+    val animatedPillX = animateFloatAsState(
         targetValue = pillTargetXPx,
-        animationSpec = spring(
-            dampingRatio = 0.78f,
-            stiffness = Spring.StiffnessMediumLow,
-        ),
+        animationSpec = PILL_SLIDE,
         label = "liquidPillX",
     )
 
-    val animatedPillWidth by animateFloatAsState(
+    val animatedPillWidth = animateFloatAsState(
         targetValue = targetWidthPx,
-        animationSpec = spring(
-            dampingRatio = 0.80f,
-            stiffness = Spring.StiffnessMediumLow,
-        ),
+        animationSpec = PILL_SLIDE,
         label = "liquidPillWidth",
     )
 
-    val animatedPillRadius by animateDpAsState(
-        targetValue = targetRadiusDp,
-        animationSpec = spring(
-            dampingRatio = 0.80f,
-            stiffness = Spring.StiffnessMediumLow,
-        ),
-        label = "liquidPillRadius",
-    )
+    // There is no corner animation any more, and nothing was lost by dropping
+    // it: both of the values it interpolated between were already half the
+    // pill's height — 25dp on a 50dp pill, 24dp on the 48dp search circle — so
+    // it was animating a capsule to a capsule. Deriving the corner from the
+    // height in the draw lambda gives the identical shape and removes a third
+    // animation from the frame.
 
     var lastHapticTab by remember { mutableIntStateOf(selectedIndex) }
 
@@ -252,48 +295,59 @@ fun FloatingBottomBar(
             }
         }
 
-        // ─── 2. Continuous Liquid Frosted Rainbow Glass Sliding Pill Layer (UNCLIPPED ACROSS GAP!) ───
+        // ─── 2. Liquid glass pill, painted rather than laid out ───
+        //
+        // Everything about this capsule moves on every frame of a slide: where
+        // it is, how wide it is, and (once) its corner. Driving that through
+        // Modifier.width/clip/background/border meant a fresh measure pass and a
+        // fresh render layer per frame, which is what made the bar feel heavy —
+        // the whole subtree around it was re-placed to move one shape. Painting
+        // it in a draw lambda costs a repaint and nothing else, the corner falls
+        // out of the pill's own height, and both animation values are read here
+        // rather than in composition.
         if (tabWidthPx > 0f && leftIslandSize.width > 0) {
             Box(
                 modifier = Modifier
-                    .padding(vertical = innerVerticalPadDp)
-                    .graphicsLayer {
-                        translationX = animatedPillX
-                    }
-                    .width(with(density) { animatedPillWidth.toDp() })
-                    .height(pillHeightDp)
-                    .clip(RoundedCornerShape(animatedPillRadius))
-                    // Base Frosted Glass + Soft Iridescent Prism Rainbow Shimmer
-                    .background(
-                        Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.16f),
-                                Color(0xFF8CE8FF).copy(alpha = 0.14f), // Soft Prismatic Cyan
-                                Color(0xFFE8B5FF).copy(alpha = 0.14f), // Soft Prismatic Violet
-                                Color(0xFFFFC085).copy(alpha = 0.12f), // Soft Prismatic Peach/Amber
-                                Color.White.copy(alpha = 0.10f),
+                    .fillMaxWidth()
+                    .height(barHeight)
+                    .drawBehind {
+                        val width = animatedPillWidth.value
+                        if (width <= 0f) return@drawBehind
+                        val left = animatedPillX.value
+                        val top = innerVerticalPadDp.toPx()
+                        val height = size.height - top * 2
+                        if (height <= 0f) return@drawBehind
+
+                        val topLeft = Offset(left, top)
+                        val pillSize = Size(width, height)
+                        // A capsule, always: the corner is half the pill's own
+                        // height, which is exactly what the 25dp/24dp pair the
+                        // animation used to interpolate between resolved to.
+                        val corner = CornerRadius(height / 2f)
+                        val end = Offset(left + width, top + height)
+
+                        drawRoundRect(
+                            brush = Brush.linearGradient(
+                                colors = PILL_GLASS_COLORS,
+                                start = topLeft,
+                                end = end,
                             ),
-                            start = Offset(0f, 0f),
-                            end = Offset(
-                                with(density) { animatedPillWidth.toDp().toPx() },
-                                with(density) { pillHeightDp.toPx() },
+                            topLeft = topLeft,
+                            size = pillSize,
+                            cornerRadius = corner,
+                        )
+                        drawRoundRect(
+                            brush = Brush.linearGradient(
+                                colors = PILL_SHEEN_COLORS,
+                                start = topLeft,
+                                end = end,
                             ),
-                        ),
-                    )
-                    // Prismatic Chromatic Hairline Border
-                    .border(
-                        width = 0.75.dp,
-                        brush = Brush.linearGradient(
-                            colors = listOf(
-                                Color.White.copy(alpha = 0.38f),
-                                Color(0xFF8CE8FF).copy(alpha = 0.30f), // Prismatic Cyan sheen
-                                Color(0xFFE8B5FF).copy(alpha = 0.30f), // Prismatic Violet sheen
-                                Color(0xFFFFD59E).copy(alpha = 0.25f), // Prismatic Gold sheen
-                                Color.White.copy(alpha = 0.35f),
-                            ),
-                        ),
-                        shape = RoundedCornerShape(animatedPillRadius),
-                    ),
+                            topLeft = topLeft,
+                            size = pillSize,
+                            cornerRadius = corner,
+                            style = Stroke(width = PILL_HAIRLINE.toPx()),
+                        )
+                    },
             )
         }
 
@@ -390,10 +444,9 @@ fun FloatingBottomBar(
                 val isSearchSelected = selectedIndex == searchTabIndex
                 val searchScale by animateFloatAsState(
                     targetValue = if (isSearchSelected) 1.06f else 1f,
-                    animationSpec = spring(
-                        dampingRatio = 0.80f,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
+                    // The pill's own spec, so the glyph swells on the same beat
+                    // the capsule docks under it rather than lagging behind.
+                    animationSpec = PILL_SLIDE,
                     label = "searchTabScale",
                 )
                 val searchTint by animateColorAsState(
@@ -471,10 +524,9 @@ private fun AppleMusicTabItem(
 ) {
     val scale by animateFloatAsState(
         targetValue = if (selected) 1.06f else 1f,
-        animationSpec = spring(
-            dampingRatio = 0.80f,
-            stiffness = Spring.StiffnessMediumLow,
-        ),
+        // Matches the pill, so the selected icon grows as the capsule arrives
+        // instead of drifting up to size after it has already stopped.
+        animationSpec = PILL_SLIDE,
         label = "tabScale",
     )
     val tint by animateColorAsState(
