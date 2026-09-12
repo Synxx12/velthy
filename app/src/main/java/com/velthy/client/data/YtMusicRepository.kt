@@ -4,6 +4,7 @@ import android.util.Log
 import com.velthy.client.data.innertube.Innertube
 import com.velthy.client.data.innertube.InnertubeParser
 import com.velthy.client.data.model.Account
+import com.velthy.client.data.model.AccountChannel
 import com.velthy.client.data.model.ArtistPage
 import com.velthy.client.data.model.HistorySection
 import java.util.concurrent.ConcurrentHashMap
@@ -20,12 +21,15 @@ import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.SongMenu
 import com.velthy.client.data.model.UserPlaylist
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.sources.TrackMatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 
@@ -33,6 +37,9 @@ import kotlinx.serialization.json.JsonObject
 object YtMusicRepository {
 
     private const val TAG = "Musique"
+
+    /** How many queue tracks are resolved at once — see [resolveAudioAll]. */
+    private const val RESOLVE_CONCURRENCY = 4
 
     /**
      * The personalised feed, led by what was actually just played and padded
@@ -117,6 +124,7 @@ object YtMusicRepository {
                     thumbnailUrl = it.thumbnailUrl,
                     videoId = it.videoId,
                     browseId = null,
+                    albumName = it.albumName,
                 )
             },
         )
@@ -183,13 +191,45 @@ object YtMusicRepository {
         }
     }
 
+    /**
+     * Compatibility helper for callers that need candidates but not a scrolling
+     * result screen. Those callers need the first, most relevant page only.
+     */
     suspend fun search(query: String, filter: SearchFilter? = null): Result<List<SearchResult>> =
+        searchPage(query, filter).map { it.rows }
+
+    suspend fun searchPage(
+        query: String,
+        filter: SearchFilter? = null,
+    ): Result<InnertubeParser.SearchPage> =
         call("search:${filter?.name ?: "all"}") {
-            InnertubeParser.parseSearch(Innertube.search(query, filter?.params))
+            InnertubeParser.parseSearchPage(Innertube.search(query, filter?.params))
         }
 
+    /** The page the first page's continuation token points at. */
+    suspend fun searchContinuation(token: String): Result<InnertubeParser.SearchPage> =
+        call("search:more") {
+            InnertubeParser.parseSearchPage(Innertube.searchContinuation(token))
+        }
+
+    /**
+     * What YouTube Music would suggest completing [input] to, for the search
+     * field's typeahead. Unfiltered on purpose: a suggestion is a query, and
+     * which tab it is then run against is the user's to pick afterwards.
+     */
+    suspend fun searchSuggestions(input: String): Result<List<String>> = call("suggest") {
+        InnertubeParser.parseSearchSuggestions(Innertube.searchSuggestions(input))
+    }
+
     suspend fun resolveAudio(song: Song): Song {
-        if (!song.isVideo || !AppSettings.convertVideoToAudio.value) return song
+        val swapForAudio = song.isVideo && AppSettings.convertVideoToAudio.value
+        // A row can reach the player with no album on it — a search hit and a
+        // playlist row both routinely name only the artist — and then the
+        // Discord card has no album line to draw, however well the catalogue
+        // knows the release. The same lookup that swaps a video for its audio
+        // release is what fills that in, so it runs for a plain song too.
+        val fillAlbum = song.albumName == null && song.isCatalogueTrack
+        if (!swapForAudio && !fillAlbum) return song
         val target = TrackMatcher.targetOf(song)
         for (query in TrackMatcher.queries(target)) {
             val candidates = search(query, SearchFilter.SONGS)
@@ -197,16 +237,92 @@ object YtMusicRepository {
                 ?.filterIsInstance<SearchResult.Track>()
                 ?.map { it.song }
                 .orEmpty()
-            TrackMatcher.best(candidates, target)?.let { return it }
+            val match = TrackMatcher.best(candidates, target) ?: continue
+            // The match is the catalogue *recording* of the same song, so
+            // anything already known about the release still holds — and the
+            // Songs tab the match comes from frequently names no album at all.
+            // Handing the match back bare is what made the album depend on
+            // where playback started: a home card is never swapped (it carries
+            // no video flag), while a search hit, an album page's row and a
+            // playlist row all are, and each of them lost the album here.
+            val albumName = match.albumName ?: song.albumName
+            if (swapForAudio) {
+                return match.copy(
+                    albumName = albumName,
+                    albumId = match.albumId ?: song.albumId,
+                    artistId = match.artistId ?: song.artistId,
+                )
+            }
+            // A plain song keeps its own id and title; it is only here for a
+            // release its row never named, so a match that names none is no
+            // help — the next query may.
+            if (albumName != null) {
+                return song.copy(
+                    albumName = albumName,
+                    albumId = match.albumId ?: song.albumId,
+                    artistId = match.artistId ?: song.artistId,
+                )
+            }
         }
         return song
     }
 
+    /**
+     * [resolveAudio] across a whole queue, a few tracks at a time.
+     *
+     * Each track can now cost a search — for a video's audio release, or for an
+     * album the row never named — and a long playlist would otherwise put every
+     * one of those on the wire the moment playback starts. The cap is the same
+     * work, spread out; nothing here is on the path of the track about to play,
+     * which is resolved on its own.
+     */
+    suspend fun resolveAudioAll(songs: List<Song>): List<Song> = coroutineScope {
+        val permits = Semaphore(RESOLVE_CONCURRENCY)
+        songs.map { async { permits.withPermit { resolveAudio(it) } } }.awaitAll()
+    }
+
+    /**
+     * Whether this is YouTube's own track, and so worth asking YouTube about.
+     *
+     * A local file, a module track and a JioSaavn track each carry their own
+     * release already, and a YouTube search would only ever answer with a
+     * different one.
+     */
+    private val Song.isCatalogueTrack: Boolean
+        get() = localUri == null && localPath == null &&
+            SourceRegistry.parseTrackKey(videoId) == null
+
+    /**
+     * Subscribes to an artist's channel, or unsubscribes. [channelId] is the one
+     * the artist page is served under, which is also the id the write takes.
+     */
+    suspend fun setSubscribed(channelId: String, subscribed: Boolean): Result<Unit> =
+        call("subscription:$channelId") { Innertube.setSubscribed(channelId, subscribed) }
 
     /** Signed-in profile for the settings header. Null when signed out. */
     suspend fun account(): Result<Account> = call("account") {
         InnertubeParser.parseAccount(Innertube.accountMenu())
             ?: error("No account details")
+    }
+
+    /**
+     * Every channel this login can act as — its own, plus any brand channels.
+     *
+     * Two endpoints are asked in turn because either can come back with an
+     * envelope holding no `accountItem` at all, and the two do not fail
+     * together: `accounts_list` is the first-party route and the switcher is
+     * what youtube.com's own avatar menu uses. An empty list from the first is
+     * not an answer, it is a shape this parser didn't recognise, so it is
+     * treated the same as a failure and the other route is tried.
+     */
+    suspend fun accountChannels(): Result<List<AccountChannel>> = call("channels") {
+        val viaInnertube = runCatching {
+            InnertubeParser.parseAccountChannels(Innertube.accountsList())
+        }.onFailure { Log.w(TAG, "accounts_list unavailable: ${it.message}") }
+            .getOrNull()
+            .orEmpty()
+        if (viaInnertube.isNotEmpty()) return@call viaInnertube
+        InnertubeParser.parseAccountChannels(Innertube.accountSwitcher())
     }
 
     /**
@@ -448,13 +564,18 @@ object YtMusicRepository {
 
     private suspend fun <T> call(label: String, block: suspend () -> T): Result<T> =
         withContext(Dispatchers.IO) {
+            // Timed so a page that feels slow can be pointed at the request
+            // that is actually slow, instead of guessed at. "artist:…" taking
+            // seconds means the follow-up song paging, not the browse.
+            val started = System.nanoTime()
+            fun ms() = (System.nanoTime() - started) / 1_000_000
             runCatching { block() }
                 // runCatching catches Throwable, cancellation included, which
                 // would turn "the user typed another letter" into a failed
                 // Result and put the abandoned request's error on screen.
                 // Cancellation isn't this call's to answer for.
                 .onFailure { if (it is CancellationException) throw it }
-                .onSuccess { Log.d(TAG, "$label ok") }
-                .onFailure { Log.w(TAG, "$label failed: ${it.message}") }
+                .onSuccess { Log.d(TAG, "$label ok in ${ms()}ms") }
+                .onFailure { Log.w(TAG, "$label failed in ${ms()}ms: ${it.message}") }
         }
 }

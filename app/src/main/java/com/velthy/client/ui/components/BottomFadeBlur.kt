@@ -18,7 +18,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
@@ -92,7 +91,7 @@ fun BottomFadeBlur(
         modifier = modifier
             .fillMaxWidth()
             .height(height)
-            .hazeEffect(
+            .optimizedHazeEffect(
                 state = hazeState,
                 // Keyed to the colour of the page underneath, not the theme's.
                 //

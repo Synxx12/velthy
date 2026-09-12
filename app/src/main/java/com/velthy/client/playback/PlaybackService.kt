@@ -143,6 +143,12 @@ class PlaybackService : MediaSessionService() {
     private var discordPresenceUp = false
 
     /**
+     * Keeps "Prefer USB DAC" applied for as long as playback lives, so a DAC
+     * plugged in mid-track is claimed without the listener touching anything.
+     */
+    private var usbDacWatch: AutoCloseable? = null
+
+    /**
      * The crossfade's tail player runs its own audio sink, so it needs its own
      * instance of the effect — [SpatialAudioProcessor] carries a delay line and
      * filter state that two sinks cannot share.
@@ -211,6 +217,8 @@ class PlaybackService : MediaSessionService() {
         // state lives.
         NerdStats.forgetLastSession()
         QualityUpgrade.forgetLastSession()
+
+        usbDacWatch = AudioDeviceHelper.watchUsbDacPreference(this)
 
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this)
@@ -805,7 +813,7 @@ class PlaybackService : MediaSessionService() {
             player?.let { ghost.audioSessionId = it.audioSessionId }
             ghost.skipSilenceEnabled = AppSettings.skipSilence.value
             ghost.setPlaybackSpeed(AppSettings.playbackSpeed.value)
-            ghostSpatialAudioProcessor.enabled = DolbyAtmos.spatialAudioActive
+            ghostSpatialAudioProcessor.enabled = AppSettings.spatialAudio.value
         }
 
     /**
@@ -2117,7 +2125,18 @@ class PlaybackService : MediaSessionService() {
             enableFloatOutput: Boolean,
             enableAudioTrackPlaybackParams: Boolean,
         ): AudioSink = DefaultAudioSink.Builder(context)
-            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableFloatOutput(
+                // Media3 offers float when it is configured to; this app wants
+                // three more things true before taking it — the listener asked,
+                // the route is one this app claimed and that reports float, and
+                // the device's FLAC decoder is not the vendor one that mangles
+                // it. See [AudioOutputPolicy].
+                enableFloatOutput && AudioOutputPolicy.shouldUseFloatOutput(
+                    requestedMode = com.velthy.client.data.settings.AppSettings.outputPcmMode.value,
+                    isPreferredUsbRoute = AudioDeviceHelper.isUsbRouteClaimed(),
+                    advertisesPcmFloat = AudioDeviceHelper.currentRouteAdvertisesPcmFloat(context),
+                ) && !AudioOutputPolicy.hasUnsafeFloatFlacDecoder(),
+            )
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .setAudioProcessorChain(
                 DefaultAudioSink.DefaultAudioProcessorChain(
@@ -2142,7 +2161,7 @@ class PlaybackService : MediaSessionService() {
     private fun applySettings(player: ExoPlayer) {
         player.skipSilenceEnabled = AppSettings.skipSilence.value
         player.setPlaybackSpeed(AppSettings.playbackSpeed.value)
-        spatialAudioProcessor.enabled = DolbyAtmos.spatialAudioActive
+        spatialAudioProcessor.enabled = AppSettings.spatialAudio.value
     }
 
     private fun observeSettings() {
@@ -2152,19 +2171,14 @@ class PlaybackService : MediaSessionService() {
         scope.launch {
             AppSettings.playbackSpeed.collect { player?.setPlaybackSpeed(it) }
         }
-        // Spatial audio is the user's switch *and* the device's: Atmos going
-        // off in system settings mid-track has to stop the effect, not wait for
-        // the next track or the next launch.
+        // The listener's own switch, and nothing else's. The device's Atmos
+        // panel is a separate thing — it decides what the *system* renders, and
+        // this effect widens a stereo stream inside the app either way.
         scope.launch {
-            combine(
-                AppSettings.spatialAudio,
-                DolbyAtmos.supported,
-                DolbyAtmos.enabledOnDevice,
-            ) { wanted, supported, atmosOn -> wanted && supported && atmosOn }
-                .collect {
-                    spatialAudioProcessor.enabled = it
-                    ghostSpatialAudioProcessor.enabled = it
-                }
+            AppSettings.spatialAudio.collect {
+                spatialAudioProcessor.enabled = it
+                ghostSpatialAudioProcessor.enabled = it
+            }
         }
     }
 
@@ -2336,7 +2350,7 @@ class PlaybackService : MediaSessionService() {
         scope.launch {
             combine<Any, List<Any>>(
                 AppSettings.discordUseDetails,
-                AppSettings.discordSecondLine,
+                AppSettings.discordShowAlbum,
                 AppSettings.discordStatus,
                 AppSettings.discordActivityType,
                 AppSettings.discordActivityName,
@@ -2403,7 +2417,7 @@ class PlaybackService : MediaSessionService() {
                 button2Visible = AppSettings.discordButton2Visible.value,
                 activityType = AppSettings.discordActivityType.value,
                 activityName = AppSettings.discordActivityName.value,
-                secondLineMode = AppSettings.discordSecondLine.value,
+                showAlbum = AppSettings.discordShowAlbum.value,
             ).onFailure {
                 TrackLog.d("Musique", "Discord presence failed: ${it.message}")
             }
@@ -2601,6 +2615,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        usbDacWatch?.close()
+        usbDacWatch = null
         if (instance == this) instance = null
         // Last chance to record the resume point, while the player still exists.
         saveQueue()

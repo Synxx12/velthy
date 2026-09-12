@@ -89,55 +89,17 @@ enum class DiscordActivityKind(val value: String, val verb: String, val label: S
 }
 
 /**
- * What the card's second line carries.
- *
- * There are only ever two text lines on a Discord card and the title owns the
- * first, so this is the only place an album can appear at all — it used to be
- * written to the artwork's hover text, which renders nothing until someone
- * points at the picture. The default puts it on the card.
- */
-enum class DiscordSecondLine(
-    val value: String,
-    val label: String,
-    val detail: String,
-) {
-    ARTIST(
-        DiscordRPC.SECOND_LINE_ARTIST,
-        "Artist",
-        "Just who it's by",
-    ),
-    ARTIST_ALBUM(
-        DiscordRPC.SECOND_LINE_ARTIST_ALBUM,
-        "Artist · Album",
-        "Who it's by, then the album",
-    ),
-    ALBUM(
-        DiscordRPC.SECOND_LINE_ALBUM,
-        "Album",
-        "Just the album",
-    ),
-    ALBUM_ARTIST(
-        DiscordRPC.SECOND_LINE_ALBUM_ARTIST,
-        "Album · Artist",
-        "The album, then who it's by",
-    ),
-}
-
-/**
  * The dialogs the Discord screen opens. Hoisted out to an enum because they are
  * rendered by the activity, above the tab bar and mini player, rather than
  * inside the scrolling screen where a full-screen scrim would be trapped.
  */
-enum class DiscordDialog { TOKEN, STATUS, ACTIVITY_TYPE, ACTIVITY_NAME, SECOND_LINE, BUTTON_1, BUTTON_2 }
+enum class DiscordDialog { TOKEN, STATUS, ACTIVITY_TYPE, ACTIVITY_NAME, BUTTON_1, BUTTON_2 }
 
 private fun statusOf(value: String) =
     DiscordPresenceStatus.entries.firstOrNull { it.value == value } ?: DiscordPresenceStatus.ONLINE
 
 private fun kindOf(value: String) =
     DiscordActivityKind.entries.firstOrNull { it.value == value } ?: DiscordActivityKind.LISTENING
-
-private fun secondLineOf(value: String) =
-    DiscordSecondLine.entries.firstOrNull { it.value == value } ?: DiscordSecondLine.ARTIST_ALBUM
 
 /**
  * Discord Rich Presence: the account it posts as, what the card says, and a
@@ -163,7 +125,7 @@ fun DiscordScreen(
     val avatar by AppSettings.discordAvatar.collectAsStateWithLifecycle()
     val rpcEnabled by AppSettings.discordRpcEnabled.collectAsStateWithLifecycle()
     val useDetails by AppSettings.discordUseDetails.collectAsStateWithLifecycle()
-    val secondLine by AppSettings.discordSecondLine.collectAsStateWithLifecycle()
+    val showAlbum by AppSettings.discordShowAlbum.collectAsStateWithLifecycle()
     val advancedMode by AppSettings.discordAdvancedMode.collectAsStateWithLifecycle()
     val status by AppSettings.discordStatus.collectAsStateWithLifecycle()
     val activityType by AppSettings.discordActivityType.collectAsStateWithLifecycle()
@@ -290,12 +252,21 @@ fun DiscordScreen(
             RowDivider()
             SettingsRow(
                 icon = Icons.Rounded.Album,
-                title = "Second line",
-                subtitle = "Where the album goes — the card has room for two lines " +
-                    "and the title takes the first",
-                value = secondLineOf(secondLine).label,
+                title = "Album line",
+                subtitle = "Show the album on its own line under the artist",
                 enabled = connected && rpcEnabled,
-                onClick = { onOpenDialog(DiscordDialog.SECOND_LINE) },
+                trailing = {
+                    Switch(
+                        checked = showAlbum,
+                        onCheckedChange = AppSettings::setDiscordShowAlbum,
+                        enabled = connected && rpcEnabled,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setDiscordShowAlbum(!showAlbum) },
             )
             RowDivider()
             SettingsRow(
@@ -397,7 +368,7 @@ fun DiscordScreen(
                 heading = activityName.ifEmpty { appName() },
                 verb = kindOf(activityType).verb,
                 useDetails = useDetails,
-                secondLineMode = secondLine,
+                showAlbum = showAlbum,
                 button1Text = button1Text,
                 button1Visible = button1Visible,
                 button2Text = button2Text,
@@ -557,12 +528,11 @@ private fun NoticeCard(text: String, onDismiss: () -> Unit) {
  * another app's UI, and the only way it does its job is by looking like one.
  * The buttons work, so it doubles as a way to check the links land.
  *
- * Exactly two text lines, because Discord draws exactly two: `details` then
- * `state`. It used to draw a third for the album, which was a lie — Discord
- * put that album in the artwork's hover text and rendered nothing — so anyone
- * picking a card shape here was choosing against a picture of something that
- * does not exist. The lines now come from the same [DiscordRPC.secondLine] the
- * live presence does, so the two cannot drift apart.
+ * Three lines, in the order Discord draws them: the title, the artist, and —
+ * when there is an album to name and the album line is on — the album. The
+ * album is never merged into the artist's line, because the two are separate
+ * rows on a Discord card and a picture that welded them together was showing a
+ * card the listener would never get.
  */
 @Composable
 private fun RichPresencePreview(
@@ -572,7 +542,7 @@ private fun RichPresencePreview(
     heading: String,
     verb: String,
     useDetails: Boolean,
-    secondLineMode: String,
+    showAlbum: Boolean,
     button1Text: String,
     button1Visible: Boolean,
     button2Text: String,
@@ -580,15 +550,14 @@ private fun RichPresencePreview(
 ) {
     val context = LocalContext.current
     val title = song?.title ?: "Song title"
-    // Named after the mode while nothing is playing, so the shape of the line
-    // is still what the choice describes.
-    val second = song?.let { DiscordRPC.secondLine(it, secondLineMode) }
-        ?: when (secondLineMode) {
-            DiscordRPC.SECOND_LINE_ARTIST -> "Artist"
-            DiscordRPC.SECOND_LINE_ALBUM -> "Album"
-            DiscordRPC.SECOND_LINE_ALBUM_ARTIST -> "Album · Artist"
-            else -> "Artist · Album"
-        }
+    val artist = song?.artist ?: "Artist"
+    // Named placeholders while nothing is playing, so the shape of the card is
+    // still what the switch describes.
+    val album = when {
+        !showAlbum -> null
+        song == null -> "Album"
+        else -> song.albumName?.takeIf { it.isNotBlank() }
+    }
 
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Text(
@@ -631,13 +600,22 @@ private fun RichPresencePreview(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = second,
+                    text = artist,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                     fontWeight = if (useDetails) FontWeight.W400 else FontWeight.W700,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (album != null) {
+                    Text(
+                        text = album,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Spacer(Modifier.height(8.dp))
                 ProgressLine(positionMs = positionMs, durationMs = durationMs)
             }
@@ -854,25 +832,6 @@ fun DiscordDialogHost(
                 onValueChange = { input = it },
                 onSave = {
                     AppSettings.setDiscordActivityName(input.trim())
-                    onDismiss()
-                },
-                onDismiss = onDismiss,
-            )
-        }
-
-        DiscordDialog.SECOND_LINE -> {
-            val current by AppSettings.discordSecondLine.collectAsStateWithLifecycle()
-            ChoiceAlert(
-                hazeState = hazeState,
-                title = "Second line",
-                message = "Discord draws two lines under the title. The album goes " +
-                    "on the second, since the first is already the song.",
-                options = DiscordSecondLine.entries,
-                selected = secondLineOf(current),
-                label = { it.label },
-                detail = { it.detail },
-                onSelect = {
-                    AppSettings.setDiscordSecondLine(it.value)
                     onDismiss()
                 },
                 onDismiss = onDismiss,

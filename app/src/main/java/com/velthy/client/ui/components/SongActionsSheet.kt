@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Check
@@ -36,7 +37,7 @@ import androidx.compose.material.icons.rounded.Downloading
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlaylistRemove
 import androidx.compose.material.icons.rounded.Share
@@ -155,6 +156,60 @@ fun SongActionsSheet(
         SheetTrackHeader(song, subtitleColor = palette.onBackgroundVariant)
         HorizontalDivider(thickness = 0.5.dp, color = palette.divider)
 
+        // Which recording is playing is the one question that has to be answered
+        // before any of the rows below mean anything: there is no point rating,
+        // queueing or downloading the wrong version of a song. It leads the list
+        // for that reason, and the two states are exclusive — one is offered for
+        // a track playing a substituted copy, the other for a track held on
+        // YouTube's own.
+        val nerd = com.velthy.client.data.NerdStats.current.collectAsStateWithLifecycle().value
+        val isPlayingThis = com.velthy.client.playback.PlaybackService.isCurrentMediaId(song.videoId)
+        if (isPlayingThis && !isLocalFile) {
+            val racingSet by com.velthy.client.data.NerdStats.racingLossless.collectAsStateWithLifecycle()
+            val isSearchingLossless = song.videoId in racingSet
+            val declared = com.velthy.client.data.NerdStats.declaredFormat(song.videoId)
+            val isFromModule = declared != null || nerd?.isLossless == true
+
+            when {
+                isSearchingLossless -> ActionRow(
+                    icon = Icons.Rounded.HighQuality,
+                    label = "Upgrade quality",
+                    value = "Searching\u2026",
+                    accent = palette.accent,
+                    enabled = false,
+                    trailing = {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = palette.accent,
+                        )
+                    },
+                    onClick = {},
+                )
+                isFromModule -> ActionRow(
+                    icon = Icons.AutoMirrored.Rounded.Undo,
+                    label = "Revert to original",
+                    accent = palette.accent,
+                    onClick = {
+                        com.velthy.client.playback.PlaybackService.switchToOriginalYouTube(song.videoId)
+                    },
+                )
+                com.velthy.client.data.settings.AppSettings.isLosslessAllowedNow -> ActionRow(
+                    icon = Icons.Rounded.HighQuality,
+                    label = "Upgrade quality",
+                    accent = palette.accent,
+                    onClick = {
+                        com.velthy.client.playback.PlaybackService.switchToLossless(song.videoId)
+                    },
+                )
+            }
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 6.dp),
+                thickness = 0.5.dp,
+                color = palette.divider,
+            )
+        }
+
         if (signedIn && !isOffline) {
             ActionRow(
                 icon = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
@@ -221,63 +276,6 @@ fun SongActionsSheet(
                 value = sleepTimerStatus(),
                 accent = palette.accent,
             ) { pickingSleepTimer = true }
-
-            val nerd = com.velthy.client.data.NerdStats.current.collectAsStateWithLifecycle().value
-            val isPlayingThis = com.velthy.client.playback.PlaybackService.isCurrentMediaId(song.videoId)
-            if (isPlayingThis && !isLocalFile) {
-                val racingSet by com.velthy.client.data.NerdStats.racingLossless.collectAsStateWithLifecycle()
-                val isSearchingLossless = song.videoId in racingSet
-                val isLossless = nerd?.isLossless == true
-                val isHiRes = nerd?.isHiRes == true
-                val isHiQuality = nerd?.isHiQuality == true
-                val declared = com.velthy.client.data.NerdStats.declaredFormat(song.videoId)
-                val isFromModule = declared != null || isLossless
-
-                val activeQuality = when {
-                    isHiRes -> "Hi-Res FLAC"
-                    isLossless -> "Lossless FLAC"
-                    isHiQuality -> "Hi-Quality (${nerd.bitrateKbps ?: declared?.kbps ?: 320}k)"
-                    else -> "YouTube"
-                }
-
-                if (isSearchingLossless) {
-                    ActionRow(
-                        icon = Icons.Rounded.GraphicEq,
-                        label = "Audio Source",
-                        value = "Searching Lossless...",
-                        accent = palette.accent,
-                        enabled = false,
-                        trailing = {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = palette.accent,
-                            )
-                        },
-                        onClick = {},
-                    )
-                } else if (isFromModule) {
-                    ActionRow(
-                        icon = Icons.Rounded.GraphicEq,
-                        label = "Audio Source ($activeQuality)",
-                        value = "Switch to YouTube",
-                        accent = palette.accent,
-                        onClick = {
-                            com.velthy.client.playback.PlaybackService.switchToOriginalYouTube(song.videoId)
-                        },
-                    )
-                } else if (com.velthy.client.data.settings.AppSettings.isLosslessAllowedNow) {
-                    ActionRow(
-                        icon = Icons.Rounded.GraphicEq,
-                        label = "Audio Source ($activeQuality)",
-                        value = "Switch to Lossless FLAC",
-                        accent = palette.accent,
-                        onClick = {
-                            com.velthy.client.playback.PlaybackService.switchToLossless(song.videoId)
-                        },
-                    )
-                }
-            }
         }
         if (!isOffline) {
             onShare?.let {

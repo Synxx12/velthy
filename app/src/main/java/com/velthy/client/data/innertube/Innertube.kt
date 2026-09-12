@@ -61,6 +61,7 @@ object Innertube {
     private const val MUSIC_BASE = "https://music.youtube.com/youtubei/v1"
     private const val YT_BASE = "https://www.youtube.com/youtubei/v1"
     private const val MUSIC_ORIGIN = "https://music.youtube.com"
+    private const val YOUTUBE_ORIGIN = "https://www.youtube.com"
 
     private const val WEB_REMIX_VERSION = "1.20260707.12.00"
     private const val WEB_REMIX_CLIENT_ID = "67"
@@ -69,6 +70,63 @@ object Innertube {
 
     /** Session cookie captured by the login WebView; null = browse as guest. */
     var cookie: String? = null
+        set(value) {
+            if (field != value) {
+                // The chosen channel belonged to the session that just left.
+                // A `dataSyncId` from one login sent under another's cookie is
+                // answered with 401 on every request, so it goes with it.
+                channelOverride = null
+            }
+            field = value
+        }
+
+    /**
+     * A channel the listener picked to act as, standing in for whichever
+     * identity the session's cookie would otherwise default to.
+     *
+     * One Google login can own several YouTube channels, and nothing in the
+     * cookie says which one is meant: the web client resolves that from its
+     * page config and then says so on every request. This is the app's own
+     * answer to the same question, so a listener whose music lives on a brand
+     * channel gets that channel's library instead of the login's first one.
+     *
+     * [pageId] is the brand channel's own id, sent as `X-Goog-PageId` — null
+     * for an account's personal channel, which that header has no value for.
+     * [dataSyncId] is the account half of the `datasyncIdToken` YouTube's own
+     * switcher hands out, sent as `context.user.onBehalfOfUser`. [authUser] is
+     * which Google account in the cookie jar; null leaves the default of the
+     * first one alone.
+     */
+    private class ChannelSelection(
+        val pageId: String?,
+        val dataSyncId: String?,
+        val authUser: String?,
+    )
+
+    @Volatile
+    private var channelOverride: ChannelSelection? = null
+
+    /**
+     * Act as this channel from now on; both null goes back to whatever the
+     * session's cookie acts as by default. Takes effect on the next request —
+     * nothing is cached from it.
+     */
+    fun selectChannel(pageId: String?, dataSyncId: String?, authUser: String? = null) {
+        channelOverride = if (pageId == null && dataSyncId == null) {
+            null
+        } else {
+            ChannelSelection(pageId, dataSyncId, authUser)
+        }
+    }
+
+    /** Which account in the cookie jar, the chosen channel's first. */
+    private val authUser: String get() = channelOverride?.authUser ?: "0"
+
+    /** The brand channel to send, when one was chosen. */
+    private val pageId: String? get() = channelOverride?.pageId
+
+    /** The account to send as `onBehalfOfUser`, when a channel was chosen. */
+    private val dataSyncId: String? get() = channelOverride?.dataSyncId
 
     /**
      * Google's per-session visitor id.
@@ -222,6 +280,50 @@ object Innertube {
     suspend fun accountMenu(): JsonObject = postMusic("account/account_menu") {}
 
     /**
+     * Every channel this session can act as, as Innertube's own account
+     * switcher lists them: the account's own channel first, then its brand
+     * channels.
+     *
+     * Each entry carries the two things a request needs to be made *as* that
+     * channel, which is the whole reason to ask rather than to reason about
+     * it. See [selectChannel].
+     */
+    suspend fun accountsList(): JsonObject = postMusic("account/accounts_list") {}
+
+    /**
+     * The same list from youtube.com's own switcher, as a second route.
+     *
+     * Worth having both: `accounts_list` is the tidier call but it is not
+     * uniformly answered for every client identity, and a listener whose music
+     * is on a brand channel is stuck with the wrong library until *something*
+     * enumerates their channels. This endpoint is what youtube.com's avatar
+     * menu itself calls.
+     *
+     * The body is JSON behind Google's XSSI guard — a `)]}'` line that exists
+     * to make the response invalid JavaScript — so it is trimmed before being
+     * handed to the JSON reader rather than parsed as-is.
+     */
+    suspend fun accountSwitcher(): JsonObject {
+        requireSession()
+        val text = withRetry {
+            client.get("$YOUTUBE_ORIGIN/getAccountSwitcherEndpoint") {
+                header("User-Agent", WEB_USER_AGENT)
+                header("Accept-Language", "en-US,en;q=0.9")
+                header("X-Origin", YOUTUBE_ORIGIN)
+                header("Referer", "$YOUTUBE_ORIGIN/")
+                cookie?.let { c ->
+                    header("Cookie", c)
+                    header("X-Goog-AuthUser", authUser)
+                    pageId?.let { header("X-Goog-PageId", it) }
+                    sapisidFrom(c)?.let { header("Authorization", sapisidHash(it, YOUTUBE_ORIGIN)) }
+                }
+            }.bodyAsText()
+        }
+        val body = text.substringAfter(")]}'", text).trim()
+        return json.parseToJsonElement(body).jsonObject
+    }
+
+    /**
      * The watch queue that YouTube Music would play after [videoId] — the
      * "RDAMVM" radio mix. Used to keep AutoPlay going past the last track.
      */
@@ -235,6 +337,28 @@ object Innertube {
         postMusic("search") {
             put("query", query)
             params?.let { put("params", it) }
+        }
+
+    /** The next page of a search result. */
+    suspend fun searchContinuation(token: String): JsonObject = postMusic(
+        endpoint = "search",
+        query = mapOf("ctoken" to token, "continuation" to token, "type" to "next"),
+    ) {
+        put("continuation", token)
+    }
+
+    /**
+     * The typeahead list YouTube Music's own search box shows for a half-typed
+     * query — query strings, not results.
+     *
+     * A different endpoint from [search] rather than a cheap mode of it, and
+     * far cheaper than one: the response is a few hundred bytes of text with
+     * no shelves, thumbnails or playback endpoints in it, which is what makes
+     * it affordable per keystroke where a search is not.
+     */
+    suspend fun searchSuggestions(input: String): JsonObject =
+        postMusic("music/get_search_suggestions") {
+            put("input", input)
         }
 
     /**
@@ -459,7 +583,8 @@ object Innertube {
             visitorData?.let { header("X-Goog-Visitor-Id", it) }
             cookie?.let { c ->
                 header("Cookie", c)
-                header("X-Goog-AuthUser", "0")
+                header("X-Goog-AuthUser", authUser)
+                pageId?.let { header("X-Goog-PageId", it) }
                 sapisidFrom(c)?.let { header("Authorization", sapisidHash(it, origin)) }
             }
         }.status.value
@@ -501,6 +626,29 @@ object Innertube {
             error("YouTube Music refused the change: ${message ?: error}")
         }
         Log.d(TAG, "$endpoint $playlistId -> ${findString(response, "text") ?: "no confirmation"}")
+    }
+
+    /**
+     * Subscribes to [channelId], or unsubscribes from it.
+     *
+     * Not one of the `like/…` endpoints: a subscription is a YouTube-wide
+     * relationship rather than a Music one, and it is addressed by channel id —
+     * the `UC…` an artist page is served under.
+     *
+     * As in [rate], the body is read rather than the status line: Innertube
+     * answers a refused write with HTTP 200 and an `error` object in the body.
+     */
+    suspend fun setSubscribed(channelId: String, subscribed: Boolean) {
+        requireSession()
+        val endpoint = if (subscribed) "subscription/subscribe" else "subscription/unsubscribe"
+        val response = postMusic(endpoint) {
+            putJsonArray("channelIds") { add(channelId) }
+        }
+        response["error"]?.let { error ->
+            val message = error.jsonObject["message"]?.jsonPrimitive?.contentOrNull
+            error("YouTube Music refused the change: ${message ?: error}")
+        }
+        Log.d(TAG, "$endpoint $channelId -> ${findString(response, "text") ?: "no confirmation"}")
     }
 
     suspend fun rate(videoId: String, status: LikeStatus) {
@@ -657,7 +805,11 @@ object Innertube {
                 visitorData?.let { header("X-Goog-Visitor-Id", it) }
                 cookie?.let { c ->
                     header("Cookie", c)
-                    header("X-Goog-AuthUser", "0")
+                    // Which account in the jar, and which brand channel of it.
+                    // Both were fixed at "the first one" before — see
+                    // [selectChannel].
+                    header("X-Goog-AuthUser", authUser)
+                    pageId?.let { header("X-Goog-PageId", it) }
                     sapisidFrom(c)?.let { header("Authorization", sapisidHash(it)) }
                 }
                 setBody(
@@ -672,6 +824,10 @@ object Innertube {
                             }
                             putJsonObject("user") {
                                 put("lockedSafetyMode", false)
+                                // Naming the account, so a brand channel of a
+                                // second Google login is answered as itself
+                                // rather than as the jar's first one.
+                                dataSyncId?.let { put("onBehalfOfUser", it) }
                                 if (com.velthy.client.data.settings.AppSettings.accountMoreContent.value) {
                                     put("enableSafetyMode", false)
                                 }
@@ -746,7 +902,8 @@ object Innertube {
             if (authenticated) {
                 cookie?.let { c ->
                     header("Cookie", c)
-                    header("X-Goog-AuthUser", "0")
+                    header("X-Goog-AuthUser", authUser)
+                    pageId?.let { header("X-Goog-PageId", it) }
                     sapisidFrom(c)?.let { header("Authorization", sapisidHash(it)) }
                 }
             }

@@ -201,7 +201,7 @@ object Downloads {
      * still know it is already on the device. A stale id costs nothing: the
      * verification in [savedUri] prunes whichever one stops resolving.
      */
-    private fun remember(asked: Song, fetched: Song, uri: Uri) {
+    private fun remember(context: Context, asked: Song, fetched: Song, uri: Uri) {
         val ids = setOf(asked.videoId, fetched.videoId)
         val newSaved = _saved.value + ids.associateWith { uri.toString() }
         val metaAsked = SavedSongMetadata(
@@ -225,6 +225,45 @@ object Downloads {
             fetched.videoId to metaFetched,
         )
         record(newSaved, newMeta)
+        exportCompatibleCopy(context, fetched, uri)
+    }
+
+    /**
+     * A second, flat copy in `Music/Velthy`, when the listener has asked for one.
+     *
+     * The library's own tree stays as it is — this is the copy *other* players
+     * look for: one folder they can be pointed at, a name that is just artist
+     * and title, and no nesting to walk. Skipped when the file is already
+     * sitting there, which is also what makes adopting a pre-existing Music
+     * file (see the caller) a no-op rather than a duplicate.
+     *
+     * Off the caller's thread and failures only ever logged: a download that
+     * succeeded is not undone because a courtesy copy could not be written.
+     */
+    private fun exportCompatibleCopy(context: Context, track: Song, uri: Uri) {
+        if (!com.velthy.client.data.settings.AppSettings.exportDownloads.value) return
+        val appContext = context.applicationContext
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                val targetDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
+                    "Velthy",
+                )
+                if (!targetDir.exists()) targetDir.mkdirs()
+                val ext = uri.toString().substringAfterLast('.', "m4a").substringBefore('?')
+                val dest = File(targetDir, DownloadStore.fileNameFor(track, ext))
+                if (dest.exists()) return@runCatching
+                if (uri.scheme == "file") {
+                    val src = uri.path?.let(::File) ?: return@runCatching
+                    if (!src.exists()) return@runCatching
+                    src.copyTo(dest, overwrite = true)
+                } else {
+                    val input = context.contentResolver.openInputStream(uri) ?: return@runCatching
+                    input.use { stream -> dest.outputStream().use(stream::copyTo) }
+                }
+                MediaScannerConnection.scanFile(appContext, arrayOf(dest.absolutePath), null, null)
+            }.onFailure { Log.w(TAG, "compatible copy of '${track.title}' failed: ${it.message}") }
+        }
     }
 
     internal fun importMigrated(savedMap: Map<String, String>, metaMap: Map<String, SavedSongMetadata>) {
@@ -320,7 +359,7 @@ object Downloads {
             val alreadyThere = DownloadStore.existing(context, name)
             if (alreadyThere != null) {
                 Log.d(TAG, "$name is already in Music; adopting it")
-                remember(song, track, alreadyThere)
+                remember(context, song, track, alreadyThere)
                 DownloadSession.done(id)
                 clear(id)
                 return@withContext
@@ -340,7 +379,7 @@ object Downloads {
             val savedUri = destination.commit()
             pending = null
             MediaTagger.embed(context, savedUri, track, route.extension, words)
-            remember(song, track, savedUri)
+            remember(context, song, track, savedUri)
             DownloadSession.done(id)
             clear(id)
             Log.d(TAG, "saved $name")

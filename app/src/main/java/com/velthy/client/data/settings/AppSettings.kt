@@ -7,7 +7,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import com.velthy.client.BuildConfig
 import com.velthy.client.auth.AuthStore
-import com.velthy.client.data.discord.DiscordRPC
 import com.velthy.client.data.lyrics.LyricsSource
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -26,6 +25,7 @@ enum class AudioQuality(
     LOW(64, "Low", "~64 kbps · smallest download", "29 MB/hr"),
     MEDIUM(128, "Medium", "~128 kbps · balanced", "58 MB/hr"),
     HIGH(Int.MAX_VALUE, "High", "Best available · ~171 kbps Opus", "77 MB/hr"),
+    LOSSLESS(Int.MAX_VALUE, "Lossless", "Bit-exact when a source has it, best Opus if not", "~450 MB/hr"),
 }
 
 enum class DownloadQuality(
@@ -123,14 +123,35 @@ object AppSettings {
     val losslessAudio = MutableStateFlow(true)
     val losslessOnCellular = MutableStateFlow(false)
 
-    /** Whether lossless FLAC is permitted under current settings and network connection. */
+    /**
+     * Whether a source offering a Dolby Atmos rendition is allowed to serve it.
+     *
+     * On by default: where the device can decode it, Atmos is the premium
+     * render of a track. It is gated on
+     * [DeviceCodecs.playsDolbyAtmos][com.velthy.client.data.sources.DeviceCodecs]
+     * as well as on this switch, because a phone with no E-AC-3 decoder has to
+     * be told no *before* the URL is handed over — the player does not report
+     * that failure as an error, it just declines the track and moves on.
+     *
+     * Off is a real preference and not only a safety valve. Atmos is E-AC-3,
+     * which is *lossy* — a track with an Atmos master is frequently also held
+     * as a bit-exact stereo copy, so turning this off is how a listener trades
+     * a spatial mix their output cannot render for the lossless one it can.
+     */
+    val dolbyAtmos = MutableStateFlow(true)
+
+    /**
+     * Whether lossless FLAC is permitted under the ceiling in force.
+     *
+     * Two things have to agree. The connection's own ceiling is where lossless
+     * is opted into — [AudioQuality.LOSSLESS] on Wi-Fi or mobile data, the
+     * switch attached to the data plan — and [losslessAudio], the "Prefer
+     * lossless" master on the Sources screen, can only take it away, never
+     * grant it above the ceiling. Switched off there, nothing asks for
+     * lossless however the ceilings are set.
+     */
     val isLosslessAllowedNow: Boolean
-        get() {
-            if (!losslessAudio.value) return false
-            val isCellular = meteredConnection.value == true
-            if (isCellular && !losslessOnCellular.value) return false
-            return effectiveAudioQuality == AudioQuality.HIGH
-        }
+        get() = losslessAudio.value && effectiveAudioQuality == AudioQuality.LOSSLESS
 
     /** Whether downloading is currently permitted under Wi-Fi-only and network policies. */
     val downloadsAllowedNow: Boolean
@@ -157,11 +178,58 @@ object AppSettings {
      * pipeline. Not true object-based spatial audio — YouTube only ever hands
      * us a stereo stream, so there's no Atmos-style source to render.
      *
-     * The user's wish, not the final answer: it only takes effect on a device
-     * with Dolby Atmos switched on, and [com.velthy.client.playback.DolbyAtmos]
-     * clears it back to false the moment that stops being true.
+     * The listener's own switch and nothing else's. It used to be held back by
+     * the device's Dolby Atmos panel as well, which was the wrong question:
+     * that panel decides what the *system* renders, while this widens a stereo
+     * stream inside the app either way. See [dolbyAtmos] for the preference
+     * that is actually about Atmos streams.
      */
     val spatialAudio = MutableStateFlow(false)
+
+    /**
+     * How much CPU Automix's two on-device models may take each.
+     *
+     * Balanced by default, which is BitChord's default too — two threads apiece
+     * leaves the rest of the phone alone while a track plays. Raising it is for
+     * a phone that has the headroom and wants the transition decided sooner;
+     * lowering it is for one that doesn't.
+     */
+    val automixPerformanceMode = MutableStateFlow(AutomixPerformanceMode.BALANCED)
+
+    /**
+     * Whether an attached USB DAC is preferred over the system's own route.
+     *
+     * Off by default: Android already sends audio to a connected DAC on most
+     * devices, and forcing the route is only wanted by someone who has been
+     * bitten by it not doing so — a dongle that needs the app to claim it, or a
+     * phone that keeps a Bluetooth sink alive over the wire.
+     *
+     * Only *prefers*: with nothing plugged in there is nothing to prefer, and
+     * the switch says so on the row rather than pretending otherwise.
+     */
+    val preferUsbDac = MutableStateFlow(false)
+
+    /**
+     * Whether every download also gets a flat copy in `Music/Velthy`.
+     *
+     * The app's own library keeps its artist/album tree; this is the copy other
+     * players look for — one predictable folder, a tidy file name, no nesting,
+     * and no dependence on whether they can make sense of this app's layout.
+     *
+     * Off by default because it costs disk: the same audio, written twice. The
+     * folder is the badge the settings row shows while it is on.
+     */
+    val exportDownloads = MutableStateFlow(false)
+
+    /**
+     * What the app asks Android to open its output as — see [OutputPcmMode].
+     *
+     * 16-bit by default, which is what every route can carry. Float is the
+     * opt-in for a DAC that reports it, and only ever takes effect when one is
+     * actually the claimed route.
+     */
+    val outputPcmMode = MutableStateFlow(OutputPcmMode.PCM_16)
+
     val playbackSpeed = MutableStateFlow(1.0f)
     val themeMode = MutableStateFlow(ThemeMode.DARK)
 
@@ -253,6 +321,50 @@ object AppSettings {
     val fullBleedArtwork = MutableStateFlow(true)
 
     /**
+     * The player's v1.5 backdrop: four drifting colour blobs, quantised out of
+     * the sleeve rather than taken from its own arrangement.
+     *
+     * Off by default — the artwork mesh is the better answer for a cover that is
+     * mostly one colour — but kept selectable rather than deleted, because the
+     * two read very differently and which one a listener prefers is their call.
+     * See [com.velthy.client.ui.player.ArtworkMeshBackdrop].
+     */
+    val legacyMeshGradient = MutableStateFlow(false)
+
+    /**
+     * Keep clips, ringtones, voice notes and other non-music audio out of the
+     * on-device library.
+     *
+     * On by default, which is what the MediaStore query always did — see
+     * [com.velthy.client.data.LocalMediaRepository.getLocalMusic]. Turning it
+     * off is the escape hatch for a device whose audio library is deliberately
+     * everything on it.
+     */
+    val filterNonMusicAudio = MutableStateFlow(true)
+
+    /**
+     * Real backdrop-sampled glass — blur and lens refraction reading the page
+     * behind the bar — instead of the frosted haze. Android 12+ only: the
+     * pipeline needs `RenderEffect` on a render node.
+     */
+    val liquidGlass = MutableStateFlow(false)
+
+    /**
+     * Requests a sustained high-refresh UI, and with it the full animation and
+     * blur treatment.
+     *
+     * A preference, not a guarantee: Android still lowers the rate for heat,
+     * battery state or a hardware limit. Enabling it also clears the two
+     * reduce-motion switches, because asking for the fullest UI while telling
+     * the app to freeze its animations is a contradiction — see
+     * [setHighPerformanceMode].
+     */
+    val highPerformanceMode = MutableStateFlow(false)
+
+    /** Preferred UI refresh rate while [highPerformanceMode] is enabled. */
+    val performanceRefreshRate = MutableStateFlow(DEFAULT_PERFORMANCE_REFRESH_RATE)
+
+    /**
      * Time-synced lyrics on the player, lit up as they are sung.
      *
      * On by default — it is most of the point of the player screen — but it
@@ -260,6 +372,9 @@ object AppSettings {
      * a switch, and [lyricsSources] narrows which of them get asked.
      */
     val syncedLyrics = MutableStateFlow(true)
+
+    /** Blurs unfocused lyric lines, keeping the active line sharp. */
+    val lyricsBlur = MutableStateFlow(true)
 
     /** The databases [syncedLyrics] may ask. Empty is the same as off. */
     val lyricsSources = MutableStateFlow(LyricsSource.entries.toSet())
@@ -303,17 +418,14 @@ object AppSettings {
     val discordUseDetails = MutableStateFlow(false)
 
     /**
-     * What the card's second line carries — the artist alone, or the album with
-     * it. One of the `SECOND_LINE_*` modes in
-     * [DiscordRPC][com.velthy.client.data.discord.DiscordRPC].
+     * Whether the album gets a line of its own under the artist.
      *
-     * Defaults to showing both. Discord's card has exactly two text lines and
-     * the title already owns the first, so an album has nowhere else to go:
-     * held back to the artwork's hover text, as it was, it is a field nobody
-     * ever sees. The artist-alone mode is kept for anyone who wants the card
-     * the way it used to read.
+     * On by default, because a card that leaves the album out is a card that
+     * says less than Discord can show. Turning it off is for anyone who wants
+     * the artist to be the last word — the album is then simply not sent, so
+     * the card ends at the artist rather than leaving an empty row.
      */
-    val discordSecondLine = MutableStateFlow(DiscordRPC.SECOND_LINE_ARTIST_ALBUM)
+    val discordShowAlbum = MutableStateFlow(true)
 
     /** Reveals the presence-shape controls: status, activity type/name, buttons. */
     val discordAdvancedMode = MutableStateFlow(false)
@@ -403,10 +515,20 @@ object AppSettings {
         audioQualityCellular.value = readQuality(KEY_QUALITY_CELLULAR)
         losslessAudio.value = prefs.getBoolean(KEY_LOSSLESS, true)
         losslessOnCellular.value = prefs.getBoolean(KEY_LOSSLESS_ON_CELLULAR, false)
+        dolbyAtmos.value = prefs.getBoolean(KEY_DOLBY_ATMOS, true)
         crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
         smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
         skipSilence.value = prefs.getBoolean(KEY_SKIP_SILENCE, false)
         spatialAudio.value = prefs.getBoolean(KEY_SPATIAL_AUDIO, false)
+        automixPerformanceMode.value = runCatching {
+            AutomixPerformanceMode.valueOf(
+                prefs.getString(KEY_AUTOMIX_PERFORMANCE, null)
+                    ?: AutomixPerformanceMode.BALANCED.name,
+            )
+        }.getOrDefault(AutomixPerformanceMode.BALANCED)
+        preferUsbDac.value = prefs.getBoolean(KEY_PREFER_USB_DAC, false)
+        exportDownloads.value = prefs.getBoolean(KEY_EXPORT_DOWNLOADS, false)
+        outputPcmMode.value = OutputPcmMode.from(prefs.getString(KEY_OUTPUT_PCM_MODE, null))
         playbackSpeed.value = prefs.getFloat(KEY_SPEED, 1.0f)
         themeMode.value = runCatching {
             ThemeMode.valueOf(prefs.getString(KEY_THEME, null) ?: "DARK")
@@ -428,7 +550,15 @@ object AppSettings {
         spotifySpdcToken.value = prefs.getString("spotify_spdc_token", null)
         animatedCanvas.value = prefs.getBoolean(KEY_ANIMATED_CANVAS, true)
         fullBleedArtwork.value = prefs.getBoolean(KEY_FULL_BLEED_ARTWORK, true)
+        legacyMeshGradient.value = prefs.getBoolean(KEY_LEGACY_MESH_GRADIENT, false)
+        filterNonMusicAudio.value = prefs.getBoolean(KEY_FILTER_NON_MUSIC_AUDIO, true)
+        liquidGlass.value = prefs.getBoolean(KEY_LIQUID_GLASS, false)
+        highPerformanceMode.value = prefs.getBoolean(KEY_HIGH_PERFORMANCE_MODE, false)
+        performanceRefreshRate.value = normalizePerformanceRefreshRate(
+            prefs.getInt(KEY_PERFORMANCE_REFRESH_RATE, DEFAULT_PERFORMANCE_REFRESH_RATE),
+        )
         syncedLyrics.value = prefs.getBoolean(KEY_SYNCED_LYRICS, true)
+        lyricsBlur.value = prefs.getBoolean(KEY_LYRICS_BLUR, true)
         lyricsSources.value = readLyricsSources()
         accountMoreContent.value = prefs.getBoolean(KEY_ACCOUNT_MORE_CONTENT, false)
         accountAutoSync.value = prefs.getBoolean(KEY_ACCOUNT_AUTO_SYNC, true)
@@ -456,10 +586,7 @@ object AppSettings {
         discordAvatar.value = prefs.getString(KEY_DISCORD_AVATAR, "").orEmpty()
         discordRpcEnabled.value = prefs.getBoolean(KEY_DISCORD_RPC_ENABLED, true)
         discordUseDetails.value = prefs.getBoolean(KEY_DISCORD_USE_DETAILS, false)
-        discordSecondLine.value = prefs.getString(
-            KEY_DISCORD_SECOND_LINE,
-            DiscordRPC.SECOND_LINE_ARTIST_ALBUM,
-        ).orEmpty().ifEmpty { DiscordRPC.SECOND_LINE_ARTIST_ALBUM }
+        discordShowAlbum.value = prefs.getBoolean(KEY_DISCORD_SHOW_ALBUM, true)
         discordAdvancedMode.value = prefs.getBoolean(KEY_DISCORD_ADVANCED_MODE, false)
         discordStatus.value = prefs.getString(KEY_DISCORD_STATUS, "online").orEmpty()
         discordActivityType.value = prefs.getString(KEY_DISCORD_ACTIVITY_TYPE, "listening").orEmpty()
@@ -495,10 +622,20 @@ object AppSettings {
         audioQualityWifi.value = readQuality(KEY_QUALITY_WIFI)
         audioQualityCellular.value = readQuality(KEY_QUALITY_CELLULAR)
         losslessAudio.value = prefs.getBoolean(KEY_LOSSLESS, true)
+        dolbyAtmos.value = prefs.getBoolean(KEY_DOLBY_ATMOS, true)
         crossfadeSeconds.value = prefs.getInt(KEY_CROSSFADE, 0)
         smartFadeEnabled.value = prefs.getBoolean(KEY_SMART_FADE, false)
         skipSilence.value = prefs.getBoolean(KEY_SKIP_SILENCE, false)
         spatialAudio.value = prefs.getBoolean(KEY_SPATIAL_AUDIO, false)
+        automixPerformanceMode.value = runCatching {
+            AutomixPerformanceMode.valueOf(
+                prefs.getString(KEY_AUTOMIX_PERFORMANCE, null)
+                    ?: AutomixPerformanceMode.BALANCED.name,
+            )
+        }.getOrDefault(AutomixPerformanceMode.BALANCED)
+        preferUsbDac.value = prefs.getBoolean(KEY_PREFER_USB_DAC, false)
+        exportDownloads.value = prefs.getBoolean(KEY_EXPORT_DOWNLOADS, false)
+        outputPcmMode.value = OutputPcmMode.from(prefs.getString(KEY_OUTPUT_PCM_MODE, null))
         downloadQuality.value = runCatching {
             DownloadQuality.valueOf(prefs.getString(KEY_DOWNLOAD_QUALITY, null) ?: "LOSSLESS")
         }.getOrDefault(DownloadQuality.LOSSLESS)
@@ -648,6 +785,11 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_LOSSLESS_ON_CELLULAR, value).apply()
     }
 
+    fun setDolbyAtmos(value: Boolean) {
+        dolbyAtmos.value = value
+        prefs.edit().putBoolean(KEY_DOLBY_ATMOS, value).apply()
+    }
+
     fun setCrossfadeSeconds(value: Int) {
         crossfadeSeconds.value = value
         prefs.edit().putInt(KEY_CROSSFADE, value).apply()
@@ -661,6 +803,26 @@ object AppSettings {
     fun setSkipSilence(value: Boolean) {
         skipSilence.value = value
         prefs.edit().putBoolean(KEY_SKIP_SILENCE, value).apply()
+    }
+
+    fun setAutomixPerformanceMode(value: AutomixPerformanceMode) {
+        automixPerformanceMode.value = value
+        prefs.edit().putString(KEY_AUTOMIX_PERFORMANCE, value.name).apply()
+    }
+
+    fun setPreferUsbDac(value: Boolean) {
+        preferUsbDac.value = value
+        prefs.edit().putBoolean(KEY_PREFER_USB_DAC, value).apply()
+    }
+
+    fun setExportDownloads(value: Boolean) {
+        exportDownloads.value = value
+        prefs.edit().putBoolean(KEY_EXPORT_DOWNLOADS, value).apply()
+    }
+
+    fun setOutputPcmMode(value: OutputPcmMode) {
+        outputPcmMode.value = value
+        prefs.edit().putString(KEY_OUTPUT_PCM_MODE, value.name).apply()
     }
 
     fun setSpatialAudio(value: Boolean) {
@@ -849,6 +1011,47 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_FULL_BLEED_ARTWORK, value).apply()
     }
 
+    fun setLegacyMeshGradient(value: Boolean) {
+        legacyMeshGradient.value = value
+        prefs.edit().putBoolean(KEY_LEGACY_MESH_GRADIENT, value).apply()
+    }
+
+    fun setFilterNonMusicAudio(value: Boolean) {
+        filterNonMusicAudio.value = value
+        prefs.edit().putBoolean(KEY_FILTER_NON_MUSIC_AUDIO, value).apply()
+    }
+
+    fun setLyricsBlur(value: Boolean) {
+        lyricsBlur.value = value
+        prefs.edit().putBoolean(KEY_LYRICS_BLUR, value).apply()
+    }
+
+    fun setLiquidGlass(value: Boolean) {
+        liquidGlass.value = value
+        prefs.edit().putBoolean(KEY_LIQUID_GLASS, value).apply()
+    }
+
+    fun setHighPerformanceMode(value: Boolean) {
+        highPerformanceMode.value = value
+        val editor = prefs.edit().putBoolean(KEY_HIGH_PERFORMANCE_MODE, value)
+        if (value) {
+            // Asking for full animations and blur while the app is told to drop
+            // them is a contradiction, so the two reduce-* switches are cleared
+            // along with it — persisted in the same commit as the flag itself.
+            reduceAnimation.value = false
+            reduceDynamicBlur.value = false
+            editor.putBoolean(KEY_REDUCE_ANIMATION, false)
+            editor.putBoolean(KEY_REDUCE_BLUR, false)
+        }
+        editor.apply()
+    }
+
+    fun setPerformanceRefreshRate(value: Int) {
+        val normalized = normalizePerformanceRefreshRate(value)
+        performanceRefreshRate.value = normalized
+        prefs.edit().putInt(KEY_PERFORMANCE_REFRESH_RATE, normalized).apply()
+    }
+
     /** Writes through to the encrypted store; pass "" to disconnect. */
     fun setDiscordToken(value: String) {
         discordToken.value = value
@@ -876,9 +1079,9 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_DISCORD_USE_DETAILS, value).apply()
     }
 
-    fun setDiscordSecondLine(value: String) {
-        discordSecondLine.value = value
-        prefs.edit().putString(KEY_DISCORD_SECOND_LINE, value).apply()
+    fun setDiscordShowAlbum(value: Boolean) {
+        discordShowAlbum.value = value
+        prefs.edit().putBoolean(KEY_DISCORD_SHOW_ALBUM, value).apply()
     }
 
     fun setDiscordAdvancedMode(value: Boolean) {
@@ -940,10 +1143,15 @@ object AppSettings {
     private const val KEY_QUALITY_CELLULAR = "audio_quality_cellular"
     private const val KEY_LOSSLESS = "lossless_audio"
     private const val KEY_LOSSLESS_ON_CELLULAR = "lossless_on_cellular"
+    private const val KEY_DOLBY_ATMOS = "dolby_atmos"
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"
     private const val KEY_SKIP_SILENCE = "skip_silence"
     private const val KEY_SPATIAL_AUDIO = "spatial_audio"
+    private const val KEY_AUTOMIX_PERFORMANCE = "automix_performance_mode"
+    private const val KEY_PREFER_USB_DAC = "prefer_usb_dac"
+    private const val KEY_EXPORT_DOWNLOADS = "export_downloads"
+    private const val KEY_OUTPUT_PCM_MODE = "output_pcm_mode"
     private const val KEY_SPEED = "playback_speed"
     private const val KEY_THEME = "theme_mode"
     private const val KEY_AUTOPLAY = "autoplay"
@@ -958,7 +1166,18 @@ object AppSettings {
     private const val KEY_HAPTIC_FEEDBACK = "haptic_feedback"
     private const val KEY_ANIMATED_CANVAS = "animated_canvas"
     private const val KEY_FULL_BLEED_ARTWORK = "full_bleed_artwork"
+    private const val KEY_LEGACY_MESH_GRADIENT = "legacy_mesh_gradient"
+    private const val KEY_FILTER_NON_MUSIC_AUDIO = "filter_non_music_audio"
+    private const val KEY_LIQUID_GLASS = "liquid_glass"
+    private const val KEY_HIGH_PERFORMANCE_MODE = "high_performance_mode"
+    private const val KEY_PERFORMANCE_REFRESH_RATE = "performance_refresh_rate"
+
+    private const val DEFAULT_PERFORMANCE_REFRESH_RATE = 120
+
+    private fun normalizePerformanceRefreshRate(value: Int): Int =
+        value.takeIf { it in 50..240 } ?: DEFAULT_PERFORMANCE_REFRESH_RATE
     private const val KEY_SYNCED_LYRICS = "synced_lyrics"
+    private const val KEY_LYRICS_BLUR = "lyrics_blur"
     private const val KEY_LYRICS_SOURCES = "lyrics_sources"
 
     private const val KEY_ACCOUNT_MORE_CONTENT = "account_more_content"
@@ -984,7 +1203,7 @@ object AppSettings {
     private const val KEY_DISCORD_AVATAR = "discord_avatar"
     private const val KEY_DISCORD_RPC_ENABLED = "discord_rpc_enabled"
     private const val KEY_DISCORD_USE_DETAILS = "discord_use_details"
-    private const val KEY_DISCORD_SECOND_LINE = "discord_second_line"
+    private const val KEY_DISCORD_SHOW_ALBUM = "discord_show_album"
     private const val KEY_DISCORD_ADVANCED_MODE = "discord_advanced_mode"
     private const val KEY_DISCORD_STATUS = "discord_status"
     private const val KEY_DISCORD_ACTIVITY_TYPE = "discord_activity_type"

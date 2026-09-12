@@ -37,6 +37,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.velthy.client.data.settings.AppSettings
 import coil3.compose.AsyncImage
 import com.velthy.client.data.model.ROW_ART_PX
 import com.velthy.client.data.model.Song
@@ -47,7 +48,6 @@ import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.player.coverDeparture
 import com.velthy.client.ui.player.miniContentSettle
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
@@ -120,6 +120,13 @@ fun MiniPlayer(
     modifier: Modifier = Modifier,
 ) {
     val canBlur = rememberCanBlur()
+    // Backdrop-sampled glass here too, when it has been asked for and the device
+    // can render it — the mini player sits on the same page as the bar above it,
+    // so leaving it frosted while the bar is glass reads as two different
+    // materials in one piece of furniture.
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val glassActive =
+        LocalLiquidGlassEnabled.current && isGlassSupported() && !reduceDynamicBlur
     val haptics = rememberHaptics()
     val shape = RoundedCornerShape(percent = 50)
     Box(
@@ -132,10 +139,13 @@ fun MiniPlayer(
             }
             .clip(shape)
             .then(
-                if (!canBlur) {
-                    Modifier.background(MaterialTheme.colorScheme.surface)
-                } else {
-                    Modifier.hazeEffect(state = hazeState, style = HazeMaterials.thin(MaterialTheme.colorScheme.surface))
+                when {
+                    glassActive -> Modifier.liquidGlass(shape)
+                    !canBlur -> Modifier.background(MaterialTheme.colorScheme.surface)
+                    else -> Modifier.optimizedHazeEffect(
+                        state = hazeState,
+                        style = HazeMaterials.thin(MaterialTheme.colorScheme.surface),
+                    )
                 },
             )
             .border(0.5.dp, Color.White.copy(alpha = 0.10f), shape)
@@ -185,12 +195,14 @@ fun MiniPlayer(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(
+                    // A title too long for the bar crawls instead of being cut —
+                    // see [MarqueeText]. Idle text still never animates: the
+                    // scroll only starts once measurement says it has to.
+                    MarqueeText(
                         text = song.title,
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
                         text = song.artist,

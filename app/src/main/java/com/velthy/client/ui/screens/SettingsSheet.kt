@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.Animation
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.BlurOn
 import androidx.compose.material.icons.rounded.BlurOff
 import androidx.compose.material.icons.rounded.Brightness4
 import androidx.compose.material.icons.rounded.Check
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.Gradient
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Language
@@ -56,6 +59,7 @@ import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SurroundSound
@@ -83,6 +87,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -96,7 +101,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -107,7 +115,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
@@ -117,20 +124,30 @@ import com.velthy.client.ui.components.SUPPORTED_LANGUAGES
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.FilterAlt
 import com.velthy.client.data.stats.Backup
 import com.velthy.client.data.model.Account
 import com.velthy.client.BuildConfig
+import com.velthy.client.R
 import com.velthy.client.data.scrobbling.LastFM
 import com.velthy.client.data.scrobbling.ListenBrainzManager
 import com.velthy.client.ui.components.AlertErrorBanner
+import com.velthy.client.ui.components.isGlassSupported
+import com.velthy.client.ui.performance.resolvePerformanceRefreshRate
+import com.velthy.client.ui.performance.supportedPerformanceRefreshRates
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.data.settings.AutomixPerformanceMode
+import com.velthy.client.data.sources.DeviceCodecs
 import com.velthy.client.data.sources.SourceKind
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.settings.AudioQuality
 import com.velthy.client.data.settings.DownloadQuality
+import com.velthy.client.data.settings.OutputPcmMode
 import com.velthy.client.data.settings.ThemeMode
 import com.velthy.client.playback.AudioCache
-import com.velthy.client.playback.DolbyAtmos
+import com.velthy.client.playback.AudioDeviceHelper
+import com.velthy.client.playback.AudioDeviceType
+import com.velthy.client.playback.rememberActiveAudioDevice
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.player.fullBleedArtworkAvailable
@@ -156,12 +173,26 @@ fun SettingsScreen(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
     onOpenReplay: () -> Unit = {},
+    /**
+     * Opens the Sources screen — the module and custom-index list behind
+     * lossless playback. Offered as a parameter rather than hosted here so the
+     * page can cover the tab bar and the mini player like every other pushed
+     * screen.
+     */
+    onOpenSources: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var showUpdateSheet by remember { mutableStateOf(false) }
+    var showPerformanceWarning by remember { mutableStateOf(false) }
+    var showPerformanceConfirmation by remember { mutableStateOf(false) }
+    // Asked of the system's own battery screen rather than guessed at: whatever
+    // the user changes there, coming back is the signal that they are done.
+    val batterySettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { showPerformanceConfirmation = true }
     var updateModalInfo by remember { mutableStateOf<AppUpdateChecker.UpdateInfo?>(null) }
     val haptics = rememberHaptics()
 
@@ -172,14 +203,42 @@ fun SettingsScreen(
     val smartFade by AppSettings.smartFadeEnabled.collectAsStateWithLifecycle()
     val skipSilence by AppSettings.skipSilence.collectAsStateWithLifecycle()
     val spatialAudio by AppSettings.spatialAudio.collectAsStateWithLifecycle()
-    val atmosSupported by DolbyAtmos.supported.collectAsStateWithLifecycle()
-    val atmosEnabled by DolbyAtmos.enabledOnDevice.collectAsStateWithLifecycle()
+    val dolbyAtmos by AppSettings.dolbyAtmos.collectAsStateWithLifecycle()
+    val automixPerformance by AppSettings.automixPerformanceMode.collectAsStateWithLifecycle()
+    val preferUsbDac by AppSettings.preferUsbDac.collectAsStateWithLifecycle()
+    val exportDownloads by AppSettings.exportDownloads.collectAsStateWithLifecycle()
+    val outputPcmMode by AppSettings.outputPcmMode.collectAsStateWithLifecycle()
+    val audioDevice = rememberActiveAudioDevice().value
+    // Asked once and held: the codec list cannot change while the app is
+    // running, and the walk behind it is not free.
+    val atmosCodecSupported = remember { DeviceCodecs.playsDolbyAtmos }
     val nerdStats by AppSettings.showNerdStats.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val fullBleedArtwork by AppSettings.fullBleedArtwork.collectAsStateWithLifecycle()
+    val legacyMeshGradient by AppSettings.legacyMeshGradient.collectAsStateWithLifecycle()
+    val liquidGlass by AppSettings.liquidGlass.collectAsStateWithLifecycle()
+    val liquidGlassSupported = isGlassSupported()
+    val filterNonMusicAudio by AppSettings.filterNonMusicAudio.collectAsStateWithLifecycle()
+    val highPerformanceMode by AppSettings.highPerformanceMode.collectAsStateWithLifecycle()
+    val performanceRefreshRate by AppSettings.performanceRefreshRate.collectAsStateWithLifecycle()
+    val currentDisplay = LocalView.current.display
+    val supportedRefreshRates = remember(currentDisplay) {
+        currentDisplay.supportedPerformanceRefreshRates()
+    }
+    val selectedPerformanceRefreshRate = remember(currentDisplay, performanceRefreshRate) {
+        currentDisplay.resolvePerformanceRefreshRate(performanceRefreshRate)
+    }
+    // A preference restored on another device may name a rate this display has
+    // no mode for, so the saved value is pulled onto the nearest real one.
+    LaunchedEffect(selectedPerformanceRefreshRate, performanceRefreshRate) {
+        if (selectedPerformanceRefreshRate != performanceRefreshRate) {
+            AppSettings.setPerformanceRefreshRate(selectedPerformanceRefreshRate)
+        }
+    }
     val animatedCanvas by AppSettings.animatedCanvas.collectAsStateWithLifecycle()
     val syncedLyrics by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
+    val lyricsBlur by AppSettings.lyricsBlur.collectAsStateWithLifecycle()
     val lyricsSources by AppSettings.lyricsSources.collectAsStateWithLifecycle()
     val speed by AppSettings.playbackSpeed.collectAsStateWithLifecycle()
     val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
@@ -249,16 +308,9 @@ fun SettingsScreen(
     var showLastfmLoginDialog by remember { mutableStateOf(false) }
     var showStorageSettingsSheet by remember { mutableStateOf(false) }
     var showAppLanguageDialog by remember { mutableStateOf(false) }
+    var pickingAutomixPerformance by remember { mutableStateOf(false) }
     val dontRepeatSuggestions by AppSettings.dontRepeatSuggestions.collectAsStateWithLifecycle()
     val scrobbleScope = rememberCoroutineScope()
-
-    // Coming back from the system Atmos panel is the one moment the answer is
-    // most likely to have changed, and on devices whose Atmos switch isn't
-    // watchable it's the only moment we'd hear about it at all.
-    LifecycleResumeEffect(Unit) {
-        DolbyAtmos.refresh()
-        onPauseOrDispose {}
-    }
 
     val version = remember(context) {
         runCatching {
@@ -292,57 +344,15 @@ fun SettingsScreen(
         SettingsGroup(
             header = "Audio quality",
             footer = "Each connection keeps its own ceiling, so Wi-Fi can stay on " +
-                "High while mobile data is capped. High costs about " +
-                "${AudioQuality.HIGH.hourly} of data. The ceiling applies to every " +
-                "source, and outranks the lossless preference.",
+                "Lossless while mobile data is capped. High costs about " +
+                "${AudioQuality.HIGH.hourly} of data, Lossless about " +
+                "${AudioQuality.LOSSLESS.hourly}. The ceiling applies to every source.",
         ) {
             SettingsRow(
-                icon = Icons.Rounded.GraphicEq,
-                title = "Lossless / HQ Audio",
-                subtitle = if (moduleEnabled) "Playing lossless FLAC streams when available (Qobuz / Tidal)."
-                    else "Turn on to experience lossless music quality (Qobuz / Tidal FLAC).",
-                trailing = {
-                    Switch(
-                        checked = moduleEnabled,
-                        onCheckedChange = {
-                            SourceRegistry.setModuleEnabled(it)
-                            AppSettings.setLosslessAudio(it)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = {
-                    val next = !moduleEnabled
-                    SourceRegistry.setModuleEnabled(next)
-                    AppSettings.setLosslessAudio(next)
-                },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.SignalCellularAlt,
-                title = "Lossless on mobile data",
-                subtitle = if (losslessOnCellular) "Streaming lossless FLAC over cellular data"
-                    else "Lossless disabled on cellular to save mobile data",
-                enabled = moduleEnabled,
-                trailing = {
-                    Switch(
-                        checked = losslessOnCellular,
-                        enabled = moduleEnabled,
-                        onCheckedChange = AppSettings::setLosslessOnCellular,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = {
-                    if (moduleEnabled) {
-                        AppSettings.setLosslessOnCellular(!losslessOnCellular)
-                    }
-                },
+                icon = Icons.Rounded.Extension,
+                title = "Sources",
+                subtitle = "Where audio comes from and the order used",
+                onClick = onOpenSources,
             )
             RowDivider()
             SettingsRow(
@@ -360,6 +370,35 @@ fun SettingsScreen(
                 value = cellularQuality.label,
                 onClick = { picking = QualityTarget.CELLULAR },
             )
+            RowDivider()
+            // Last row of this group, which is where it belongs: a preference
+            // about the *source* — whether a module may hand over an Atmos
+            // rendition — so it sits with where audio comes from, not with what
+            // the player does with it, and not with downloads. Off by choice is
+            // a real preference: Atmos is E-AC-3, which is lossy, and the same
+            // track is often also held as a bit-exact stereo copy.
+            SettingsRow(
+                iconPainter = painterResource(R.drawable.ic_dolby_atmos),
+                title = "Dolby Atmos",
+                subtitle = if (atmosCodecSupported) {
+                    "Play the more immersive, surround version of a song when there is one"
+                } else {
+                    "This device can't play Atmos, so these songs play in their usual version"
+                },
+                enabled = atmosCodecSupported,
+                trailing = {
+                    Switch(
+                        checked = dolbyAtmos && atmosCodecSupported,
+                        onCheckedChange = AppSettings::setDolbyAtmos,
+                        enabled = atmosCodecSupported,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setDolbyAtmos(!dolbyAtmos) },
+            )
         }
 
         SettingsGroup(header = "Downloads") {
@@ -376,9 +415,77 @@ fun SettingsScreen(
                 onCheckedChange = AppSettings::setWifiOnlyDownloads,
                 badge = "Blocking".takeIf { wifiOnlyDownloads && metered == true },
             )
+            // A sub-row, not a row of its own: it reads as part of the download
+            // settings above it. The folder it writes to is its own badge — the
+            // answer to "where do I point another player at?", which is the only
+            // reason the setting exists.
+            SettingsSubRow(
+                title = "Export compatible downloads",
+                checked = exportDownloads,
+                onCheckedChange = { wanted ->
+                    AppSettings.setExportDownloads(wanted)
+                    // Turning it on sweeps up what is already on the device.
+                    // Turning it off leaves those copies alone: they are the
+                    // listener's files, and a switch about future downloads is
+                    // not a licence to delete them.
+                    if (wanted) {
+                        scrobbleScope.launch {
+                            com.velthy.client.download.Downloads
+                                .exportAllToMusicFolder(context)
+                        }
+                    }
+                },
+                badge = "Music/Velthy".takeIf { exportDownloads },
+            )
         }
 
         SettingsGroup(header = "Playback") {
+            // The two rows BitChord leads this group with, in its order: what
+            // the output is opened as, then which route it leaves by.
+            SettingsRow(
+                icon = Icons.Rounded.GraphicEq,
+                title = "Output precision",
+                subtitle = "What the app asks Android to open the output as",
+            )
+            // The two rungs are a segmented control rather than a picker
+            // dialog: there are only two, they are mutually exclusive, and the
+            // choice is worth seeing at a glance instead of behind a tap —
+            // the same treatment BitChord gives them.
+            SegmentedControl(
+                options = OutputPcmMode.entries.map { it.label },
+                selectedIndex = OutputPcmMode.entries.indexOf(outputPcmMode),
+                onSelect = { AppSettings.setOutputPcmMode(OutputPcmMode.entries[it]) },
+                modifier = Modifier.padding(start = TEXT_INSET, end = ROW_INSET, bottom = 14.dp),
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.Tune,
+                title = "Prefer USB DAC",
+                subtitle = "Send playback to an attached USB DAC when one is connected",
+                badge = "Connected".takeIf { audioDevice.type == AudioDeviceType.USB_DAC },
+                trailing = {
+                    Switch(
+                        checked = preferUsbDac,
+                        onCheckedChange = { wanted ->
+                            AppSettings.setPreferUsbDac(wanted)
+                            // Applied on the spot rather than waiting for the
+                            // next route change — the DAC is already attached,
+                            // and that is the whole point of the switch.
+                            if (wanted) AudioDeviceHelper.applyUsbDacPreference(context)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = {
+                    val wanted = !preferUsbDac
+                    AppSettings.setPreferUsbDac(wanted)
+                    if (wanted) AudioDeviceHelper.applyUsbDacPreference(context)
+                },
+            )
+            RowDivider()
             // Smart Fade decides its own length from each pair of tracks —
             // tempo, key, structure — so it replaces the manual slider rather
             // than needing it set to anything first.
@@ -426,6 +533,17 @@ fun SettingsScreen(
                 steps = 29,
             )
             RowDivider()
+            // Sits directly above Skip silence, where BitChord keeps it: the CPU
+            // the two analysis models may take is a playback setting like any
+            // other, not something buried under Automix's own switch.
+            SettingsRow(
+                icon = Icons.Rounded.Tune,
+                title = "Automix performance",
+                subtitle = "How much CPU the transition analysis may use",
+                value = automixPerformance.label,
+                onClick = { pickingAutomixPerformance = true },
+            )
+            RowDivider()
             SettingsRow(
                 icon = Icons.AutoMirrored.Rounded.VolumeOff,
                 title = "Skip silence",
@@ -443,36 +561,26 @@ fun SettingsScreen(
                 onClick = { AppSettings.setSkipSilence(!skipSilence) },
             )
             RowDivider()
+            // A plain preference, and deliberately not tied to the device's own
+            // Atmos switch. This widens what is already playing — it is not
+            // object-based audio, and YouTube only ever hands over a stereo
+            // stream to widen — so whether it is on is the listener's call
+            // alone, the same call BitChord leaves to them.
             SettingsRow(
                 icon = Icons.Rounded.SurroundSound,
                 title = "Spatial audio",
-                subtitle = when {
-                    !atmosSupported -> "Needs a device with Dolby Atmos"
-                    !atmosEnabled -> "Turn on Dolby Atmos to use it"
-                    else -> "Widens stereo tracks for a more immersive feel"
-                },
-                enabled = atmosSupported,
+                subtitle = "Widens stereo tracks for a more immersive feel",
                 trailing = {
                     Switch(
-                        checked = spatialAudio && atmosEnabled,
-                        onCheckedChange = { wanted ->
-                            if (atmosEnabled) AppSettings.setSpatialAudio(wanted) else openAtmosSettings(context)
-                        },
-                        enabled = atmosSupported,
+                        checked = spatialAudio,
+                        onCheckedChange = AppSettings::setSpatialAudio,
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = MaterialTheme.colorScheme.primary,
                             checkedBorderColor = MaterialTheme.colorScheme.primary,
                         ),
                     )
                 },
-                // With Atmos off, the switch has nothing to switch — the row
-                // sends the user to the panel that does, and the state it comes
-                // back with is picked up on resume.
-                onClick = when {
-                    !atmosSupported -> null
-                    !atmosEnabled -> ({ openAtmosSettings(context) })
-                    else -> ({ AppSettings.setSpatialAudio(!spatialAudio) })
-                },
+                onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
             )
             RowDivider()
             SettingsRow(
@@ -572,6 +680,29 @@ fun SettingsScreen(
                 onClick = { AppSettings.setReduceDynamicBlur(!reduceDynamicBlur) },
             )
             RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.AutoAwesome,
+                title = "Liquid Glass",
+                subtitle = if (liquidGlassSupported) {
+                    "Real backdrop glass on the navigation bar — blur and refraction"
+                } else {
+                    "Needs Android 12 or newer"
+                },
+                enabled = liquidGlassSupported,
+                trailing = {
+                    Switch(
+                        checked = liquidGlass,
+                        onCheckedChange = AppSettings::setLiquidGlass,
+                        enabled = liquidGlassSupported,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setLiquidGlass(!liquidGlass) },
+            )
+            RowDivider()
             if (fullBleedArtworkAvailable()) {
                 SettingsRow(
                     icon = Icons.Rounded.Fullscreen,
@@ -592,6 +723,24 @@ fun SettingsScreen(
                 )
                 RowDivider()
             }
+            SettingsRow(
+                icon = Icons.Rounded.Gradient,
+                title = "Legacy mesh gradient",
+                subtitle = "Brings back the drifting colour blobs behind the player " +
+                    "from v1.5, instead of the artwork's own colours",
+                trailing = {
+                    Switch(
+                        checked = legacyMeshGradient,
+                        onCheckedChange = AppSettings::setLegacyMeshGradient,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setLegacyMeshGradient(!legacyMeshGradient) },
+            )
+            RowDivider()
             SettingsRow(
                 icon = Icons.Rounded.Animation,
                 title = "Animated cover art",
@@ -639,6 +788,23 @@ fun SettingsScreen(
             if (syncedLyrics) {
                 RowDivider()
                 SettingsRow(
+                    icon = Icons.Rounded.BlurOn,
+                    title = "Blur unfocused lyrics",
+                    subtitle = "Keeps the spotlight on the current line",
+                    trailing = {
+                        Switch(
+                            checked = lyricsBlur,
+                            onCheckedChange = AppSettings::setLyricsBlur,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setLyricsBlur(!lyricsBlur) },
+                )
+                RowDivider()
+                SettingsRow(
                     icon = Icons.Rounded.Language,
                     title = "Lyrics sources",
                     subtitle = lyricsSources
@@ -652,7 +818,144 @@ fun SettingsScreen(
         }
 
         val cacheLimitMb = (cacheLimitBytes / (1024 * 1024)).toInt()
-        SettingsGroup(header = "Storage & Downloads") {
+        SettingsGroup(header = "Performance") {
+            SettingsRow(
+                icon = Icons.Rounded.Speed,
+                title = "High performance mode",
+                subtitle = if (highPerformanceMode) {
+                    "$selectedPerformanceRefreshRate Hz requested. Android may lower it when needed."
+                } else {
+                    "Uses full animations and blur, and requests a higher " +
+                        "display refresh rate"
+                },
+                badge = "Beta",
+                trailing = {
+                    Switch(
+                        checked = highPerformanceMode,
+                        onCheckedChange = { enabled ->
+                            if (enabled) showPerformanceWarning = true
+                            else AppSettings.setHighPerformanceMode(false)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = {
+                    if (highPerformanceMode) {
+                        AppSettings.setHighPerformanceMode(false)
+                    } else {
+                        showPerformanceWarning = true
+                    }
+                },
+            )
+            if (highPerformanceMode) {
+                RowDivider()
+                SettingsRow(icon = Icons.Rounded.Refresh, title = "Refresh rate")
+                SegmentedControl(
+                    options = supportedRefreshRates.map { "$it Hz" },
+                    selectedIndex = supportedRefreshRates.indexOf(selectedPerformanceRefreshRate),
+                    onSelect = { index ->
+                        AppSettings.setPerformanceRefreshRate(supportedRefreshRates[index])
+                    },
+                    modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
+                )
+            }
+        }
+
+        if (showPerformanceWarning) {
+            AlertDialog(
+                onDismissRequest = { showPerformanceWarning = false },
+                title = { Text("Before enabling") },
+                text = {
+                    Text(
+                        "First set Velthy's battery usage to Unrestricted. Higher refresh " +
+                            "rates use more battery, CPU and GPU, and may warm your device.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showPerformanceWarning = false
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                .apply {
+                                    data = Uri.fromParts("package", context.packageName, null)
+                                }
+                            val settingsIntent = intent.takeIf {
+                                it.resolveActivity(context.packageManager) != null
+                            } ?: Intent(Settings.ACTION_SETTINGS)
+                            batterySettingsLauncher.launch(settingsIntent)
+                        },
+                    ) { Text("Open battery settings") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPerformanceWarning = false }) { Text("Cancel") }
+                },
+            )
+        }
+
+        if (showPerformanceConfirmation) {
+            AlertDialog(
+                onDismissRequest = { showPerformanceConfirmation = false },
+                title = { Text("Enable high performance mode?") },
+                text = {
+                    Text(
+                        "Enable only if Velthy's battery use is set to Unrestricted. " +
+                            "Android can still limit the refresh rate when the device " +
+                            "is hot or low on power.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showPerformanceConfirmation = false
+                            AppSettings.setHighPerformanceMode(true)
+                        },
+                    ) { Text("Enable") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPerformanceConfirmation = false }) { Text("Not yet") }
+                },
+            )
+        }
+
+        SettingsGroup(header = "Local music") {
+            SettingsRow(
+                icon = Icons.Rounded.FilterAlt,
+                title = "Filter non-music audio",
+                subtitle = "Keeps clips, ringtones and voice notes out of the " +
+                    "on-device library",
+                trailing = {
+                    Switch(
+                        checked = filterNonMusicAudio,
+                        onCheckedChange = AppSettings::setFilterNonMusicAudio,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setFilterNonMusicAudio(!filterNonMusicAudio) },
+            )
+        }
+
+        if (pickingAutomixPerformance) {
+            ModalBottomSheet(
+                onDismissRequest = { pickingAutomixPerformance = false },
+                containerColor = MaterialTheme.colorScheme.background,
+            ) {
+                AutomixPerformanceSheet(
+                    selected = automixPerformance,
+                    onSelect = { mode ->
+                        AppSettings.setAutomixPerformanceMode(mode)
+                        pickingAutomixPerformance = false
+                    },
+                )
+            }
+        }
+
+        SettingsGroup(header = "Storage") {
             SettingsRow(
                 icon = Icons.Rounded.PieChart,
                 title = "Storage & Cache Management",
@@ -824,6 +1127,24 @@ fun SettingsScreen(
                     )
                 },
                 onClick = { AppSettings.setSwipeToPlayNext(!swipeToPlayNext) },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.History,
+                title = "Don't repeat songs in current session",
+                subtitle = "Keeps a song already played this session out of what " +
+                    "comes next",
+                trailing = {
+                    Switch(
+                        checked = dontRepeatSuggestions,
+                        onCheckedChange = AppSettings::setDontRepeatSuggestions,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setDontRepeatSuggestions(!dontRepeatSuggestions) },
             )
             RowDivider()
             SettingsRow(
@@ -1260,22 +1581,6 @@ private fun openEqualizer(context: Context, sessionId: Int) {
     }
 }
 
-/**
- * Hands the user to whatever owns Dolby Atmos on this device. Nothing in the
- * public API lets an app flip that switch itself, so the honest move is to open
- * the panel rather than pretend the row can do it.
- */
-private fun openAtmosSettings(context: Context) {
-    val intent = DolbyAtmos.settingsIntent(context)
-    if (intent == null) {
-        Toast.makeText(context, "No Dolby Atmos panel on this device", Toast.LENGTH_SHORT).show()
-        return
-    }
-    runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.onFailure {
-        Toast.makeText(context, "Couldn't open Dolby Atmos settings", Toast.LENGTH_SHORT).show()
-    }
-}
-
 /** Above this, the cache limit slider's subtitle warns rather than reassures. */
 private const val CACHE_WARNING_MB = 2048
 
@@ -1347,6 +1652,78 @@ internal fun AccountCard(
         if (!signedIn) {
             Spacer(Modifier.width(8.dp))
             Chevron()
+        }
+    }
+}
+
+/** CPU budget picker for the background models that prepare Automix. */
+@Composable
+private fun AutomixPerformanceSheet(
+    selected: AutomixPerformanceMode,
+    onSelect: (AutomixPerformanceMode) -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Row(
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Tune,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = "Automix performance",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    text = "Higher performance analyses tracks faster, but can use more " +
+                        "battery and make the phone warmer.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
+        AutomixPerformanceMode.entries.forEach { mode ->
+            val chosen = mode == selected
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSelect(mode)
+                    }
+                    .padding(horizontal = 22.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = mode.label,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = mode.detail,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (chosen) {
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = "Selected",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -1575,7 +1952,8 @@ internal fun RowDivider() {
  */
 @Composable
 internal fun SettingsRow(
-    icon: ImageVector,
+    icon: ImageVector? = null,
+    iconPainter: Painter? = null,
     title: String,
     subtitle: String? = null,
     subtitleContent: (@Composable () -> Unit)? = null,
@@ -1594,12 +1972,23 @@ internal fun SettingsRow(
             .padding(horizontal = ROW_INSET, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.size(ICON_SIZE),
-        )
+        // A painter where a glyph would be wrong: the Dolby double-D is a mark,
+        // not something to approximate with the nearest speaker outline.
+        if (iconPainter != null) {
+            Icon(
+                painter = iconPainter,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(ICON_SIZE),
+            )
+        } else if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(ICON_SIZE),
+            )
+        }
         Spacer(Modifier.width(ICON_GAP))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

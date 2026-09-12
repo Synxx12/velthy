@@ -7,9 +7,6 @@ import com.velthy.client.data.model.Song
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.sources.TrackMatcher
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 
 /** Number of radio tracks appended by the single AutoPlay loader. */
 private const val AUTOPLAY_BATCH = 20
@@ -45,9 +42,7 @@ suspend fun loadAutoplayTracks(
     if (extra.isEmpty()) return Result.success(emptyList())
 
     val resolved = try {
-        coroutineScope {
-            extra.map { async { YtMusicRepository.resolveAudio(it) } }.awaitAll()
-        }
+        YtMusicRepository.resolveAudioAll(extra)
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Throwable) {

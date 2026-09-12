@@ -45,8 +45,12 @@ data class SourceConfig(
 }
 
 /**
- * The user's sources, always tried in a fixed order: the module source
- * first, YouTube Music second.
+ * The user's sources, in the order they are tried: the ones the user added
+ * first, in the order they arranged them, then everything else by kind.
+ *
+ * Only a user-added source's position is the user's to set — see [reorderAddons]
+ * — because a built-in kind's rank is fixed in [SourceKind] and the resolver
+ * answers to that, not to where a row sits on screen.
  *
  * [SourceKind.YOUTUBE] is seeded on first run and cannot be deleted, only
  * disabled — it needs no configuration, so a "remove" would delete something
@@ -156,7 +160,14 @@ object SourceRegistry {
         }
     }
 
-    /** The enabled sources, module first and YouTube last, however they're stored. */
+    /**
+     * The enabled sources, in the order they are tried: the ones the user added
+     * first, in the order they arranged them, then the rest by kind.
+     *
+     * The sort is stable, so two sources of the same kind keep the order they
+     * are held in — which is what makes the stored list the priority order for
+     * the user's own sources without a rank field to carry it. See [reorderAddons].
+     */
     fun active(): List<MusicSource> =
         configs.value
             .filter { it.enabled && it.isComplete }
@@ -170,6 +181,32 @@ object SourceRegistry {
     // ── Editing ─────────────────────────────────────────────────────────
 
     fun add(config: SourceConfig) = publish(configs.value + config)
+
+    /**
+     * Puts the user-added sources in [ids], the order they will be asked in.
+     *
+     * The stored list *is* the priority order and needs no rank field to carry
+     * it: [active] sorts by [SourceKind.ordinal] and Kotlin's sort is stable,
+     * so two sources of the same kind keep the order they are held in here.
+     *
+     * Ids that name nothing are dropped, and sources the caller forgot are
+     * appended, so a list that has moved on since the drag started — a source
+     * removed on another screen, say — reorders what it can rather than deleting
+     * the rest. Everything that is not user-added keeps its place: its rank
+     * comes from its kind and is not the user's to set. Called once when the
+     * drag ends, not per frame — this persists and rebuilds the source
+     * instances, which is not work to do mid-gesture.
+     */
+    fun reorderAddons(ids: List<String>) {
+        val addons = configs.value.filter { it.kind.isUserAdded }
+        if (addons.size < 2) return
+        val byId = addons.associateBy { it.id }
+        val moved = ids.mapNotNull(byId::get)
+        val missed = addons.filterNot { config -> moved.any { it.id == config.id } }
+        val reordered = moved + missed
+        if (reordered.map { it.id } == addons.map { it.id }) return
+        publish(reordered + configs.value.filterNot { it.kind.isUserAdded })
+    }
 
     fun update(config: SourceConfig) =
         publish(configs.value.map { if (it.id == config.id) config else it })
@@ -237,35 +274,6 @@ object SourceRegistry {
     /** The user's own custom module index, if they have set one. */
     fun customModule(): SourceConfig? =
         configs.value.firstOrNull { it.kind == SourceKind.CUSTOM_MODULE }
-
-    /**
-     * Points the custom module at [url], replacing whatever was there.
-     *
-     * Only ever one: a second index would be a second full search on every
-     * track for a feature whose whole purpose is "use mine instead", and the
-     * order between two of them would be arbitrary. So this replaces rather
-     * than appends, and a blank [url] clears it.
-     *
-     * The replacement is a *new* [SourceConfig] rather than an edit of the old
-     * one, so [publish] sees a different id and drops the warm [ModuleSource]
-     * built against the previous index.
-     */
-    fun setCustomModule(url: String, label: String = "") {
-        val trimmed = url.trim()
-        val without = configs.value.filterNot { it.kind == SourceKind.CUSTOM_MODULE }
-        if (trimmed.isEmpty()) {
-            publish(without)
-            return
-        }
-        publish(
-            without + SourceConfig(
-                kind = SourceKind.CUSTOM_MODULE,
-                label = label.trim(),
-                baseUrl = trimmed,
-                enabled = true,
-            ),
-        )
-    }
 
     private fun build(config: SourceConfig): MusicSource = when (config.kind) {
         // Same protocol, same implementation — the kinds differ only in rank.

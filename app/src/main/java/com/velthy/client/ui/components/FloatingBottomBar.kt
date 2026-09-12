@@ -58,10 +58,10 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlin.math.roundToInt
@@ -97,6 +97,16 @@ private val PILL_SHEEN_COLORS = listOf(
 
 /** The hairline the pill is ringed with. */
 private val PILL_HAIRLINE = 0.75.dp
+
+/**
+ * Metrics the glass nav bar reads as well as this one: the inset between the
+ * pill's edge and the tabs, each tab's own vertical padding, and the gap between
+ * a tab's icon and its label. Kept here because this is where the pill is
+ * drawn — see BitChord, which keeps the same three in the same file.
+ */
+internal val PILL_INSET = 6.dp
+internal val TAB_VERTICAL_PADDING = 9.dp
+internal val TAB_ICON_LABEL_GAP = 2.dp
 
 /**
  * The pill's slide, one spec for everything that moves on it.
@@ -135,6 +145,11 @@ fun FloatingBottomBar(
     val container = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
     val fallbackContainer = MaterialTheme.colorScheme.surface
     val canBlur = rememberCanBlur()
+    // Backdrop-sampled glass, only where it was asked for and can actually be
+    // rendered. Falls back to the frosted haze everywhere else.
+    val glassEnabled = LocalLiquidGlassEnabled.current
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val glassActive = glassEnabled && isGlassSupported() && !reduceDynamicBlur
     val haptics = rememberHaptics()
     val density = LocalDensity.current
 
@@ -261,10 +276,10 @@ fun FloatingBottomBar(
                     .fillMaxHeight()
                     .clip(capsuleShape)
                     .then(
-                        if (!canBlur) {
-                            Modifier.background(fallbackContainer)
-                        } else {
-                            Modifier.hazeEffect(
+                        when {
+                            glassActive -> Modifier.liquidGlass(capsuleShape)
+                            !canBlur -> Modifier.background(fallbackContainer)
+                            else -> Modifier.optimizedHazeEffect(
                                 state = hazeState,
                                 style = HazeMaterials.thin(container),
                             )
@@ -281,10 +296,10 @@ fun FloatingBottomBar(
                         .size(barHeight)
                         .clip(circleShape)
                         .then(
-                            if (!canBlur) {
-                                Modifier.background(fallbackContainer)
-                            } else {
-                                Modifier.hazeEffect(
+                            when {
+                                glassActive -> Modifier.liquidGlass(circleShape)
+                                !canBlur -> Modifier.background(fallbackContainer)
+                                else -> Modifier.optimizedHazeEffect(
                                     state = hazeState,
                                     style = HazeMaterials.thin(container),
                                 )

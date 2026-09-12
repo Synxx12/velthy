@@ -3,6 +3,7 @@
 import android.util.Log
 import com.velthy.client.data.TrackLog
 import com.velthy.client.data.model.Song
+import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.sources.module.ModuleManager
 import com.velthy.client.data.sources.module.ModuleSearchResult
 import com.velthy.client.data.sources.module.SpineModule
@@ -233,15 +234,32 @@ class ModuleSource(
             val url = rawUrl.trim()
 
             val trackMeta = streamResponse.track
-            SourceStream(
-                url = url,
-                format = StreamFormat(
-                    codec = codecOf(trackMeta?.mimeType, trackMeta?.audioQuality, url),
-                    kbps = kbpsFor(trackMeta?.audioQuality, url),
-                    sampleRateHz = trackMeta?.sampleRate?.toInt()?.takeIf { it > 0 },
-                    bitDepth = trackMeta?.bitDepth?.takeIf { it > 0 },
-                ),
+            val format = StreamFormat(
+                codec = codecOf(trackMeta?.mimeType, trackMeta?.audioQuality, url),
+                kbps = kbpsFor(trackMeta?.audioQuality, url),
+                sampleRateHz = trackMeta?.sampleRate?.toInt()?.takeIf { it > 0 },
+                bitDepth = trackMeta?.bitDepth?.takeIf { it > 0 },
             )
+            // A rendition this phone cannot decode — or one the listener has
+            // switched off — is refused *here*, before the URL is handed over,
+            // because the player answers a format no renderer supports by
+            // declining the track silently: no error to recover from, no
+            // message on screen, just a song that skips itself. Refusing
+            // instead returns to the resolver, which still has the lossless
+            // copy and the other modules to try.
+            if (format.isDolbyAtmos && !atmosAllowed()) {
+                TrackLog.w(
+                    TAG,
+                    "${config.displayName}: refused Dolby Atmos for $upstreamId — " +
+                        if (!DeviceCodecs.playsDolbyAtmos) {
+                            "this device has no E-AC-3 decoder"
+                        } else {
+                            "turned off in settings"
+                        },
+                )
+                return@withContext null
+            }
+            SourceStream(url = url, format = format)
         }
 
     /**
@@ -275,6 +293,12 @@ class ModuleSource(
      * guessed at — [kbpsFor] carries what is known about those instead.
      */
     private fun codecOf(mimeType: String?, quality: String?, url: String): String? {
+        // Dolby first, and out of either field. A module that sends the JOC mime
+        // type gets this right on its own, but one that only labels the
+        // rendition "Dolby Atmos" in words — or hands back plain `audio/eac3`
+        // for a JOC stream — would otherwise read as just another lossy track,
+        // and the listener who asked for Atmos would never be offered one.
+        if (namesDolby(mimeType) || namesDolby(quality)) return DOLBY_ATMOS_CODEC
         mimeType?.substringAfterLast('/')?.substringBefore(';')?.trim()?.lowercase()
             ?.takeIf { it.isNotEmpty() }
             ?.let { return it }
@@ -282,6 +306,23 @@ class ModuleSource(
         return url.substringBefore('?').substringAfterLast('.').lowercase()
             .takeIf { it in AUDIO_EXTENSIONS }
     }
+
+    /** Whether a field describes the immersive rendition, in the words it uses. */
+    private fun namesDolby(text: String?): Boolean {
+        val lower = text?.lowercase() ?: return false
+        return "dolby" in lower || "atmos" in lower || "joc" in lower
+    }
+
+    /**
+     * Whether a Dolby Atmos rendition may be served at all.
+     *
+     * Both halves have to agree — see
+     * [DeviceCodecs][com.velthy.client.data.sources.DeviceCodecs] for why a
+     * device without an E-AC-3 decoder is not offered one even with the
+     * setting on.
+     */
+    private fun atmosAllowed(): Boolean =
+        DeviceCodecs.playsDolbyAtmos && AppSettings.dolbyAtmos.value
 
     /**
      * The bitrate a module has committed to, from the number in its label, the
@@ -321,6 +362,10 @@ class ModuleSource(
     private fun settingsFor(request: StreamRequest): Map<String, String> = mapOf(
         "quality" to request.tier,
         "fallbackMode" to if (request is StreamRequest.Lossless) "strict" else "flexible",
+        // Told, not assumed: a module that offers Atmos should only reach for it
+        // when this device can play it and the listener wants it, and the
+        // module is the only one who knows whether its backend has one.
+        "dolbyAtmos" to atmosAllowed().toString(),
     )
 
     private val StreamRequest.tier: String
@@ -428,6 +473,9 @@ class ModuleSource(
          * `hires-96` are one tier; `320kbps` and `HIGH` are another.
          */
         const val LOSSLESS = "LOSSLESS"
+
+        /** What [StreamFormat.codec] is set to for an immersive rendition. */
+        const val DOLBY_ATMOS_CODEC = "eac3-joc"
         const val HIGH = "HIGH"
         const val LOW = "LOW"
 

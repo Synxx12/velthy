@@ -12,7 +12,6 @@ import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import com.velthy.client.auth.AuthStore
 import com.velthy.client.playback.AudioCache
-import com.velthy.client.playback.DolbyAtmos
 import com.velthy.client.playback.LastPlayed
 import com.velthy.client.data.innertube.Innertube
 import com.velthy.client.data.scrobbling.LastFM
@@ -30,9 +29,6 @@ open class VelthyApplication : Application(), SingletonImageLoader.Factory {
         authStore = AuthStore(this)
         Innertube.cookie = authStore.cookie
         AppSettings.init(this)
-        // After AppSettings: a device with Atmos switched off retires the
-        // spatial audio preference on the spot, and that needs prefs open.
-        DolbyAtmos.init(this)
         SearchHistory.init(this)
         LastPlayed.init(this)
         com.velthy.client.data.sources.SourceRegistry.init(this)

@@ -138,6 +138,12 @@ fun rememberPlayerState(controller: MediaController?): PlayerState {
  * persisted. That is what happened to [Song.durationText]: stored, restored,
  * and always null, because this function never carried it back off the item in
  * the first place.
+ *
+ * [Song.albumName] went the same way, and its absence was felt furthest from
+ * here. The playback service reads the track it is playing off the player, so
+ * everything downstream of it — the widget, and the Discord presence that draws
+ * the album as its own line — was being handed a song with no album, whatever
+ * the row it was started from had said.
  */
 fun MediaItem.toSong() = Song(
     videoId = mediaId,
@@ -145,6 +151,7 @@ fun MediaItem.toSong() = Song(
     artist = mediaMetadata.artist?.toString().orEmpty(),
     thumbnailUrl = mediaMetadata.artworkUri?.toString(),
     durationText = mediaMetadata.extras?.getString(EXTRA_DURATION),
+    albumName = mediaMetadata.albumTitle?.toString()?.takeIf { it.isNotBlank() },
     fromAutoplay = this.fromAutoplay,
     localUri = mediaMetadata.extras?.getString(EXTRA_LOCAL_URI),
     localPath = mediaMetadata.extras?.getString(EXTRA_LOCAL_PATH),
@@ -262,6 +269,13 @@ fun Song.toMediaItem(): MediaItem {
         MediaMetadata.Builder()
             .setTitle(title)
             .setArtist(artist)
+            // The album rides here rather than in the extras because this is
+            // the field it belongs in: it is what the media session publishes
+            // to the lock screen, Android Auto and the notification, and what
+            // [toSong] reads back off the item. An album left out here is an
+            // album the player does not have, no matter what the row it was
+            // started from said.
+            .setAlbumTitle(albumName?.takeIf { it.isNotBlank() })
             .setArtworkUri(artworkAt(NOTIFICATION_ART_PX)?.toUri())
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .setIsPlayable(true)

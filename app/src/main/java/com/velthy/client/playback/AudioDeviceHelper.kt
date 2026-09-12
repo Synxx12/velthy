@@ -15,7 +15,11 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import android.media.AudioDeviceCallback
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.velthy.client.data.settings.AppSettings
 
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
@@ -375,6 +379,80 @@ object AudioDeviceHelper {
             }
             true
         }.getOrDefault(false)
+    }
+
+    /**
+     * Whether the route this app claimed is a USB one.
+     *
+     * The claim, not the connection: PCM float is only offered on a route the
+     * listener deliberately pointed playback at, never on whatever Android
+     * happened to choose.
+     */
+    fun isUsbRouteClaimed(): Boolean = preferredDevice.value?.type in USB_TYPES
+
+    /**
+     * Whether the claimed route says it can carry PCM float.
+     *
+     * Asked of the device rather than assumed: a cheap dongle reports 16-bit
+     * only, and opening a float AudioTrack on one is how output ends up
+     * resampled twice.
+     */
+    fun currentRouteAdvertisesPcmFloat(context: Context): Boolean {
+        val device = preferredDevice.value ?: return false
+        return device.encodings?.contains(android.media.AudioFormat.ENCODING_PCM_FLOAT) == true
+    }
+
+    private val USB_TYPES = setOf(
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_ACCESSORY,
+    )
+
+    /**
+     * Puts playback on a connected USB DAC, when the listener has asked for it.
+     *
+     * A route change is the moment this matters, not app start: a DAC plugged
+     * in mid-track is exactly what the setting is for. Returns whether a route
+     * was claimed, which is also what the settings row's badge reports.
+     */
+    fun applyUsbDacPreference(context: Context): Boolean {
+        if (!AppSettings.preferUsbDac.value) return false
+        val usb = getAvailableAudioOutputs(context)
+            .firstOrNull { it.type == AudioDeviceType.USB_DAC }
+            ?: return false
+        return selectAudioOutput(context, usb)
+    }
+
+    /**
+     * Keeps the USB preference applied for as long as playback lives: once now,
+     * and again on every route change.
+     *
+     * Handed back as a handle rather than registered for the process, so the
+     * callback goes away with the service that asked for it.
+     */
+    fun watchUsbDacPreference(context: Context): AutoCloseable {
+        val appContext = context.applicationContext
+        applyUsbDacPreference(appContext)
+        val manager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                applyUsbDacPreference(appContext)
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                applyUsbDacPreference(appContext)
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching {
+                manager?.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
+            }
+        }
+        return AutoCloseable {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                runCatching { manager?.unregisterAudioDeviceCallback(callback) }
+            }
+        }
     }
 
     private fun classifyBluetoothDevice(name: String): AudioDeviceType {

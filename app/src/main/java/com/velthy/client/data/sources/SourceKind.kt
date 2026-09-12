@@ -3,13 +3,18 @@ package com.velthy.client.data.sources
 /**
  * The kinds of source this build knows how to talk to.
  *
- * Fixed and small on purpose. **Declaration order here is the order sources
- * are tried** — see `SourceRegistry.active()`, which sorts on `kind.ordinal` —
- * so a custom module comes before the built-in one, then JioSaavn, then
- * YouTube Music. Adding a source means adding a [MusicSource] implementation
- * and an entry here, which is the point — every protocol the app speaks is one
- * someone can read in this repo, and a source can't teach the app a new way to
- * behave after it ships.
+ * Fixed and small on purpose. **Declaration order is the order sources are
+ * tried** — see `SourceRegistry.active()`, which sorts on `kind.ordinal` — so
+ * a source the user added comes first, then the built-in module, then JioSaavn,
+ * then YouTube Music. Adding a source means adding a [MusicSource]
+ * implementation and an entry here, which is the point — every protocol the app
+ * speaks is one someone can read in this repo, and a source can't teach the app
+ * a new way to behave after it ships.
+ *
+ * A kind's rank is not the user's to set: only a source whose [isUserAdded] is
+ * true can be dragged on the Sources screen, and only among its own kind. A drag
+ * that moved JioSaavn above the module would be offering a choice the resolver
+ * does not honour.
  *
  * What varies per *instance* — which index, whose module — is [SourceConfig].
  */
@@ -22,6 +27,14 @@ enum class SourceKind(
     val needsServer: Boolean,
     /** Whether this kind can serve bit-exact audio when asked. */
     val canServeLossless: Boolean,
+    /**
+     * Whether this is a source the user configured, rather than one that ships.
+     *
+     * The one kind whose position is the user's to arrange on the Sources
+     * screen — see `SourceRegistry.reorderAddons`. Everything else ranks by its
+     * declaration order above.
+     */
+    val isUserAdded: Boolean = false,
     /**
      * Whether this kind answers quickly enough to be worth asking *before* a
      * track is played, so its copy can be pinned and cached ahead of time.
@@ -47,8 +60,9 @@ enum class SourceKind(
      *
      * Same protocol as [MODULE] and served by the same [ModuleSource] — the
      * only thing this kind carries that the other doesn't is its place in the
-     * order, which is what being declared first here decides. There is at most
-     * one at a time; see [SourceRegistry.setCustomModule].
+     * order, which is what being declared first here decides. Any number may be
+     * added, one per index; the editor on the Sources screen adds each one with
+     * [SourceRegistry.add].
      */
     CUSTOM_MODULE(
         label = "Custom module",
@@ -56,6 +70,7 @@ enum class SourceKind(
         labels = listOf("FLAC", "Lossless", "Hi-Res", "Plugins"),
         needsServer = true,
         canServeLossless = true,
+        isUserAdded = true,
     ),
 
     /**

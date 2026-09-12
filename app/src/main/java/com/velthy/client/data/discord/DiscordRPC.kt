@@ -22,17 +22,18 @@ import com.my.kizzy.rpc.RpcImage
  * ```
  *   Listening to Musique          <- activityName, or the app's own name
  *   ┌────┐  Song title             <- details
- *   │art │  Artist · Album         <- state, see [secondLine]
- *   └────┘  ▁▁▁▁▁▁ 1:04 / 3:47     <- from the timestamps
+ *   │art │  Artist                 <- state
+ *   └────┘  Album                  <- the artwork's text, see [showAlbum]
+ *           ▁▁▁▁▁▁ 1:04 / 3:47     <- from the timestamps
  *   [ Listen on YouTube Music ]    <- button 1
  *   [ Visit Velthy           ]   <- button 2
  * ```
  *
- * The album rides on that second line rather than in the artwork's hover text
- * alone, because the hover text is a field nobody sees: a card has exactly two
- * text lines, the title owns the first, and the artist alone left the album
- * unrendered. Which of the two goes there, and in what order, is
- * [secondLine]'s to decide.
+ * The album is a line of its own, under the artist, rather than something
+ * folded into the artist's line. Discord draws that third line from the
+ * artwork's text, which is where an album has always belonged — and a card
+ * told to say "Artist · Album" on the second line had no line left to put the
+ * album on, so the two halves of the same fact were being spent on one row.
  */
 class DiscordRPC(
     val context: Context,
@@ -70,8 +71,8 @@ class DiscordRPC(
         button2Visible: Boolean = true,
         activityType: String = "listening",
         activityName: String = "",
-        /** What the second line carries. One of the `SECOND_LINE_*` modes. */
-        secondLineMode: String = SECOND_LINE_ARTIST,
+        /** Whether the album is drawn as its own line under the artist. */
+        showAlbum: Boolean = true,
     ) = runCatching {
         val currentTime = System.currentTimeMillis()
 
@@ -128,11 +129,18 @@ class DiscordRPC(
         setActivity(
             name = name,
             details = songTitleWithRate,
-            state = secondLine(song, secondLineMode),
+            // The artist, alone. The album is not folded in here: it has a line
+            // of its own below, and this row saying both is exactly what left
+            // the album with nowhere to be.
+            state = song.artist,
             detailsUrl = watchUrl(song),
             largeImage = artworkUrl?.let { RpcImage.ExternalImage(it) },
             smallImage = null,
-            largeText = song.albumName,
+            // The album's own line, under the artist. Null rather than an empty
+            // string when there is nothing to say — an empty one draws a blank
+            // row, not none — and null when the listener has turned the line
+            // off.
+            largeText = song.albumName?.takeIf { showAlbum && it.isNotBlank() },
             smallText = null,
             buttons = if (buttonsList.isNotEmpty()) buttonsList else null,
             type = type,
@@ -175,44 +183,6 @@ class DiscordRPC(
 
         const val DEFAULT_BUTTON_1 = "Listen on YouTube Music"
         const val DEFAULT_BUTTON_2 = "Visit Velthy"
-
-        /** The four things the card's second line can say. */
-        const val SECOND_LINE_ARTIST = "artist"
-        const val SECOND_LINE_ARTIST_ALBUM = "artist_album"
-        const val SECOND_LINE_ALBUM = "album"
-        const val SECOND_LINE_ALBUM_ARTIST = "album_artist"
-
-        /**
-         * The middle dot the app uses to join two facts on one line — the same
-         * separator the player's own stats line is built from.
-         */
-        private const val SEPARATOR = " · "
-
-        /**
-         * What the card's second line says, given one of the `SECOND_LINE_*`
-         * modes.
-         *
-         * A plain function on purpose, and the only place this text is composed:
-         * the live presence and the settings screen's preview both go through it,
-         * so the card on someone's profile cannot end up reading differently from
-         * the picture of it they were shown while choosing.
-         *
-         * An album is not always known — a local file, or a track YouTube never
-         * grouped — and it is never fabricated: every mode that asks for one
-         * falls back to the artist rather than leaving the line empty or a
-         * dangling separator. Since the title owns the first line, a blank
-         * second line would be a card with one line and a gap under it.
-         */
-        fun secondLine(song: Song, mode: String): String {
-            val artist = song.artist
-            val album = song.albumName?.takeIf { it.isNotBlank() }
-            return when (mode) {
-                SECOND_LINE_ARTIST_ALBUM -> if (album == null) artist else artist + SEPARATOR + album
-                SECOND_LINE_ALBUM -> album ?: artist
-                SECOND_LINE_ALBUM_ARTIST -> if (album == null) artist else album + SEPARATOR + artist
-                else -> artist
-            }
-        }
 
         /** Discord draws the sleeve at roughly 96dp; 480px covers it on any density. */
         private const val ART_PX = 480

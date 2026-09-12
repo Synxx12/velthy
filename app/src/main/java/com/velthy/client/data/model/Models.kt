@@ -96,6 +96,27 @@ const val NOTIFICATION_ART_PX = 544
 
 enum class BrowseType { ALBUM, ARTIST, PLAYLIST, OTHER }
 
+/**
+ * One selectable channel/profile under a signed-in Google account.
+ *
+ * A single login can own several YouTube channels, and the session is bound to
+ * whichever one is selected — so this is an identity the player can be switched
+ * to, not a label. [pageId] and [dataSyncId] are the two tokens YouTube's own
+ * switcher sends; an entry without either cannot be selected at all.
+ */
+data class AccountChannel(
+    val name: String,
+    val subtitle: String,
+    val thumbnailUrl: String?,
+    val pageId: String?,
+    val dataSyncId: String?,
+    /** Whether YouTube's own switcher marks this as the session's active one. */
+    val activeOnWeb: Boolean,
+) {
+    /** Identity of the selection, stable across refetches of the list. */
+    val key: String get() = pageId ?: dataSyncId ?: name
+}
+
 /** A non-track search result: album, artist or playlist. */
 data class BrowseItem(
     val browseId: String,
@@ -107,11 +128,15 @@ data class BrowseItem(
 
 /** Search rows are heterogeneous once filters other than "Songs" are used. */
 sealed interface SearchResult {
+    /** The promoted card returned only at the head of an unfiltered search. */
+    data class TopTrack(val song: Song) : SearchResult
     data class Track(val song: Song) : SearchResult
     data class Browse(val item: BrowseItem) : SearchResult
 }
 
 enum class SearchFilter(val label: String, val params: String?) {
+    /** YouTube Music's mixed search page: songs, artists, albums and playlists. */
+    ALL("All", null),
     SONGS("Songs", "EgWKAQIIAWoKEAkQChAFEAMQBA=="),
     ALBUMS("Albums", "EgWKAQIYAWoKEAkQChAFEAMQBA=="),
     ARTISTS("Artists", "EgWKAQIgAWoKEAkQChAFEAMQBA=="),
@@ -125,6 +150,16 @@ data class ShelfItem(
     val thumbnailUrl: String?,
     val videoId: String?,
     val browseId: String?,
+    /**
+     * The track's album, when the card is a track and YouTube named one.
+     *
+     * A card is built from a whole parsed track and then flattened to four
+     * strings for the UI, so this is the one field that has to survive that
+     * flattening: a card played without it hands the player a song with no
+     * album on it, and nothing downstream — the Discord card, the widget, the
+     * queue restored after a restart — can put it back.
+     */
+    val albumName: String? = null,
 )
 
 /** The signed-in Google account, as YouTube Music reports it. */
@@ -203,6 +238,21 @@ data class DetailPage(
     val description: String? = null,
     val subscriberCountText: String? = null,
     val monthlyListenerCount: String? = null,
+    /** The artist page's subscribe button, when the page has one. */
+    val subscription: SubscriptionState? = null,
+)
+
+/**
+ * An artist channel's subscription state, off the artist page's own header.
+ *
+ * [channelId] is the `UC…` the page is served under — the id every subscription
+ * write is addressed by — and [subscribed] is what YouTube currently says the
+ * account is doing. The pair is stated together in exactly one place: the
+ * header's subscribe button, which is what the parser reads it from.
+ */
+data class SubscriptionState(
+    val channelId: String,
+    val subscribed: Boolean,
 )
 
 /** Parsed artist landing page. */
@@ -218,6 +268,8 @@ data class ArtistPage(
     val description: String? = null,
     val subscriberCountText: String? = null,
     val monthlyListenerCount: String? = null,
+    /** The artist's subscribe button, when the header carries one. */
+    val subscription: SubscriptionState? = null,
 )
 
 /**

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.view.View
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -36,6 +37,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -79,6 +81,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -86,6 +89,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -105,12 +109,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.velthy.client.auth.DiscordLoginScreen
+import com.velthy.client.auth.WebSessionMode
 import com.velthy.client.auth.YtMusicLoginScreen
 import com.velthy.client.data.LocalMediaRepository
 import com.velthy.client.data.model.BrowseType
@@ -136,6 +143,10 @@ import com.velthy.client.ui.screens.LocalMusicScreen
 import com.velthy.client.ui.screens.LocalTopBarSegmentedControl
 import com.velthy.client.ui.screens.SearchScreen
 import com.velthy.client.ui.screens.SettingsScreen
+import com.velthy.client.ui.screens.SourcesScreen
+import com.velthy.client.data.sources.SourceConfig
+import com.velthy.client.data.sources.SourceHealth
+import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.playback.QueueBuilder
 import com.velthy.client.playback.QueueShuffle
 import com.velthy.client.playback.autoplaySectionStart
@@ -153,11 +164,22 @@ import com.velthy.client.playback.rememberMediaController
 import com.velthy.client.playback.rememberPlayerState
 import com.velthy.client.ui.MainViewModel
 import com.velthy.client.ui.components.BottomFadeBlur
+import com.velthy.client.ui.components.AccountChannelDialog
+import com.velthy.client.ui.components.AccountProfileSelector
+import com.velthy.client.ui.components.LocalAppBackdrop
+import com.velthy.client.ui.components.LocalLiquidGlassEnabled
+import com.velthy.client.ui.components.isGlassSupported
+import com.velthy.client.ui.components.backdrop.backdrops.LayerBackdrop
+import com.velthy.client.ui.components.backdrop.backdrops.layerBackdrop
+import com.velthy.client.ui.components.backdrop.backdrops.rememberLayerBackdrop
+import com.velthy.client.ui.components.GlassNavBar
+import com.velthy.client.ui.components.floatingtabbar.rememberFloatingTabBarScrollConnection
 import com.velthy.client.ui.components.BottomTab
 import com.velthy.client.ui.components.FloatingBottomBar
 import com.velthy.client.ui.components.FrostedTopBar
 import com.velthy.client.ui.components.LastfmLoginAlert
 import com.velthy.client.ui.components.ListenBrainzTokenAlert
+import com.velthy.client.ui.components.SourceEditorAlert
 import com.velthy.client.ui.components.MiniPlayer
 import com.velthy.client.ui.components.MusicRecognitionSheet
 import com.velthy.client.ui.components.TopFadeBlur
@@ -187,6 +209,7 @@ import com.velthy.client.ui.screens.HomeScreen
 import com.velthy.client.ui.screens.LibraryScreen
 import com.velthy.client.ui.screens.SearchScreen
 import com.velthy.client.ui.screens.SearchTopBarField
+import com.velthy.client.ui.performance.resolvePerformanceRefreshRate
 import com.velthy.client.ui.theme.VelthyTheme
 import com.velthy.client.ui.theme.rememberArtworkPalette
 import com.velthy.client.ui.theme.SystemBarIcons
@@ -204,11 +227,10 @@ import com.velthy.client.playback.LinkRequest
 import com.velthy.client.playback.MusicLink
 import com.velthy.client.playback.PlayerDeepLink
 import com.velthy.client.ui.screens.LibraryGridPage
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
@@ -220,13 +242,38 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
         setContent {
             val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
+            val highPerformance by AppSettings.highPerformanceMode.collectAsStateWithLifecycle()
+            val performanceRefreshRate by AppSettings.performanceRefreshRate.collectAsStateWithLifecycle()
+            val liquidGlassEnabled by AppSettings.liquidGlass.collectAsStateWithLifecycle()
+            val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+            val composeView = LocalView.current
+            LaunchedEffect(highPerformance, performanceRefreshRate, composeView) {
+                applyPerformanceMode(highPerformance, performanceRefreshRate, composeView)
+            }
             val darkTheme = when (theme) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
             VelthyTheme(darkTheme = darkTheme) {
-                VelthyApp(darkTheme = darkTheme)
+                // A layer records only what is drawn into it, and a page paints
+                // no background of its own — so the window's background is laid
+                // down inside the recording too, or the glass would sample a
+                // transparent page and show nothing.
+                val windowBackground = MaterialTheme.colorScheme.background
+                val paintBackdrop: ContentDrawScope.() -> Unit = remember(windowBackground) {
+                    {
+                        drawRect(windowBackground)
+                        drawContent()
+                    }
+                }
+                val appBackdrop = rememberLayerBackdrop(onDraw = paintBackdrop)
+                CompositionLocalProvider(
+                    LocalLiquidGlassEnabled provides liquidGlassEnabled,
+                    LocalAppBackdrop provides appBackdrop,
+                ) {
+                    VelthyApp(darkTheme = darkTheme, appBackdrop = appBackdrop)
+                }
             }
         }
     }
@@ -262,6 +309,26 @@ class MainActivity : ComponentActivity() {
                     .onFailure {
                         Toast.makeText(this@MainActivity, "Discord connection failed: ${it.message}", Toast.LENGTH_LONG).show()
                     }
+            }
+        }
+    }
+
+    /**
+     * Requests a window refresh rate without forcing a display mode or
+     * resolution. Android may still lower it for temperature, battery state or
+     * hardware limits, which is why Settings describes this as a preference.
+     */
+    private fun applyPerformanceMode(enabled: Boolean, refreshRate: Int, composeView: View) {
+        val supportedRefreshRate = composeView.display.resolvePerformanceRefreshRate(refreshRate)
+        window.attributes = window.attributes.apply {
+            preferredRefreshRate = if (enabled) supportedRefreshRate.toFloat() else 0f
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            window.setFrameRatePowerSavingsBalanced(!enabled)
+            composeView.requestedFrameRate = if (enabled) {
+                supportedRefreshRate.toFloat()
+            } else {
+                View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT
             }
         }
     }
@@ -330,9 +397,28 @@ private val BOTTOM_CHROME_DROP = 22.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()) {
+private fun VelthyApp(
+    darkTheme: Boolean,
+    appBackdrop: LayerBackdrop,
+    viewModel: MainViewModel = viewModel(),
+) {
     val context = LocalContext.current
     val hazeState = remember { HazeState() }
+    // Backdrop-sampled glass — see [com.velthy.client.ui.components.LiquidGlass].
+    // The pages record into this layer and the bar samples it, which only
+    // happens when the setting is on, the device can render it, and blur has not
+    // been reduced away.
+    val reduceDynamicBlurForGlass by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val glassSamplesBackdrop =
+        LocalLiquidGlassEnabled.current && isGlassSupported() && !reduceDynamicBlurForGlass
+    // The bar itself is the glass one wherever the renderer is available and
+    // switched on; under "reduce dynamic blur" it stays — the surfaces fall back
+    // to solid fills — but nothing records the backdrop for readers there is
+    // none. See [com.velthy.client.ui.components.liquidGlass].
+    val glassBarActive = LocalLiquidGlassEnabled.current && isGlassSupported()
+    // What folds the tab bar to its compact shape. The page's scroll has to be
+    // dispatched into this for anything to move — see the content's nestedScroll.
+    val navBarScroll = rememberFloatingTabBarScrollConnection()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showNowPlaying by remember { mutableStateOf(false) }
     // Keeps the player on screen while its close animation shrinks it back to
@@ -463,6 +549,20 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     var showNotifications by remember { mutableStateOf(false) }
     var showAccountScrobbling by remember { mutableStateOf(false) }
     var showLyricsSources by remember { mutableStateOf(false) }
+    // The Sources page, pushed from Settings. Kept a separate state from
+    // [showSettings] so backing out of it lands on Settings again rather than
+    // all the way home.
+    var showSources by remember { mutableStateOf(false) }
+    var editingSource by remember { mutableStateOf<SourceConfig?>(null) }
+    // The avatar's own switcher, rather than dropping straight into Settings.
+    var showAccountSelector by remember { mutableStateOf(false) }
+    // Which channel of the signed-in account to listen as.
+    var showChannelDialog by remember { mutableStateOf(false) }
+    // What the login sheet's browser is open for, and the state of an explicit
+    // "take the profile on this page" request in the channel flow.
+    var loginMode by remember { mutableStateOf(WebSessionMode.SIGN_IN) }
+    var captureRequest by remember { mutableIntStateOf(0) }
+    var captureFailed by remember { mutableStateOf(false) }
     var showListenBrainzLogin by remember { mutableStateOf(false) }
     var showLastfmLogin by remember { mutableStateOf(false) }
     var songActions by remember { mutableStateOf<Song?>(null) }
@@ -541,6 +641,10 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     }
     val query by viewModel.query.collectAsStateWithLifecycle()
     val results by viewModel.results.collectAsStateWithLifecycle()
+    val searchSuggestions by viewModel.searchSuggestions.collectAsStateWithLifecycle()
+    val previewSongs by viewModel.searchPreviewSongs.collectAsStateWithLifecycle()
+    val searchLoadingMore by viewModel.searchLoadingMore.collectAsStateWithLifecycle()
+    val searchScrollReset by viewModel.searchScrollReset.collectAsStateWithLifecycle()
     val exploreState by viewModel.explore.collectAsStateWithLifecycle()
     val libraryState by viewModel.library.collectAsStateWithLifecycle()
     val filter by viewModel.filter.collectAsStateWithLifecycle()
@@ -557,6 +661,10 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
     val savedAccounts by viewModel.savedAccounts.collectAsStateWithLifecycle()
+    val channels by viewModel.channels.collectAsStateWithLifecycle()
+    val channelsLoading by viewModel.channelsLoading.collectAsStateWithLifecycle()
+    val selectedChannelKey by viewModel.selectedChannelKey.collectAsStateWithLifecycle()
+    val selectedChannelName by viewModel.selectedChannelName.collectAsStateWithLifecycle()
     var showHistory by remember { mutableStateOf(false) }
     var libraryShowAll by remember { mutableStateOf<HomeShelf?>(null) }
     var showLibrarySortMenu by remember { mutableStateOf(false) }
@@ -609,7 +717,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             showNotifications = false
         }
     }
-    LaunchedEffect(showSettings) { if (!showSettings) showAccountScrobbling = false }
+    LaunchedEffect(showSettings) { if (!showSettings) { showAccountScrobbling = false; showSources = false } }
+    // One visit's worth of browser state, cleared when the sheet closes so the
+    // next open starts as a plain sign-in again.
+    LaunchedEffect(showLogin) {
+        if (!showLogin) {
+            loginMode = WebSessionMode.SIGN_IN
+            captureRequest = 0
+            captureFailed = false
+        }
+    }
 
     val savedDownloads by Downloads.saved.collectAsStateWithLifecycle()
     LaunchedEffect(savedDownloads, detail?.browseId) {
@@ -647,9 +764,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             if (extra.isNotEmpty()) {
                 // Swapped for the catalogue audio track before it ever
                 // reaches the queue — see YtMusicRepository.resolveAudio.
-                val resolved = coroutineScope {
-                    extra.map { async { YtMusicRepository.resolveAudio(it) } }.awaitAll()
-                }
+                val resolved = YtMusicRepository.resolveAudioAll(extra)
                 controller?.addMediaItems(
                     resolved.map { it.copy(fromAutoplay = true).toMediaItem() },
                 )
@@ -753,18 +868,40 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         )
     }
 
+    /**
+     * One place for the tab bar's selection, whichever bar is drawn — the glass
+     * one and the ordinary one have to behave identically, and the search tab's
+     * re-tap rule lives here rather than in either of them.
+     */
+    val onSelectTab: (Int) -> Unit = { index ->
+        if (index == TAB_SEARCH && selectedTab == TAB_SEARCH) {
+            // Re-tapping the search tab while already on it focuses the input
+            // field and opens the keyboard rather than resetting.
+            searchFocusTrigger++
+        } else {
+            if (index != TAB_SEARCH) searchFocusTrigger = 0
+            viewModel.clearDetail()
+            showSettings = false
+            showAccountScrobbling = false
+            showHistory = false
+            libraryShowAll = null
+            showReplay = false
+            showDiscord = false
+            showNotifications = false
+            selectedTab = index
+        }
+    }
+
     val scope = rememberCoroutineScope()
 
     /**
-     * A video-tagged [Song] is swapped for its catalogue audio release
-     * before the queue, the notification or YouTube's own history ever see
-     * it — see [YtMusicRepository.resolveAudio]. Plain songs pass through
-     * this untouched and unawaited (`isVideo` is false, so the suspend call
-     * returns immediately), so this costs nothing on the common path.
+     * A video-tagged [Song] is swapped for its catalogue audio release before
+     * the queue, the notification or YouTube's own history ever see it, and a
+     * plain song whose row never named an album has one filled in — both by
+     * [YtMusicRepository.resolveAudioAll], a few tracks at a time.
      */
-    suspend fun List<Song>.resolvedForQueue(): List<Song> = coroutineScope {
-        map { async { YtMusicRepository.resolveAudio(it) } }.awaitAll()
-    }
+    suspend fun List<Song>.resolvedForQueue(): List<Song> =
+        YtMusicRepository.resolveAudioAll(this)
 
     val play: (List<Song>, Int) -> Unit = { songs, index ->
         if (songs.isNotEmpty() && index in songs.indices) {
@@ -777,18 +914,29 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     // Starting playback only waits on the track about to play; the
                     // rest of a long album/playlist resolves in the background and
                     // is patched into the queue well before it's reached.
+                    // Each of these is network work, and a long playlist can
+                    // arrive with no album on any row — so a few run at a time
+                    // rather than all at once, which would put a hundred
+                    // searches on the wire the moment playback starts.
+                    val patchPermits = Semaphore(4)
                     queued.forEachIndexed { i, song ->
-                        if (i == index || !song.isVideo) return@forEachIndexed
+                        if (i == index) return@forEachIndexed
+                        // A video is swapped for its audio release; a plain
+                        // song that arrived without an album is filled in.
+                        // Anything else is already what it should be.
+                        if (!song.isVideo && song.albumName != null) return@forEachIndexed
                         launch(Dispatchers.IO) {
-                            runCatching {
-                                val resolved = YtMusicRepository.resolveAudio(song)
-                                if (resolved.videoId == song.videoId) return@launch
-                                withContext(Dispatchers.Main) {
-                                    val c = controller ?: return@withContext
-                                    val at = (0 until c.mediaItemCount)
-                                        .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
-                                        ?: return@withContext
-                                    c.replaceMediaItem(at, resolved.toMediaItem())
+                            patchPermits.withPermit {
+                                runCatching {
+                                    val resolved = YtMusicRepository.resolveAudio(song)
+                                    if (resolved.videoId == song.videoId && resolved.albumName == song.albumName) return@launch
+                                    withContext(Dispatchers.Main) {
+                                        val c = controller ?: return@withContext
+                                        val at = (0 until c.mediaItemCount)
+                                            .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
+                                            ?: return@withContext
+                                        c.replaceMediaItem(at, resolved.toMediaItem())
+                                    }
                                 }
                             }
                         }
@@ -890,8 +1038,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 } else {
                     showNowPlaying = false
                     selectedTab = TAB_SEARCH
-                    viewModel.onQueryChange(request.query)
-                    viewModel.recordSearch()
+                    viewModel.searchFor(request.query)
                 }
             }
             LinkRequest.Resume -> if (session.mediaItemCount > 0) session.play()
@@ -1014,10 +1161,14 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
         // which is what actually closes/minimizes the app.
-        BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord && !showReplay && !showHistory) {
+        BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord && !showReplay && !showHistory && !showSources) {
             showSettings = false
             if (detail == null) selectedTab = TAB_HOME
         }
+        // Registered after the Settings step above, so it wins while the page
+        // is open: one back closes the Sources page and lands on Settings
+        // again, and only the next one leaves Settings.
+        BackHandler(enabled = showSources) { showSources = false }
         BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && libraryShowAll == null && selectedTab != TAB_HOME) {
             selectedTab = TAB_HOME
         }
@@ -1045,6 +1196,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 libraryShowAll != null -> "library_show_all"
                 moodGenre != null -> "mood_genre"
                 showAccountScrobbling -> "account_scrobbling"
+                showSources -> "sources"
                 showSettings -> "settings"
                 showNotifications -> "notifications"
                 showReplay -> "replay"
@@ -1052,10 +1204,19 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 else -> "tab:$selectedTab"
             },
             transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(220)) },
-            modifier = Modifier.hazeSource(hazeState),
+            modifier = Modifier
+                .hazeSource(hazeState)
+                // The glass bar samples this layer, so the page has to record
+                // into it. Skipped under "reduce dynamic blur": nothing reads the
+                // layer then, and recording a whole page for no reader is exactly
+                // the cost that setting exists to remove.
+                .then(if (glassSamplesBackdrop) Modifier.layerBackdrop(appBackdrop) else Modifier)
+                // Every page's scroll passes through here, so the bar folds on
+                // all of them without each one having to know about it.
+                .nestedScroll(navBarScroll),
             label = "content",
         ) { key ->
-            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" && key != "library_show_all" && key != "mood_genre" }
+            val page = detailStack.lastOrNull()?.takeIf { it.browseId == key && key != "settings" && key != "account_scrobbling" && key != "discord" && key != "notifications" && key != "replay" && key != "history" && key != "library_show_all" && key != "mood_genre" && key != "sources" }
             if (key == "history") {
                 HistoryScreen(
                     state = historyState,
@@ -1123,6 +1284,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                                         title = item.title,
                                         artist = item.subtitle,
                                         thumbnailUrl = item.thumbnailUrl,
+                                        albumName = item.albumName,
                                     ),
                                 )
                                 item.browseId != null -> {
@@ -1181,6 +1343,11 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     account = account,
                     savedAccounts = savedAccounts,
                     currentCookie = com.velthy.client.data.innertube.Innertube.cookie,
+                    channelName = selectedChannelName,
+                    onSwitchChannel = {
+                        viewModel.loadChannels()
+                        showChannelDialog = true
+                    },
                     onSignIn = {
                         showAccountScrobbling = false
                         showSettings = false
@@ -1199,6 +1366,11 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onOpenLastfmLogin = { showLastfmLogin = true },
                     contentPadding = listPadding,
                 )
+            } else if (key == "sources") {
+                SourcesScreen(
+                    contentPadding = listPadding,
+                    onEditSource = { editingSource = it },
+                )
             } else if (key == "settings") {
                 SettingsScreen(
                     signedIn = signedIn,
@@ -1210,6 +1382,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     onSignOut = { viewModel.signOut() },
                     onAccountScrobbling = { showAccountScrobbling = true },
                     onLyricsSources = { showLyricsSources = true },
+                    onOpenSources = { showSources = true },
                     onOpenReplay = {
                         showSettings = false
                         showReplay = true
@@ -1255,12 +1428,18 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 DetailScreen(
                     page = page,
                     listState = detailListState,
-                    onSongClick = play,
+                    // The album page's own rows carry no album credit — the
+                    // release is billed once, in the header — so a track played
+                    // off it would reach the player with no album at all. Its
+                    // rows are the album, which is exactly what [withAlbum] is
+                    // for; every track queued from here gets it, not just the
+                    // one tapped.
+                    onSongClick = { songs, index -> play(songs.map(withAlbum), index) },
                     onSongLongPress = { songActions = withAlbum(it) },
                     onSongSwipe = onSongSwipe,
                     onShuffle = { songs ->
                         QueueShuffle.enableForNextQueue()
-                        play(songs, songs.indices.random())
+                        play(songs.map(withAlbum), songs.indices.random())
                     },
                     onSectionItemClick = { item ->
                         when {
@@ -1270,6 +1449,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                                     title = item.title,
                                     artist = item.subtitle,
                                     thumbnailUrl = item.thumbnailUrl,
+                                    albumName = item.albumName,
                                 ),
                             )
                             item.browseId != null -> viewModel.openDetail(
@@ -1331,6 +1511,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                                     title = item.title,
                                     artist = item.subtitle,
                                     thumbnailUrl = item.thumbnailUrl,
+                                    albumName = item.albumName,
                                 ),
                             )
                             item.browseId != null -> viewModel.openDetail(
@@ -1367,8 +1548,10 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     filter = filter,
                     onFilterChange = viewModel::onFilterChange,
                     results = results,
+                    loadingMore = searchLoadingMore,
+                    onLoadMore = viewModel::loadMoreSearchResults,
                     listState = searchListState,
-                    recentSongs = (historyState as? UiState.Success)?.data?.flatMap { it.songs }?.distinctBy { it.videoId }.orEmpty(),
+                    scrollResetTrigger = searchScrollReset,
                     // Search hits are alternatives to each other, not a running
                     // order — play the one tapped and build a station from it.
                     onSongClick = { songs, index ->
@@ -1379,6 +1562,14 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     },
                     onSongLongPress = { songActions = it },
                     onSongSwipe = onSongSwipe,
+                    onTopResultPlay = { song ->
+                        viewModel.recordSearch()
+                        playRadio(song)
+                    },
+                    onTopResultPlaylist = { song ->
+                        viewModel.recordSearch()
+                        playlistTarget = song
+                    },
                     onBrowseClick = { item ->
                         viewModel.recordSearch()
                         viewModel.openDetail(
@@ -1390,21 +1581,16 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                         )
                     },
                     history = searchHistory,
-                    onHistoryClick = { term ->
-                        viewModel.onQueryChange(term)
-                        viewModel.recordSearch()
-                    },
+                    suggestions = searchSuggestions,
+                    onSuggestionClick = viewModel::searchFor,
+                    onSuggestionFill = viewModel::onQueryChange,
+                    // The songs under the completions: tapping one starts a
+                    // station from it, the same as a search hit does.
+                    previewSongs = previewSongs,
+                    onPreviewSongPlay = playRadio,
+                    onHistoryClick = viewModel::searchFor,
                     onHistoryRemove = viewModel::removeSearch,
                     onHistoryClear = viewModel::clearSearchHistory,
-                    onCategoryClick = { browseId, title ->
-                        viewModel.openDetail(
-                            browseId = browseId,
-                            title = title,
-                            subtitle = "Explore",
-                            thumbnailUrl = null,
-                            type = BrowseType.PLAYLIST,
-                        )
-                    },
                     contentPadding = listPadding,
                 )
                 else -> LibraryScreen(
@@ -1478,6 +1664,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 libraryShowAll != null -> libraryShowAll?.title ?: "Library"
                 moodGenre != null -> moodGenre?.title ?: "Explore"
                 showAccountScrobbling -> "Account & scrobbling"
+                showSources -> "Sources"
                 showSettings -> "Settings"
                 showNotifications -> "Notifications"
                 localDrillDownLabel != null -> localDrillDownLabel ?: ""
@@ -1489,18 +1676,18 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 showHistory -> historyListState.firstVisibleItemIndex > 0 || historyListState.firstVisibleItemScrollOffset > 0
                 libraryShowAll != null -> libraryShowAllGridState.firstVisibleItemIndex > 0 || libraryShowAllGridState.firstVisibleItemScrollOffset > 0
                 moodGenre != null -> moodGenreListState.firstVisibleItemIndex > 0 || moodGenreListState.firstVisibleItemScrollOffset > 0
-                showSettings || showAccountScrobbling || showDiscord || showNotifications -> true
+                showSettings || showAccountScrobbling || showDiscord || showNotifications || showSources -> true
                 detail != null -> detailScrolled
                 else -> scrolled
             },
             refreshing = isCurrentRefreshing,
             pullFraction = { currentPull?.distanceFraction ?: 0f },
-            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory) {
+            searchBar = if (selectedTab == TAB_SEARCH && detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && !showSources) {
                 {
                     SearchTopBarField(
                         query = query,
                         onQueryChange = viewModel::onQueryChange,
-                        onSubmit = viewModel::recordSearch,
+                        onSubmit = viewModel::submitSearch,
                         onRecognitionClick = { showRecognitionSheet = true },
                         focusRequester = searchFocusRequester,
                     )
@@ -1520,6 +1707,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 libraryShowAll != null -> ({ libraryShowAll = null })
                 moodGenre != null -> ({ moodGenre = null })
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
+                showSources -> ({ showSources = false })
                 showSettings -> ({ showSettings = false })
                 showNotifications -> ({ showNotifications = false })
                 localDrillDownLabel != null -> ({ localDrillDownLabel = null })
@@ -1636,7 +1824,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     UserAvatarNavButton(
                         account = account,
                         signedIn = signedIn,
-                        onClick = { showSettings = true },
+                        onClick = { showAccountSelector = true },
                     )
                 }
             },
@@ -1683,6 +1871,29 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (glassBarActive) {
+                // The iOS 26 shape: the now playing controls and the tabs are one
+                // component, and the pair folds together on scroll — see
+                // [GlassNavBar]. Drawn only where the glass renderer exists.
+                GlassNavBar(
+                    tabs = tabs,
+                    selectedIndex = selectedTab,
+                    onTabSelected = onSelectTab,
+                    scrollConnection = navBarScroll,
+                    song = player.song,
+                    isPlaying = player.isPlaying,
+                    isLoading = player.isLoading,
+                    onPlayPause = {
+                        controller?.let { if (it.playWhenReady || it.isPlaying) it.pause() else it.play() }
+                    },
+                    onNext = { controller?.seekToNextMediaItem() },
+                    onExpand = { showNowPlaying = true },
+                    modifier = Modifier.graphicsLayer {
+                        translationY = (1f - bottomChromeReveal(morph.value)) *
+                            BOTTOM_CHROME_DROP.toPx()
+                    },
+                )
+            } else {
             player.song?.let { song ->
                 Box(
                     Modifier
@@ -1756,27 +1967,9 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                     translationY = (1f - bottomChromeReveal(morph.value)) *
                         BOTTOM_CHROME_DROP.toPx()
                 },
-                onTabSelected = { index ->
-                    // Re-tapping the search tab while already on it focuses the
-                    // input field and opens the keyboard rather than resetting.
-                    if (index == TAB_SEARCH && selectedTab == TAB_SEARCH) {
-                        searchFocusTrigger++
-                        return@FloatingBottomBar
-                    }
-                    if (index != TAB_SEARCH) {
-                        searchFocusTrigger = 0
-                    }
-                    viewModel.clearDetail()
-                    showSettings = false
-                    showAccountScrobbling = false
-                    showHistory = false
-                    libraryShowAll = null
-                    showReplay = false
-                    showDiscord = false
-                    showNotifications = false
-                    selectedTab = index
-                },
+                onTabSelected = onSelectTab,
             )
+            }
         }
 
         // ---- Now Playing ----
@@ -2223,10 +2416,7 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                 onDismiss = { showRecognitionSheet = false },
                 onPlaySong = { play(listOf(it), 0) },
                 onAddToQueue = { addToQueue(it) },
-                onSearchSong = { songQuery ->
-                    viewModel.onQueryChange(songQuery)
-                    viewModel.recordSearch()
-                },
+                onSearchSong = viewModel::searchFor,
             )
         }
 
@@ -2262,17 +2452,61 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
                                 tint = MaterialTheme.colorScheme.onBackground,
                             )
                         }
-                        Text(
-                            "Sign in to YouTube Music",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = if (loginMode == WebSessionMode.SWITCH_CHANNEL) {
+                                    "Choose YouTube profile"
+                                } else {
+                                    "Sign in to YouTube Music"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                            )
+                            if (loginMode == WebSessionMode.SWITCH_CHANNEL) {
+                                Text(
+                                    text = if (captureFailed) {
+                                        "Couldn't read a profile from this page. Pick one in " +
+                                            "YouTube Music, then try again."
+                                    } else {
+                                        "Pick the channel you want in YouTube Music's own " +
+                                            "account switcher, then tap Use this profile."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                )
+                            }
+                        }
+                        if (loginMode == WebSessionMode.SWITCH_CHANNEL) {
+                            TextButton(
+                                onClick = {
+                                    captureFailed = false
+                                    captureRequest++
+                                },
+                            ) {
+                                Text("Use this profile")
+                            }
+                        }
                     }
                     YtMusicLoginScreen(
-                        onCookiesCaptured = { cookie ->
-                            viewModel.onSignedIn(cookie)
+                        mode = loginMode,
+                        captureRequest = captureRequest,
+                        onCaptureUnavailable = { captureFailed = true },
+                        onCaptured = { session ->
+                            when (loginMode) {
+                                WebSessionMode.SIGN_IN -> {
+                                    // Always, and not only when the listener went
+                                    // looking for "Add account": this session is
+                                    // about to be replaced either way, and an
+                                    // account that was never written down is one
+                                    // the switcher cannot offer back.
+                                    viewModel.saveCurrentAccount()
+                                    viewModel.onSignedIn(session.cookie)
+                                    selectedTab = 2
+                                }
+                                WebSessionMode.SWITCH_CHANNEL -> viewModel.onWebSession(session)
+                            }
                             showLogin = false
-                            selectedTab = 2
                         },
                     )
                 }
@@ -2336,10 +2570,114 @@ private fun VelthyApp(darkTheme: Boolean, viewModel: MainViewModel = viewModel()
             )
         }
 
+        if (showAccountSelector) {
+            BackHandler { showAccountSelector = false }
+            AccountProfileSelector(
+                accounts = savedAccounts,
+                // switchAccount mirrors the saved handle onto the live account's
+                // email, so the two name the same session.
+                activeAccountId = savedAccounts.firstOrNull {
+                    it.handle?.isNotBlank() == true && it.handle == account?.email
+                }?.id,
+                hazeState = hazeState,
+                onSelect = viewModel::switchAccount,
+                onAddAccount = {
+                    showAccountSelector = false
+                    showLogin = true
+                },
+                onRemoveAccount = { viewModel.removeSavedAccount(it.id) },
+                onOpenSettings = {
+                    showAccountSelector = false
+                    showSettings = true
+                },
+                onDismiss = { showAccountSelector = false },
+            )
+        }
+
+        if (showChannelDialog) {
+            BackHandler { showChannelDialog = false }
+            AccountChannelDialog(
+                channels = channels,
+                loading = channelsLoading,
+                selectedKey = selectedChannelKey,
+                hazeState = hazeState,
+                onSelect = viewModel::selectChannel,
+                // The route that cannot be wrong about which channels exist:
+                // pick in YouTube Music's own Accounts list, and the app reads
+                // the session that comes back.
+                onChooseInYouTube = {
+                    showChannelDialog = false
+                    // Keeps the session and opens YouTube Music itself: the one
+                    // screen that authoritatively knows this login's channels.
+                    loginMode = WebSessionMode.SWITCH_CHANNEL
+                    showLogin = true
+                },
+                onDismiss = { showChannelDialog = false },
+            )
+        }
+
         if (showLyricsSources) {
             LyricsSourcesDialog(
                 hazeState = hazeState,
                 onDismiss = { showLyricsSources = false },
+            )
+        }
+
+        // The source editor, raised from the Sources screen — for a new module
+        // when handed a config the registry does not have yet, and for an
+        // existing one otherwise. Hosted here so its scrim covers the tab bar
+        // and the mini player.
+        editingSource?.let { target ->
+            val isNew = SourceRegistry.config(target.id) == null
+            var url by remember(target.id) { mutableStateOf(target.baseUrl) }
+            var sourceTesting by remember(target.id) { mutableStateOf(false) }
+            var sourceStatus by remember(target.id) { mutableStateOf<SourceHealth?>(null) }
+            val editorScope = rememberCoroutineScope()
+            val candidate = target.copy(baseUrl = url.trim())
+            SourceEditorAlert(
+                hazeState = hazeState,
+                title = if (isNew) "Add ${target.kind.label.lowercase()}" else target.displayName,
+                description = target.kind.detail,
+                urlValue = url,
+                onUrlChange = { url = it; sourceStatus = null },
+                urlPlaceholder = "https://example.com/modules/index.json",
+                status = sourceStatus?.let { health ->
+                    when (health) {
+                        is SourceHealth.Ok ->
+                            listOfNotNull("Connected", health.detail).joinToString(" — ")
+                        is SourceHealth.Rejected -> health.reason
+                        is SourceHealth.Unreachable -> health.reason
+                    }
+                },
+                statusIsGood = sourceStatus?.isOk == true,
+                testing = sourceTesting,
+                canSubmit = candidate.isComplete,
+                onTest = {
+                    sourceTesting = true
+                    sourceStatus = null
+                    // Probed through a throwaway instance rather than the stored
+                    // one: the point of Test is to check what has been *typed*.
+                    editorScope.launch {
+                        sourceStatus = withContext(Dispatchers.IO) {
+                            runCatching { SourceRegistry.probeCandidate(candidate) }
+                                .getOrElse { SourceHealth.Unreachable(it.message ?: "Failed") }
+                        }
+                        sourceTesting = false
+                    }
+                },
+                onSave = {
+                    if (isNew) SourceRegistry.add(candidate) else SourceRegistry.update(candidate)
+                    editingSource = null
+                },
+                onRemove = if (isNew) {
+                    null
+                } else {
+                    {
+                        SourceRegistry.remove(target.id)
+                        editingSource = null
+                    }
+                },
+                onDismiss = { editingSource = null },
             )
         }
 

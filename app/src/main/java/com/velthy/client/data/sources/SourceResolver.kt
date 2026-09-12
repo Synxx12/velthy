@@ -45,10 +45,16 @@ object SourceResolver {
      * the one being undone is the one attached to a bill.
      */
     fun requestForNow(): StreamRequest {
+        // Lossless first: its ceiling is [Int.MAX_VALUE], so testing the
+        // "anything below High" branch before it would cap a lossless request
+        // at a bitrate nothing can hold — and a ceiling of Lossless with the
+        // preference switched off must fall through to the ordinary tiers, not
+        // be read as that same unbounded cap.
+        if (AppSettings.isLosslessAllowedNow) return StreamRequest.Lossless
         val ceiling = AppSettings.effectiveAudioQuality
         return when {
-            ceiling != AudioQuality.HIGH -> StreamRequest.Capped(ceiling.maxKbps)
-            AppSettings.isLosslessAllowedNow -> StreamRequest.Lossless
+            ceiling != AudioQuality.HIGH && ceiling != AudioQuality.LOSSLESS ->
+                StreamRequest.Capped(ceiling.maxKbps)
             else -> StreamRequest.Best
         }
     }
@@ -476,7 +482,15 @@ object SourceResolver {
             // a track already playing can check it — see [SourceStream.durationSec].
             val stream = opened.copy(durationSec = TrackMatcher.secondsOf(match.durationText))
             val served = stream.format
-            if (!wantsLossless || served.isLossless == true || served.statesNothingLossy) {
+            // Atmos is accepted even under a lossless request: it is the
+            // premium render of the track, and a source offering one is
+            // offering the best copy it holds. It only ever reaches this line
+            // when the listener has Atmos switched on and this device can
+            // decode it — see [ModuleSource] for where the other two are
+            // refused.
+            if (!wantsLossless || served.isLossless == true || served.isDolbyAtmos ||
+                served.statesNothingLossy
+            ) {
                 TrackLog.d(
                     TAG,
                     "${source.displayName} matched '${match.title}' by '${match.artist}' ΓåÆ ${served.summary}",

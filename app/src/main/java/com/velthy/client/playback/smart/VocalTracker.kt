@@ -26,6 +26,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.util.Log
+import com.velthy.client.data.settings.AppSettings
 import java.io.File
 import java.nio.FloatBuffer
 import kotlin.math.ceil
@@ -106,7 +107,7 @@ class VocalTracker(private val context: Context) {
                     }
                 }
                 val options = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(INFERENCE_THREADS)
+                    setIntraOpNumThreads(AppSettings.automixPerformanceMode.value.inferenceThreads)
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                     // Same reasoning as BeatTracker: the arena retains every block it allocates for
                     // the life of the session, which a backgrounded music player cannot justify.
@@ -256,7 +257,6 @@ class VocalTracker(private val context: Context) {
     companion object {
         private const val TAG = "VelthyVocalTracker"
         private const val MODEL_ASSET = "vocals_umxhq_int8.onnx"
-        private const val INFERENCE_THREADS = 4
 
         /** The model's fixed input width, ~22.8 s, chosen upstream to cover a transition overlap. */
         const val FIXED_FRAMES = 960

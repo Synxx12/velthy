@@ -32,17 +32,41 @@ data class StreamFormat(
     val isLossless: Boolean?
         get() = codec?.let { it in LOSSLESS_CODECS }
 
+    /**
+     * Dolby Atmos carried in E-AC-3 JOC.
+     *
+     * Immersive, and not lossless — which is the whole reason this is its own
+     * question rather than a second entry in [LOSSLESS_CODECS]. A track with an
+     * Atmos master is frequently also held as a bit-exact stereo copy, and
+     * whether the spatial mix is the better of the two is the listener's call,
+     * not the codec's. See [com.velthy.client.data.settings.AppSettings.dolbyAtmos].
+     */
+    val isDolbyAtmos: Boolean
+        get() = codec in DOLBY_ATMOS_CODECS
+
     /** "24-bit · 192 kHz", "FLAC", "320 kbps" — whichever parts are known. */
     val summary: String
-        get() = listOfNotNull(
-            codec?.uppercase(),
-            bitDepth?.let { "$it-bit" },
-            sampleRateHz?.let { "${"%.1f".format(it / 1000f).removeSuffix(".0")} kHz" },
-            kbps?.takeIf { isLossless != true }?.let { "$it kbps" },
-        ).joinToString(" · ").ifEmpty { "Unknown format" }
+        get() = if (isDolbyAtmos) {
+            "Dolby Atmos"
+        } else {
+            listOfNotNull(
+                codec?.uppercase(),
+                bitDepth?.let { "$it-bit" },
+                sampleRateHz?.let { "${"%.1f".format(it / 1000f).removeSuffix(".0")} kHz" },
+                kbps?.takeIf { isLossless != true }?.let { "$it kbps" },
+            ).joinToString(" · ").ifEmpty { "Unknown format" }
+        }
 
     private companion object {
         val LOSSLESS_CODECS = setOf("flac", "alac", "wav", "aiff", "ape", "wv", "dsf", "dff")
+
+        /**
+         * The codec names that mean the height objects are in there. Spelt as
+         * they arrive: a module reports `audio/eac3-joc`, which [StreamFormat]
+         * stores as the subtype alone, and an older module response only ever
+         * said "Dolby Atmos" in words.
+         */
+        val DOLBY_ATMOS_CODECS = setOf("eac3-joc", "ec3-joc", "dolby-atmos")
     }
 }
 

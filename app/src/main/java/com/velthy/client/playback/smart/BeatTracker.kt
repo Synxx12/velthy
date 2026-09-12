@@ -26,6 +26,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.util.Log
+import com.velthy.client.data.settings.AppSettings
 import java.io.File
 import java.nio.FloatBuffer
 import kotlin.math.abs
@@ -76,7 +77,9 @@ class BeatTracker(private val context: Context) {
                     }
                 }
                 val options = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(INFERENCE_THREADS)
+                    // The listener's CPU budget for Automix, not this class's
+                    // own opinion — see [AutomixPerformanceMode].
+                    setIntraOpNumThreads(AppSettings.automixPerformanceMode.value.inferenceThreads)
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                     // ORT's arena allocator keeps every block it has ever needed, which for this
                     // graph is tens of megabytes of native heap retained for the life of the
@@ -206,7 +209,6 @@ class BeatTracker(private val context: Context) {
     companion object {
         private const val TAG = "VelthyBeatTracker"
         private const val MODEL_ASSET = "beat_this_int8.onnx"
-        private const val INFERENCE_THREADS = 4
 
         /** The window the model was trained on, and the margin discarded from each chunk's edges. */
         const val CHUNK_FRAMES = 1500

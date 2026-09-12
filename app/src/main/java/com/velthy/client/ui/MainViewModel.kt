@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.velthy.client.auth.AuthStore
 import com.velthy.client.data.AppUpdateChecker
+import com.velthy.client.data.LikeState
 import com.velthy.client.data.LocalMediaRepository
 import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.data.lyrics.LrcLib
@@ -13,6 +14,8 @@ import com.velthy.client.data.innertube.Innertube
 import com.velthy.client.data.innertube.PlaybackTracker
 import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.model.Account
+import com.velthy.client.data.model.AccountChannel
+import com.velthy.client.data.model.SubscriptionState
 import com.velthy.client.data.model.BrowseType
 import com.velthy.client.data.model.DetailPage
 import com.velthy.client.data.model.HistorySection
@@ -34,7 +37,6 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.channels.BufferOverflow
@@ -57,6 +59,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _signedIn = MutableStateFlow(authStore.isSignedIn)
     val signedIn: StateFlow<Boolean> = _signedIn.asStateFlow()
+
+    /** Every saved session, as the account switcher lists them. */
+    val savedAccounts: StateFlow<List<com.velthy.client.auth.SavedAccount>> = authStore.savedAccounts
 
     private val _home = MutableStateFlow<UiState<List<HomeShelf>>>(UiState.Loading)
     val home: StateFlow<UiState<List<HomeShelf>>> = _home.asStateFlow()
@@ -87,9 +92,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _results = MutableStateFlow<UiState<List<SearchResult>>?>(null)
     val results: StateFlow<UiState<List<SearchResult>>?> = _results.asStateFlow()
 
-    /** Songs is the default tab; there is no "All" tab any more. */
-    private val _filter = MutableStateFlow(SearchFilter.SONGS)
+    /** The mixed YouTube Music result page is the fast, useful default. */
+    private val _filter = MutableStateFlow(SearchFilter.ALL)
     val filter: StateFlow<SearchFilter> = _filter.asStateFlow()
+
+    private val _searchLoadingMore = MutableStateFlow(false)
+    val searchLoadingMore: StateFlow<Boolean> = _searchLoadingMore.asStateFlow()
+
+    /** Increments once per first-page request so the UI can reset its list. */
+    private val _searchScrollReset = MutableStateFlow(0)
+    val searchScrollReset: StateFlow<Int> = _searchScrollReset.asStateFlow()
 
     // The search pipeline's own state. Declared here, above [init], because
     // that is where the collector is started from and a property declared
@@ -108,16 +120,48 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val newestRequestId = AtomicLong(0L)
 
     /**
+     * Keystrokes asking for completions, collapsed the same way as
+     * [searchRequests] and for the same reason.
+     */
+    private val suggestRequests = MutableSharedFlow<String>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
+     * Keystrokes asking for the song preview, on their own longer debounce.
+     *
+     * Kept apart from [suggestRequests] because what it asks for is a real
+     * search rather than a typeahead call: folding the two together would put a
+     * full page request on the wire for every letter typed at speed.
+     */
+    private val previewRequests = MutableSharedFlow<String>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
      * Results of recent searches, so a query typed before is answered without
      * asking again.
      *
-     * Its real work is [prefixMatch]: typing "blinding" runs through five
-     * queries on the way, and each one's results are a good enough answer for
-     * the next keystroke to be worth showing while the real one is in flight.
-     * That is the difference between a list that refines as you type and one
-     * that blanks to a spinner on every letter.
+     * Its real work is [prefixMatch]: a query the user has already run is a good
+     * enough answer for the next one they are on the way to typing, and showing
+     * it beats blanking the page to a spinner. The continuation is kept with the
+     * rows so a cached page can still be scrolled past its first screenful.
      */
-    private val searchCache = LruCache<String, List<SearchResult>>(SEARCH_CACHE_ENTRIES)
+    private data class SearchCacheEntry(
+        val rows: List<SearchResult>,
+        val continuation: String?,
+    )
+
+    private data class SearchSession(
+        val key: String,
+        val requestId: Long,
+        val continuation: String?,
+    )
+
+    private val searchCache = LruCache<String, SearchCacheEntry>(SEARCH_CACHE_ENTRIES)
+    private var searchSession: SearchSession? = null
 
     /** Synced lyrics for whatever is playing; null while unknown or absent. */
     private val _lyrics = MutableStateFlow<List<LyricLine>?>(null)
@@ -202,6 +246,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _account = MutableStateFlow<Account?>(null)
     val account: StateFlow<Account?> = _account.asStateFlow()
 
+    /**
+     * The saved session matching the live cookie, when the current login is one
+     * of them. Read once, at construction, to restore the channel this account
+     * was last acting as.
+     */
+    private val restoredSavedAccount = authStore.savedAccounts.value
+        .firstOrNull { it.cookie == authStore.cookie }
+
+    /**
+     * The channels this login can act as — its own, plus any brand channels.
+     * Empty until the picker asks for them: it is one more request per sign-in,
+     * and nothing else on the account screen needs the answer.
+     */
+    private val _channels = MutableStateFlow<List<AccountChannel>>(emptyList())
+    val channels: StateFlow<List<AccountChannel>> = _channels.asStateFlow()
+
+    private val _channelsLoading = MutableStateFlow(false)
+    val channelsLoading: StateFlow<Boolean> = _channelsLoading.asStateFlow()
+
+    /**
+     * The chosen channel's key, or null while the app acts as whichever channel
+     * the session serves by default.
+     */
+    private val _selectedChannelKey = MutableStateFlow(
+        restoredSavedAccount?.let { it.pageId ?: it.dataSyncId },
+    )
+    val selectedChannelKey: StateFlow<String?> = _selectedChannelKey.asStateFlow()
+
+    /** What to call the chosen channel, for the account screen's own row. */
+    private val _selectedChannelName = MutableStateFlow(restoredSavedAccount?.channelName)
+    val selectedChannelName: StateFlow<String?> = _selectedChannelName.asStateFlow()
+
     private val _library = MutableStateFlow<UiState<LibraryPage>>(UiState.Loading)
     val library: StateFlow<UiState<LibraryPage>> = _library.asStateFlow()
     private val _history = MutableStateFlow<UiState<List<HistorySection>>>(UiState.Loading)
@@ -238,20 +314,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---- Ratings, library and playlists -------------------------------------
 
     /**
-     * Ratings this session has set, which win over whatever the library feed
-     * last said.
+     * Every rating known for this account: the library's, then this session's.
      *
-     * Kept apart from the library rather than folded into it because the two
-     * answer different questions: Liked Music is what YouTube knew when the
-     * page was fetched, and this is what the user has done since. Layering
-     * them ([likeStatuses]) means a tap shows immediately without the library
-     * having to be re-fetched, and a later refresh can't undo it.
+     * The session's half lives in [LikeState] rather than in a flow of this
+     * ViewModel's own, and that is the whole point of it: the playback service
+     * draws the notification's heart from that same object, so a tap on the
+     * player fills the heart in the notification — and a tap on the
+     * notification fills the heart on the player — with neither side having to
+     * know about the other.
+     *
+     * Two stores was the bug. Ratings made on the player screen went into a
+     * private map here that the service never saw, so the notification kept
+     * showing whatever it last knew, and a rating made by tapping the
+     * notification never appeared on the player screen. Both were answering
+     * "is this liked?" from different answers.
+     *
+     * Layering the session's changes over the library rather than folding them
+     * in keeps the two questions apart: Liked Music is what YouTube knew when
+     * the page was fetched, and a tap since shows immediately without the
+     * library having to be re-fetched.
      */
-    private val _likeOverrides = MutableStateFlow<Map<String, LikeStatus>>(emptyMap())
-
-    /** Every rating known for this account: the library's, then this session's. */
     val likeStatuses: StateFlow<Map<String, LikeStatus>> =
-        combine(_library, _likeOverrides) { library, overrides ->
+        combine(_library, LikeState.overrides) { library, overrides ->
             val liked = (library as? UiState.Success)?.data?.likedSongs
                 ?.associate { it.videoId to LikeStatus.LIKE }
                 .orEmpty()
@@ -273,7 +357,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!requireSignIn()) return
         val previous = likeStatusOf(videoId)
         if (previous == status) return
-        _likeOverrides.value += (videoId to status)
+        LikeState.set(videoId, status)
         viewModelScope.launch {
             YtMusicRepository.rate(videoId, status).fold(
                 onSuccess = {
@@ -287,7 +371,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (unliked) forgetFromLibrary(videoId)
                 },
                 onFailure = {
-                    _likeOverrides.value += (videoId to previous)
+                    LikeState.set(videoId, previous)
                 },
             )
         }
@@ -398,9 +482,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _songMenu.value = menu
             val stated = menu.likeStatus
             if (stated != null && stated != LikeStatus.INDIFFERENT &&
-                videoId !in _likeOverrides.value
+                videoId !in LikeState.overrides.value
             ) {
-                _likeOverrides.value += (videoId to stated)
+                LikeState.set(videoId, stated)
             }
         }
     }
@@ -661,7 +745,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        // Restore the channel this login was last acting as, before anything
+        // that depends on being the right identity is fetched.
+        restoredSavedAccount?.let { Innertube.selectChannel(it.pageId, it.dataSyncId) }
         startSearchPipeline()
+        startSuggestPipeline()
+        startPreviewPipeline()
         loadHome()
         loadExplore()
         if (_signedIn.value) {
@@ -721,14 +810,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val acc = YtMusicRepository.account().getOrNull()
             _account.value = acc
+            // Acting as a brand channel, the account menu answers with that
+            // channel's own name — the only place it can be learned for a
+            // channel the app did not list itself.
+            if (acc != null && _selectedChannelKey.value != null) {
+                _selectedChannelName.value = acc.name
+            }
             val currentCookie = authStore.cookie
             if (acc != null && currentCookie != null) {
+                val existing = savedAccounts.value.firstOrNull { it.cookie == currentCookie }
                 authStore.saveAccount(
                     com.velthy.client.auth.SavedAccount(
                         name = acc.name,
                         handle = acc.email.takeIf { it.isNotBlank() },
                         thumbnailUrl = acc.thumbnailUrl,
                         cookie = currentCookie,
+                        // Saving the profile must not forget which channel of
+                        // it this session was pointed at. A channel chosen in
+                        // the browser has no name yet — the account menu just
+                        // asked *as* that channel is what supplies it.
+                        pageId = existing?.pageId,
+                        dataSyncId = existing?.dataSyncId,
+                        channelName = _selectedChannelName.value ?: existing?.channelName,
                     )
                 )
             }
@@ -909,36 +1012,82 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _suggestions = MutableStateFlow<List<String>>(emptyList())
     val searchSuggestions: StateFlow<List<String>> = _suggestions.asStateFlow()
 
+    /**
+     * What the catalogue answers the typed text with, shown under the
+     * completions while the field is still being edited.
+     *
+     * Kept apart from [_suggestions] because it costs a real search rather than
+     * a typeahead call, so it is fetched on a longer debounce — see
+     * [startPreviewPipeline]. Cleared the moment the query is committed or the
+     * field is emptied: from then on the results page owns the screen, and a
+     * late preview would only duplicate what it shows.
+     */
+    private val _previewSongs = MutableStateFlow<List<Song>>(emptyList())
+    val searchPreviewSongs: StateFlow<List<Song>> = _previewSongs.asStateFlow()
+
     val searchHistory: StateFlow<List<String>> = SearchHistory.recent
 
-    private var liveSearchJob: Job? = null
-
     fun onQueryChange(value: String) {
+        val previous = _query.value
         _query.value = value
-        _suggestions.value = emptyList()
         if (value.isBlank()) {
-            liveSearchJob?.cancel()
+            // Emptying the field is how the recent searches are got back to, so
+            // it takes the suggestions and the results down together. Nothing in
+            // flight can still be waiting to overwrite the latter: the id it
+            // would be checked against has already moved past it.
             newestRequestId.incrementAndGet()
+            searchSession = null
+            _searchLoadingMore.value = false
             _results.value = null
+            _suggestions.value = emptyList()
+            _previewSongs.value = emptyList()
             return
         }
-        liveSearchJob?.cancel()
-        liveSearchJob = viewModelScope.launch {
-            delay(250)
-            runSearch()
+        // The previous keystroke's completions are left beneath the new lead row
+        // while the fresh ones are fetched — they were right a letter ago, and a
+        // list that collapses to one row on every letter reads as broken. Text
+        // that isn't a continuation of what they were for drops them instead of
+        // showing completions of a query that's gone.
+        val stale = if (value.startsWith(previous, true) || previous.startsWith(value, true)) {
+            _suggestions.value.drop(1)
+        } else {
+            emptyList()
         }
+        _suggestions.value = listOf(value) + stale.filterNot { it.equals(value, true) }
+        suggestRequests.tryEmit(value)
+        previewRequests.tryEmit(value)
     }
 
+    /**
+     * Commits the current query to the history. Called when the user acts on
+     * what they found — submitting from the keyboard, or opening a result —
+     * rather than on every keystroke, which would fill the list with the
+     * prefixes typed on the way to the real query.
+     */
     fun recordSearch() = SearchHistory.record(_query.value)
 
+    /**
+     * The search button — the keyboard's search action. The only thing that runs
+     * a search for text the user typed: keystrokes themselves ask for
+     * suggestions and nothing more, so a query is fetched once, when they say
+     * it's finished, instead of once per prefix on the way to it.
+     */
     fun submitSearch() {
         recordSearch()
+        _suggestions.value = emptyList()
+        _previewSongs.value = emptyList()
         runSearch()
     }
 
-    /** Re-runs a term picked out of the history, and floats it back to the top. */
+    /**
+     * Re-runs a term picked out of a list rather than typed — a recent search,
+     * or a suggestion — and floats it back to the top of the history. Picking is
+     * as deliberate as submitting, so it searches on the spot.
+     */
     fun searchFor(term: String) {
         _query.value = term
+        _suggestions.value = emptyList()
+        _previewSongs.value = emptyList()
         SearchHistory.record(term)
         runSearch()
     }
@@ -954,7 +1103,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Every keystroke, as a request the pipeline below decides what to do with.
+     * A search asked for, as a request the pipeline below decides what to do
+     * with.
      *
      * [requestId] is what makes a late answer harmless: a response is only
      * written to the screen if its id is still the newest one asked for.
@@ -964,8 +1114,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun cacheKey(query: String, filter: SearchFilter) = "${filter.name}:$query"
 
     /**
-     * The results of the longest earlier query this one starts with — what was
-     * on screen a keystroke ago, near enough to leave up meanwhile.
+     * The results of the longest earlier query this one starts with — near
+     * enough to leave up while the narrower search runs.
      */
     private fun prefixMatch(query: String, filter: SearchFilter): List<SearchResult>? {
         val prefix = "${filter.name}:"
@@ -973,6 +1123,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .filterKeys { it.startsWith(prefix) && query.startsWith(it.removePrefix(prefix), true) }
             .maxByOrNull { it.key.length }
             ?.value
+            ?.rows
     }
 
     private fun runSearch() {
@@ -981,56 +1132,159 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Nothing in flight can still be waiting to overwrite this: the
             // id it would be checked against has already moved past it.
             newestRequestId.incrementAndGet()
+            searchSession = null
+            _searchLoadingMore.value = false
             _results.value = null
             return
         }
         val id = newestRequestId.incrementAndGet()
+        _searchScrollReset.value += 1
+        searchSession = null
+        _searchLoadingMore.value = false
         searchRequests.tryEmit(SearchRequest(query, _filter.value, id))
+    }
+
+    /**
+     * Continues the visible search only when the list reaches its end. Kept
+     * separate from the first-page request: waiting for every continuation was
+     * the reason a search sat on a spinner for seconds.
+     */
+    fun loadMoreSearchResults() {
+        val session = searchSession ?: return
+        val token = session.continuation ?: return
+        if (_searchLoadingMore.value) return
+        _searchLoadingMore.value = true
+        viewModelScope.launch {
+            val next = YtMusicRepository.searchContinuation(token)
+            val stillCurrent = searchSession == session && session.requestId == newestRequestId.get()
+            if (stillCurrent) {
+                next.onSuccess { page ->
+                    val current = (_results.value as? UiState.Success)?.data.orEmpty()
+                    val merged = (current + page.rows).distinctBy(::searchResultKey)
+                    searchCache.put(session.key, SearchCacheEntry(merged, page.continuation))
+                    searchSession = session.copy(continuation = page.continuation)
+                    _results.value = UiState.Success(merged)
+                }
+                _searchLoadingMore.value = false
+            }
+        }
+    }
+
+    private fun searchResultKey(row: SearchResult): String = when (row) {
+        is SearchResult.TopTrack -> "v:${row.song.videoId}"
+        is SearchResult.Track -> "v:${row.song.videoId}"
+        is SearchResult.Browse -> "b:${row.item.browseId}"
     }
 
     /**
      * The search pipeline, started once and left running for the lifetime of
      * the view model.
      *
-     * The point of it being one long-lived collector is that a keystroke no
-     * longer cancels the request before it. Cancelling a call mid-flight tears
-     * down its socket, and on a pooled HTTP client that is felt by whatever
-     * picks that connection up next — which is how typing a word could end in
-     * "Software caused connection abort" for a request that was never itself
-     * in any trouble. [debounce] collapses a burst of keystrokes into one
-     * query before any request is made, and [collectLatest] only abandons a
-     * search once a genuinely newer one has survived that window.
+     * The point of it being one long-lived collector is that a request no longer
+     * cancels the one before it. Cancelling a call mid-flight tears down its
+     * socket, and on a pooled HTTP client that is felt by whatever picks that
+     * connection up next — which is how typing a word could end in "Software
+     * caused connection abort" for a request that was never itself in any
+     * trouble. [collectLatest] only abandons a search once a genuinely newer one
+     * has arrived.
      */
-    @OptIn(FlowPreview::class)
     private fun startSearchPipeline() = viewModelScope.launch {
         searchRequests
-            .debounce(SEARCH_DEBOUNCE_MS)
             .collectLatest { request ->
                 val key = cacheKey(request.query, request.filter)
                 // Something to look at immediately: the exact answer if this
                 // query has been run before, otherwise the closest earlier
                 // one. Only fall back to a spinner with neither.
                 val exact = searchCache.get(key)
-                val cached = exact ?: prefixMatch(request.query, request.filter)
+                val cached = exact?.rows ?: prefixMatch(request.query, request.filter)
                 _results.value = cached?.let { UiState.Success(it) } ?: UiState.Loading
-                if (exact != null) return@collectLatest
+                if (exact != null) {
+                    searchSession = SearchSession(key, request.requestId, exact.continuation)
+                    return@collectLatest
+                }
 
-                val result = YtMusicRepository.search(request.query, request.filter)
-                // A search the user has already typed past shouldn't land on
+                val result = YtMusicRepository.searchPage(request.query, request.filter)
+                // A search the user has already moved past shouldn't land on
                 // screen, whether it succeeded or failed.
                 if (request.requestId != newestRequestId.get()) return@collectLatest
                 _results.value = result.fold(
-                    onSuccess = { rows ->
-                        if (rows.isEmpty()) {
+                    onSuccess = { page ->
+                        if (page.rows.isEmpty()) {
                             UiState.Error("No results")
                         } else {
-                            searchCache.put(key, rows)
-                            prefetchTopResult(rows)
-                            UiState.Success(rows)
+                            searchCache.put(key, SearchCacheEntry(page.rows, page.continuation))
+                            searchSession = SearchSession(key, request.requestId, page.continuation)
+                            prefetchTopResult(page.rows)
+                            UiState.Success(page.rows)
                         }
                     },
                     onFailure = { UiState.Error(it.friendly()) },
                 )
+            }
+    }
+
+    /**
+     * The typeahead pipeline, alongside [startSearchPipeline] and for the same
+     * structural reason — one long-lived collector rather than a coroutine per
+     * keystroke, so a lookup the user has typed past doesn't take a pooled
+     * socket down with it.
+     *
+     * This one does debounce, and that is affordable because the request behind
+     * it is a few hundred bytes rather than a full page of results: a burst of
+     * keystrokes shouldn't each cost a round trip, but the gap has to be short
+     * enough that the list is up before the next letter is typed. A failure is
+     * left on the floor — there is no worthwhile way to report "couldn't suggest
+     * anything", and the typed text stands there as a working first row anyway.
+     */
+    @OptIn(FlowPreview::class)
+    private fun startSuggestPipeline() = viewModelScope.launch {
+        // Whether a list for [input] is still wanted. False once the field has
+        // moved on: typed further, or searched — which empties [_suggestions],
+        // and a late answer writing to it would reopen the suggestions over the
+        // results the user is by then reading.
+        fun stillWanted(input: String) =
+            _query.value == input && _suggestions.value.isNotEmpty()
+
+        suggestRequests
+            .debounce(SUGGEST_DEBOUNCE_MS)
+            .collectLatest { input ->
+                if (!stillWanted(input)) return@collectLatest
+                val fetched = YtMusicRepository.searchSuggestions(input).getOrNull()
+                    ?: return@collectLatest
+                // Asked again on the way back; the field is live throughout.
+                if (!stillWanted(input)) return@collectLatest
+                _suggestions.value = listOf(input) +
+                    fetched.filterNot { it.equals(input, ignoreCase = true) }
+            }
+    }
+
+    /**
+     * The song preview under the completions.
+     *
+     * This one *is* a search, so it waits longer than [startSuggestPipeline]
+     * does: a burst of keystrokes should collapse to one page request, and the
+     * gap is sized for someone pausing to read rather than for the next letter.
+     * It only ever runs while completions are up — see [stillWanted]'s use of
+     * [_suggestions] — so a preview never appears over the results page.
+     */
+    @OptIn(FlowPreview::class)
+    private fun startPreviewPipeline() = viewModelScope.launch {
+        fun stillWanted(input: String) =
+            _query.value == input && _suggestions.value.isNotEmpty()
+
+        previewRequests
+            .debounce(PREVIEW_DEBOUNCE_MS)
+            .collectLatest { input ->
+                if (!stillWanted(input)) return@collectLatest
+                val songs = YtMusicRepository.search(input, SearchFilter.SONGS)
+                    .getOrNull()
+                    ?.filterIsInstance<SearchResult.Track>()
+                    ?.map { it.song }
+                    ?.take(PREVIEW_SONG_COUNT)
+                    .orEmpty()
+                // Asked again on the way back; the field is live throughout.
+                if (!stillWanted(input)) return@collectLatest
+                _previewSongs.value = songs
             }
     }
 
@@ -1044,7 +1298,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * rather than one nothing will ever ask for.
      */
     private fun prefetchTopResult(rows: List<SearchResult>) {
-        val song = rows.filterIsInstance<SearchResult.Track>().firstOrNull()?.song ?: return
+        val song = rows.firstNotNullOfOrNull {
+            when (it) {
+                is SearchResult.TopTrack -> it.song
+                is SearchResult.Track -> it.song
+                is SearchResult.Browse -> null
+            }
+        } ?: return
         viewModelScope.launch {
             runCatching {
                 StreamResolver.resolve(YtMusicRepository.resolveAudio(song).videoId)
@@ -1057,9 +1317,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /**
          * Short enough that it reads as instant, long enough that a word typed
-         * at speed is one request rather than one per letter.
+         * at speed is one suggestion request rather than one per letter.
          */
-        const val SEARCH_DEBOUNCE_MS = 80L
+        const val SUGGEST_DEBOUNCE_MS = 120L
+
+        /**
+         * Long enough that a word typed at speed is one search rather than one
+         * per letter, short enough that the preview is up before the reader has
+         * finished deciding whether to tap a completion.
+         */
+        const val PREVIEW_DEBOUNCE_MS = 350L
+
+        /** How many songs the preview shows — a glance, not a results page. */
+        const val PREVIEW_SONG_COUNT = 6
 
         const val SEARCH_CACHE_ENTRIES = 100
     }
@@ -1088,6 +1358,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // own picture and name once they arrive.
             var artwork: String? = null
             var name: String? = null
+            /** The artist header's numbers and subscribe button — see [DetailPage]. */
+            var subscriberCount: String? = null
+            var monthlyListeners: String? = null
+            var subscription: SubscriptionState? = null
+            var description: String? = null
             /** Set when the track list carries on past its first response. */
             var more: String? = null
             /** Tracks YouTube offers to round the playlist out — see [DetailPage.suggestedSongs]. */
@@ -1120,6 +1395,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             sections = page.sections
                             artwork = page.thumbnailUrl
                             name = page.name
+                            subscriberCount = page.subscriberCountText
+                            monthlyListeners = page.monthlyListenerCount
+                            subscription = page.subscription
+                            description = page.description
                             if (page.songs.isEmpty()) {
                                 UiState.Error("No tracks here")
                             } else {
@@ -1160,6 +1439,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         thumbnailUrl = artwork ?: it.thumbnailUrl,
                         title = name ?: it.title,
                         suggestedSongs = suggested,
+                        subscriberCountText = subscriberCount ?: it.subscriberCountText,
+                        monthlyListenerCount = monthlyListeners ?: it.monthlyListenerCount,
+                        subscription = subscription ?: it.subscription,
+                        description = description ?: it.description,
                     )
                 } else {
                     it
@@ -1289,8 +1572,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         authStore.cookie = cookie
         Innertube.cookie = cookie
         _signedIn.value = true
+        // A fresh sign-in has not been asked which of its channels to act as,
+        // so it starts on the one the session serves by default.
+        _channels.value = emptyList()
+        _selectedChannelKey.value = null
+        _selectedChannelName.value = null
+        reloadForAccount()
+    }
+
+    /**
+     * Everything that is "the signed-in listener's", refetched.
+     *
+     * The channel override is expected to be in place already: which channel
+     * the session acts as decides what "the library" and "the history" refer
+     * to, so loading them first and scoping second would show one identity's
+     * music under another's name.
+     */
+    private fun reloadForAccount() {
         if (com.velthy.client.data.settings.AppSettings.accountForceSyncOnSwitch.value) {
-            _likeOverrides.value = emptyMap()
+            LikeState.clear()
             _playlists.value = emptyList()
         }
         loadHome()
@@ -1318,27 +1618,127 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    val savedAccounts: StateFlow<List<com.velthy.client.auth.SavedAccount>> = authStore.savedAccounts
-
     fun saveCurrentAccount() {
         val current = _account.value ?: return
         val currentCookie = authStore.cookie ?: return
+        val existing = savedAccounts.value.firstOrNull { it.cookie == currentCookie }
         val saved = com.velthy.client.auth.SavedAccount(
             name = current.name,
             handle = current.email.takeIf { it.isNotBlank() },
             thumbnailUrl = current.thumbnailUrl,
             cookie = currentCookie,
+            pageId = existing?.pageId,
+            dataSyncId = existing?.dataSyncId,
+            channelName = existing?.channelName,
         )
         authStore.saveAccount(saved)
     }
 
     fun switchAccount(saved: com.velthy.client.auth.SavedAccount) {
         com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
-        onSignedIn(saved.cookie)
+        authStore.cookie = saved.cookie
+        Innertube.cookie = saved.cookie
+        _signedIn.value = true
+        // This session's own channel, installed before any of its pages are
+        // fetched — the same identity it was left acting as.
+        Innertube.selectChannel(saved.pageId, saved.dataSyncId)
+        _channels.value = emptyList()
+        _selectedChannelKey.value = saved.pageId ?: saved.dataSyncId
+        _selectedChannelName.value = saved.channelName
         _account.value = Account(
             name = saved.name,
             email = saved.handle.orEmpty(),
             thumbnailUrl = saved.thumbnailUrl,
+        )
+        _library.value = UiState.Loading
+        LikeState.clear()
+        _playlists.value = emptyList()
+        _songMenu.value = null
+        reloadForAccount()
+    }
+
+    /**
+     * Loads the channel list, unless it is already in hand.
+     *
+     * @param force refetch even if it is — after a switch, since the list
+     *   itself reports which channel is active.
+     */
+    fun loadChannels(force: Boolean = false) {
+        if (!_signedIn.value) return
+        if (_channelsLoading.value) return
+        if (!force && _channels.value.isNotEmpty()) return
+        viewModelScope.launch {
+            _channelsLoading.value = true
+            YtMusicRepository.accountChannels().onSuccess { _channels.value = it }
+            _channelsLoading.value = false
+        }
+    }
+
+    /**
+     * Acts as [channel] from here on.
+     *
+     * Everything already on screen belongs to the channel being left — its
+     * library, its hearts, its playlists — so the switch drops them and
+     * refetches, rather than letting the new identity's pages arrive one at a
+     * time on top of the old one's.
+     */
+    fun selectChannel(channel: AccountChannel) {
+        Innertube.selectChannel(channel.pageId, channel.dataSyncId)
+        _selectedChannelKey.value = channel.key
+        _selectedChannelName.value = channel.name
+        rememberChannel(channel)
+        _library.value = UiState.Loading
+        LikeState.clear()
+        _playlists.value = emptyList()
+        _songMenu.value = null
+        com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
+        reloadForAccount()
+    }
+
+    /**
+     * A session lifted out of the in-app browser: the same login, now pointed
+     * at whichever channel the listener left YouTube Music showing.
+     *
+     * The identity comes from the page they were looking at rather than from a
+     * fetch of our own, because YouTube Music's own account switcher is the
+     * authority on which channel is which — see
+     * [com.velthy.client.auth.CapturedSession].
+     */
+    fun onWebSession(session: com.velthy.client.auth.CapturedSession) {
+        authStore.cookie = session.cookie
+        Innertube.cookie = session.cookie
+        _signedIn.value = true
+        Innertube.selectChannel(session.pageId, session.dataSyncId, session.authUser)
+        _channels.value = emptyList()
+        _selectedChannelKey.value = session.pageId ?: session.dataSyncId
+        // The page does not say what the channel is called; the account menu,
+        // asked as that channel, answers that on the reload below.
+        _selectedChannelName.value = null
+        if (session.pageId != null || session.dataSyncId != null) {
+            persistChannel(session.pageId, session.dataSyncId, null)
+        }
+        _library.value = UiState.Loading
+        LikeState.clear()
+        _playlists.value = emptyList()
+        _songMenu.value = null
+        com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
+        reloadForAccount()
+    }
+
+    /** Writes the choice onto the saved session it belongs to. */
+    private fun rememberChannel(channel: AccountChannel) {
+        persistChannel(channel.pageId, channel.dataSyncId, channel.name)
+    }
+
+    private fun persistChannel(pageId: String?, dataSyncId: String?, channelName: String?) {
+        val cookie = authStore.cookie ?: return
+        val existing = savedAccounts.value.firstOrNull { it.cookie == cookie } ?: return
+        authStore.saveAccount(
+            existing.copy(
+                pageId = pageId,
+                dataSyncId = dataSyncId,
+                channelName = channelName ?: existing.channelName,
+            ),
         )
     }
 
@@ -1360,10 +1760,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         Innertube.cookie = null
         _signedIn.value = false
         _account.value = null
+        // The channels belong to the account that just left, and so does the
+        // choice made among them.
+        _channels.value = emptyList()
+        _selectedChannelKey.value = null
+        _selectedChannelName.value = null
         _library.value = UiState.Loading
         // Ratings, playlists, and remote cloud history belong to the account that
         // just left; keeping them would leak private listening data.
-        _likeOverrides.value = emptyMap()
+        LikeState.clear()
         _playlists.value = emptyList()
         _songMenu.value = null
         com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()

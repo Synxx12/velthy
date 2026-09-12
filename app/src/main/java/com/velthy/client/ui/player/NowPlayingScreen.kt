@@ -177,6 +177,7 @@ import androidx.media3.common.Player
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
+import com.velthy.client.ui.components.MarqueeText
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.icons.VelthyIcons
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -551,7 +552,14 @@ fun NowPlayingScreen(
     val stillCovered by remember(song.videoId) {
         derivedStateOf { canvasCover.floatValue > 0.999f }
     }
-    val meshColors = rememberArtworkColors(song.thumbnailUrl, canvasFrame)
+    // v1.5's backdrop, kept behind a switch — see [AppSettings.legacyMeshGradient].
+    val legacyMesh by AppSettings.legacyMeshGradient.collectAsStateWithLifecycle()
+    // The two backdrops answer different questions and are never both on screen,
+    // so whichever is not showing is pure cost: the artwork mesh does a pixel
+    // readback of its own on every track change, and the legacy path pays
+    // [rememberArtworkColors] instead.
+    val meshColors = if (legacyMesh) rememberArtworkColors(song.thumbnailUrl, canvasFrame) else null
+    val artMesh = if (legacyMesh) null else rememberArtworkMesh(song.thumbnailUrl, canvasFrame, ART_PX)
     LaunchedEffect(song.videoId, song.albumName, canvasAllowedNow) {
         if (!canvasAllowedNow) {
             canvas = null
@@ -752,7 +760,18 @@ fun NowPlayingScreen(
     // Both states collapse the header, but the banner only ever shows over a
     // settled player: opening the queue or the lyrics hands the sleeve back its
     // card first.
-    val p = if (lyricsOpen) 1f else queueProgress
+    // One animation for both surfaces. This used to read
+    // `if (lyricsOpen) 1f else queueProgress`, which gave the queue a 420ms ease
+    // and the lyrics nothing at all: opening them snapped the sleeve to a
+    // thumbnail in a single frame while [heroT] — reading off this same value —
+    // went on fading the banner out over the full 420. One half of the artwork
+    // jumped, the other half glided after it, and the pair read as a stutter
+    // rather than as either.
+    val p by animateFloatAsState(
+        targetValue = if (lyricsOpen || queueOpen) 1f else 0f,
+        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        label = "sleeveCollapse",
+    )
     val fullBleedArt by AppSettings.fullBleedArtwork.collectAsStateWithLifecycle()
     // Full-bleed is a phone idiom. Past the width the player is willing to grow
     // to, edge to edge stops meaning "the artwork *is* the screen" and starts
@@ -808,11 +827,23 @@ fun NowPlayingScreen(
     LaunchedEffect(coverTarget) { onArtTargetChanged?.invoke(coverTarget) }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Keyed on the track: the backdrop drifts when the player opens and on
-        // every skip, then rests. Position ticks recompose this screen twice a
-        // second and must not drag a full-screen blur along with them, which is
-        // why the palette is passed as one immutable value.
-        MeshGradientBackground(palette = meshColors, trackKey = song.videoId)
+        if (meshColors != null) {
+            // Keyed on the track: the backdrop drifts when the player opens and
+            // on every skip, then rests. Position ticks recompose this screen
+            // twice a second and must not drag a full-screen blur along with
+            // them, which is why the palette is passed as one immutable value.
+            // No seam: the blobs are not anchored to anything on screen — they
+            // fill the player and the artwork simply sits on top of them.
+            MeshGradientBackground(palette = meshColors, trackKey = song.videoId)
+        } else {
+            // The sleeve's own colours, hung from where the artwork stops — so
+            // the colour immediately under it is the colour it ended on, and
+            // there is no join to hide.
+            ArtworkMeshBackdrop(
+                mesh = artMesh,
+                seam = if (heroMode) heroHeight else 0.dp,
+            )
+        }
 
         // The artwork, edge to edge and running up behind the status bar,
         // dissolving into the backdrop where the sleeve's bottom edge would
@@ -1278,17 +1309,20 @@ fun NowPlayingScreen(
                         // Shrinks as the header collapses, so the queue's
                         // heading doesn't have to compete with it.
                         val titleSize = lerp(20.sp, 16.sp, p)
-                        Text(
+                        // Crawls when it is too long for the row, like the bar's
+                        // own title does — the credits here have the whole width
+                        // and still regularly need more of it than there is.
+                        MarqueeText(
                             text = song.title,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontSize = titleSize,
                             ),
                             color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             // Only the tracks YouTube hands us a browse id for
                             // lead anywhere; the rest stay plain text.
-                            modifier = Modifier.opensPage(song.albumId, onOpenAlbum),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .opensPage(song.albumId, onOpenAlbum),
                         )
                         Text(
                             text = song.artist,
@@ -1492,7 +1526,7 @@ fun NowPlayingScreen(
             // lossless fetch is actually in flight, not on every buffering
             // YouTube track.
             val losslessRequested = losslessOn &&
-                (if (metered == true) cellularQuality else wifiQuality) == AudioQuality.HIGH
+                (if (metered == true) cellularQuality else wifiQuality) == AudioQuality.LOSSLESS
             // Whether a module is still racing YouTube for this exact track —
             // see [NerdStats.racingLossless]. YouTube can win that race and
             // already be playing while the module lookup is still running
@@ -2618,6 +2652,7 @@ private fun LyricsPanel(
     var browsing by remember { mutableStateOf(false) }
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val lyricsBlur by AppSettings.lyricsBlur.collectAsStateWithLifecycle()
 
     // The bloom is a blurred copy of the line, so it is off wherever blur is:
     // below API 31 Modifier.blur does nothing and the "glow" would land as a
@@ -2741,14 +2776,17 @@ private fun LyricsPanel(
             // of equally-weighted text.
             val blur by animateDpAsState(
                 targetValue = when {
-                    reduceDynamicBlur || browsing || isActive -> 0.dp
+                    !lyricsBlur || reduceDynamicBlur || browsing || isActive -> 0.dp
                     else -> (distance * 1.6f).coerceAtMost(7f).dp
                 },
                 label = "lyricBlur",
             )
+            // Browsing keeps the same fade as playback rather than flattening
+            // every row to full strength. A finger on the list is not a reason
+            // to turn the panel into a wall of equally-bright lines, and the
+            // sweep below is what keeps the sync legible while it is scrolled.
             val lineAlpha by animateFloatAsState(
                 targetValue = when {
-                    browsing -> 1f
                     isActive -> 1f
                     offset < 0 -> (0.55f - distance * 0.05f).coerceAtLeast(0.30f)
                     else -> (0.45f - distance * 0.09f).coerceAtLeast(0.12f)
@@ -2862,6 +2900,26 @@ private fun PanelVoice(
             dimAlpha = tail,
             modifier = modifier,
             glowAlpha = glowAlpha,
+            glowRoom = room,
+        )
+    } else if (line.isWordSynced) {
+        // Browsing: keep the sweep, so a line already sung stays fully lit and
+        // one still to come stays dim — the same reading of the song the panel
+        // has while it plays — but skip the bloom, which is a playback
+        // flourish rather than a browsing aid. Falling through to the plain
+        // [Text] below instead is what used to light every row up at once the
+        // moment the list was scrolled.
+        val tail by animateFloatAsState(
+            targetValue = if (isActive) UNSUNG_ALPHA else 1f,
+            label = "lyricTail",
+        )
+        SweptLyricLine(
+            line = line,
+            clock = clock,
+            style = style,
+            dimAlpha = tail,
+            modifier = modifier,
+            glowAlpha = 0f,
             glowRoom = room,
         )
     } else {

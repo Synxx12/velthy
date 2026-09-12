@@ -20,6 +20,15 @@ data class SavedAccount(
     val thumbnailUrl: String? = null,
     val cookie: String,
     val savedAt: Long = System.currentTimeMillis(),
+    /**
+     * The channel this session acts as, when one has been picked — the brand
+     * channel's id, or null for the account's own. Kept per account so that
+     * switching back and forth does not quietly drift to the login's default.
+     * See [com.velthy.client.data.innertube.Innertube.selectChannel].
+     */
+    val pageId: String? = null,
+    val dataSyncId: String? = null,
+    val channelName: String? = null,
 )
 
 /**

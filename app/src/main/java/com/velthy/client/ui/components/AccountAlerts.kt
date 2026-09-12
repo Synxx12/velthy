@@ -601,3 +601,116 @@ private fun AlertTextField(
         )
     }
 }
+
+/**
+ * Add or edit a source that has an address — the module editor.
+ *
+ * The same frosted card every other alert in this app uses, rather than the
+ * Material `AlertDialog` this replaced: that one put a filled `OutlinedTextField`
+ * and a row of cramped text buttons in the middle of a screen where nothing else
+ * looks like that, and it read as a stock widget dropped into somebody else's
+ * design.
+ *
+ * One field and up to four stacked actions. There is deliberately no name field:
+ * the row already falls back to the address's host, and a module that names
+ * itself fills that in on its own — asking the user to invent one is asking for
+ * information the module is about to supply anyway.
+ *
+ * [status] is the one thing here that no other alert in the file needs: testing
+ * an address has *three* outcomes rather than the usual two, and "it answered,
+ * but not with something this app can use" is the one worth reading — so a
+ * result replaces the description in place, coloured by [statusIsGood].
+ */
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+fun SourceEditorAlert(
+    hazeState: HazeState,
+    title: String,
+    description: String,
+    urlValue: String,
+    onUrlChange: (String) -> Unit,
+    urlPlaceholder: String,
+    /** What the last test said, or null before one has been run. */
+    status: String?,
+    statusIsGood: Boolean,
+    testing: Boolean,
+    /** Whether there is enough typed in to be worth testing or saving. */
+    canSubmit: Boolean,
+    onTest: () -> Unit,
+    onSave: () -> Unit,
+    /** Offered only for a source already stored — there is nothing to remove otherwise. */
+    onRemove: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    AlertScaffold(hazeState = hazeState, onDismiss = { if (!testing) onDismiss() }) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 19.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.W600),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = status ?: description,
+                modifier = Modifier.padding(top = 4.dp, bottom = 14.dp),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                color = when {
+                    status == null -> MaterialTheme.colorScheme.onSurface
+                    statusIsGood -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.error
+                },
+                textAlign = TextAlign.Center,
+            )
+            AlertTextField(
+                value = urlValue,
+                onValueChange = onUrlChange,
+                placeholder = urlPlaceholder,
+                enabled = !testing,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { if (canSubmit && !testing) onSave() }),
+            )
+        }
+        AlertRule()
+        // Above Save rather than beside it: an address is worth checking before
+        // it is stored, and a row of three cramped buttons is what the Material
+        // dialog did badly.
+        AlertAction(
+            label = if (testing) "Testing…" else "Test",
+            emphasised = false,
+            onClick = onTest,
+            enabled = canSubmit && !testing,
+        )
+        AlertRule()
+        AlertAction(
+            label = "Save",
+            emphasised = true,
+            onClick = onSave,
+            enabled = canSubmit && !testing,
+        )
+        if (onRemove != null) {
+            AlertRule()
+            AlertAction(
+                label = "Remove source",
+                emphasised = false,
+                destructive = true,
+                onClick = onRemove,
+                enabled = !testing,
+            )
+        }
+        AlertRule()
+        AlertAction(
+            label = "Cancel",
+            emphasised = false,
+            onClick = onDismiss,
+            enabled = !testing,
+        )
+    }
+}

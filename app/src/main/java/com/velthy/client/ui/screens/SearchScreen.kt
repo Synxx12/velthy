@@ -4,6 +4,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,34 +20,38 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -78,18 +83,22 @@ fun SearchScreen(
     filter: SearchFilter,
     onFilterChange: (SearchFilter) -> Unit,
     results: UiState<List<SearchResult>>?,
+    loadingMore: Boolean,
+    onLoadMore: () -> Unit,
     listState: LazyListState,
-    recentSongs: List<Song> = emptyList(),
     /**
-     * Incremented by the nav bar each time the user re-taps the Search tab
-     * while already on it. A [LaunchedEffect] watches it and requests focus
-     * on the field, opening the keyboard so the user can start typing without
-     * hunting for the field.
+     * Incremented by the view model once per first-page request, so a new search
+     * can't inherit the scroll position of the last one (or of the recent
+     * searches the user just came from).
      */
-    focusTrigger: Int = 0,
+    scrollResetTrigger: Int = 0,
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onSongSwipe: (Song) -> Unit,
+    /** The promoted card's Play — the same station a tapped result starts. */
+    onTopResultPlay: (Song) -> Unit,
+    /** The promoted card's Playlist — opens the add-to-playlist picker. */
+    onTopResultPlaylist: (Song) -> Unit,
     onBrowseClick: (BrowseItem) -> Unit,
     /**
      * Holding an album or playlist hit rather than tapping it — the same menu
@@ -99,92 +108,159 @@ fun SearchScreen(
     onBrowseLongPress: ((BrowseItem) -> Unit)? = null,
     history: List<String>,
     suggestions: List<String> = emptyList(),
+    onSuggestionClick: (String) -> Unit = {},
+    onSuggestionFill: (String) -> Unit = {},
+    /**
+     * What the catalogue answers the typed text with, shown under the
+     * completions — the Apple Music shape: keywords first, then a glimpse of
+     * the songs themselves so the right one can be tapped without going through
+     * a results page.
+     */
+    previewSongs: List<Song> = emptyList(),
+    onPreviewSongPlay: (Song) -> Unit = {},
     onHistoryClick: (String) -> Unit,
     onHistoryRemove: (String) -> Unit,
     onHistoryClear: () -> Unit,
-    onSuggestionClick: (String) -> Unit = {},
-    onCategoryClick: (browseId: String, title: String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues,
 ) {
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = contentPadding,
-    ) {
-        // The filters only mean something once there is a result set to narrow
-        if (results != null) {
-            item {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(top = 4.dp, bottom = 6.dp),
-                ) {
-                    items(SearchFilter.entries) { entry ->
-                        FilterPill(
-                            label = entry.label,
-                            selected = entry == filter,
-                            onClick = { onFilterChange(entry) },
-                        )
-                    }
-                }
+    val focusManager = LocalFocusManager.current
+    // Search keeps one list state while its contents change. Reset it for each
+    // new request so choosing a recent search cannot inherit the history's
+    // previous scroll position (or a previous result page's position).
+    LaunchedEffect(scrollResetTrigger) {
+        if (scrollResetTrigger > 0) listState.scrollToItem(0)
+    }
+    // A non-empty suggestion list means the field is mid-edit — see
+    // MainViewModel.onQueryChange. Nothing below it is worth showing while it is
+    // up: the results are for whatever was searched before this edit began, and
+    // so are the filter tabs above them.
+    val suggesting = suggestions.isNotEmpty()
+    LaunchedEffect(listState, results, loadingMore) {
+        if (results !is UiState.Success) return@LaunchedEffect
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            (layout.visibleItemsInfo.lastOrNull()?.index ?: -1) to layout.totalItemsCount
+        }.collect { (lastVisible, total) ->
+            if (!loadingMore && total > 0 && lastVisible >= total - 4) onLoadMore()
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        // The filter tabs stay fixed under the top bar, outside the scrolling
+        // list, so they're always reachable rather than scrolling away with the
+        // results beneath them. The bar's own height is reserved here so the
+        // list below never climbs under the glass.
+        Column(modifier = Modifier.padding(top = contentPadding.calculateTopPadding())) {
+            if (results != null && !suggesting) {
+                SearchFilterTabs(filter = filter, onFilterChange = onFilterChange)
             }
         }
 
-        when (results) {
-            null -> {
-                // Landing Page: Recent searches + Explore Categories
-                recentSearchesSection(
-                    recentSongs = recentSongs,
-                    history = history,
-                    onSongClick = { song -> onSongClick(listOf(song), 0) },
-                    onHistoryClick = onHistoryClick,
-                    onHistoryRemove = onHistoryRemove,
-                    onHistoryClear = onHistoryClear,
-                )
-
-                exploreCategoriesSection(onCategoryClick = onCategoryClick)
-            }
-            is UiState.Loading -> songListSkeleton(circular = filter == SearchFilter.ARTISTS)
-            is UiState.Error -> item { MessageState(results.message) }
-            is UiState.Success -> {
-                // Tapping a track plays the tracks around it, not the browse rows.
-                val tracks = results.data
-                    .filterIsInstance<SearchResult.Track>()
-                    .map { it.song }
-                itemsIndexed(
-                    items = results.data,
-                    key = { _, row ->
-                        when (row) {
-                            is SearchResult.Track -> "search_track_${row.song.videoId}"
-                            is SearchResult.Browse -> "search_browse_${row.item.type.name}_${row.item.browseId}"
-                        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding()),
+        ) {
+            if (suggesting) {
+                searchSuggestions(
+                    suggestions = suggestions,
+                    songs = previewSongs,
+                    // Picking one is done typing, so the keyboard comes down
+                    // with it and the results get the whole screen.
+                    onClick = { term ->
+                        onSuggestionClick(term)
+                        focusManager.clearFocus()
                     },
-                ) { index, row ->
-                    when (row) {
-                        is SearchResult.Track -> SongRow(
-                            song = row.song,
-                            onClick = {
-                                val trackIndex = tracks.indexOfFirst { it.videoId == row.song.videoId }.coerceAtLeast(0)
-                                onSongClick(tracks, trackIndex)
-                            },
-                            onLongPress = { onSongLongPress(row.song) },
-                            onSwipeToQueue = { onSongSwipe(row.song) },
-                            downloadedTint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        is SearchResult.Browse -> BrowseRow(
-                            item = row.item,
-                            onClick = { onBrowseClick(row.item) },
-                            onLongPress = onBrowseLongPress?.let { cb -> { cb(row.item) } },
-                        )
+                    onFill = onSuggestionFill,
+                    onSongClick = { song ->
+                        onPreviewSongPlay(song)
+                        focusManager.clearFocus()
+                    },
+                    onSongLongPress = onSongLongPress,
+                    onSongSwipe = onSongSwipe,
+                )
+            } else when (results) {
+                null -> if (history.isEmpty()) {
+                    item { MessageState("Search for songs, artists, albums and playlists") }
+                } else {
+                    recentSearches(history, onHistoryClick, onHistoryRemove, onHistoryClear)
+                }
+                is UiState.Loading -> songListSkeleton(circular = filter == SearchFilter.ARTISTS)
+                is UiState.Error -> item { MessageState(results.message) }
+                is UiState.Success -> {
+                    // Tapping a track plays the tracks around it, not the browse
+                    // rows, and not the promoted card.
+                    val tracks = results.data.mapNotNull { row ->
+                        when (row) {
+                            is SearchResult.TopTrack -> row.song
+                            is SearchResult.Track -> row.song
+                            is SearchResult.Browse -> null
+                        }
                     }
-                    if (index < results.data.lastIndex) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = ROW_DIVIDER_INSET),
-                            thickness = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outline,
-                        )
+                    val topResult = results.data.filterIsInstance<SearchResult.TopTrack>().firstOrNull()
+                    if (filter == SearchFilter.ALL && topResult != null) {
+                        item(key = "search:top-result:${topResult.song.videoId}") {
+                            TopResultCard(
+                                song = topResult.song,
+                                onPlay = { onTopResultPlay(topResult.song) },
+                                onPlaylist = { onTopResultPlaylist(topResult.song) },
+                                onLongPress = { onSongLongPress(topResult.song) },
+                            )
+                        }
                     }
+                    searchSections(results.data, filter).forEach { section ->
+                        section.title?.let { title ->
+                            item(key = "search-section:$title") {
+                                Text(
+                                    text = title,
+                                    modifier = Modifier.padding(
+                                        start = PAGE_GUTTER,
+                                        end = PAGE_GUTTER,
+                                        top = 16.dp,
+                                        bottom = 6.dp,
+                                    ),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                        itemsIndexed(
+                            items = section.rows,
+                            key = { _, row -> searchRowKey(row) },
+                        ) { index, row ->
+                            when (row) {
+                                is SearchResult.TopTrack -> Unit
+                                is SearchResult.Track -> SongRow(
+                                    song = row.song,
+                                    onClick = {
+                                        val at = tracks.indexOf(row.song).coerceAtLeast(0)
+                                        onSongClick(tracks, at)
+                                    },
+                                    onLongPress = { onSongLongPress(row.song) },
+                                    onSwipeToQueue = { onSongSwipe(row.song) },
+                                    downloadedTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                is SearchResult.Browse -> BrowseRow(
+                                    item = row.item,
+                                    onClick = { onBrowseClick(row.item) },
+                                    onLongPress = onBrowseLongPress?.let { cb -> { cb(row.item) } },
+                                )
+                            }
+                            if (index < section.rows.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(start = ROW_DIVIDER_INSET),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
+                        }
+                    }
+                    if (loadingMore) songListSkeleton(
+                        count = 3,
+                        keyPrefix = "skeleton:search:more",
+                        circular = filter == SearchFilter.ARTISTS,
+                    )
                 }
             }
         }
@@ -288,20 +364,269 @@ fun SearchTopBarField(
     }
 }
 
-/**
- * Recent searches: horizontal row of recently played songs + recent search queries.
- */
-private fun LazyListScope.recentSearchesSection(
-    recentSongs: List<Song>,
-    history: List<String>,
-    onSongClick: (Song) -> Unit,
-    onHistoryClick: (String) -> Unit,
-    onHistoryRemove: (String) -> Unit,
-    onHistoryClear: () -> Unit,
-) {
-    val hasHistory = history.isNotEmpty() || recentSongs.isNotEmpty()
-    if (!hasHistory) return
+private data class SearchSection(val title: String?, val rows: List<SearchResult>)
 
+/**
+ * The unfiltered page is useful only when its mixed result types are readable
+ * at a glance, so it is split into one section per kind. A filtered page is one
+ * kind already and stays a single untitled run.
+ */
+private fun searchSections(rows: List<SearchResult>, filter: SearchFilter): List<SearchSection> {
+    if (filter != SearchFilter.ALL) return listOf(SearchSection(null, rows))
+    return listOf(
+        SearchSection("Songs", rows.filterIsInstance<SearchResult.Track>()),
+        SearchSection(
+            "Artists",
+            rows.filterIsInstance<SearchResult.Browse>().filter { it.item.type == BrowseType.ARTIST },
+        ),
+        SearchSection(
+            "Albums",
+            rows.filterIsInstance<SearchResult.Browse>().filter { it.item.type == BrowseType.ALBUM },
+        ),
+        SearchSection(
+            "Playlists",
+            rows.filterIsInstance<SearchResult.Browse>().filter { it.item.type == BrowseType.PLAYLIST },
+        ),
+        SearchSection(
+            "More",
+            rows.filterIsInstance<SearchResult.Browse>().filter { it.item.type == BrowseType.OTHER },
+        ),
+    ).filter { it.rows.isNotEmpty() }
+}
+
+private fun searchRowKey(row: SearchResult): String = when (row) {
+    is SearchResult.TopTrack -> "search_top:${row.song.videoId}"
+    is SearchResult.Track -> "search_track:${row.song.videoId}"
+    is SearchResult.Browse -> "search_browse:${row.item.type.name}:${row.item.browseId}"
+}
+
+/**
+ * The promoted card the unfiltered page carries at its head.
+ *
+ * Deliberately louder than a row: it is the answer the search was most likely
+ * for, so it gets the artwork at a size you can recognise and the two things
+ * worth doing with it — play it, or put it on a playlist — without a trip
+ * through the long-press menu.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TopResultCard(
+    song: Song,
+    onPlay: () -> Unit,
+    onPlaylist: () -> Unit,
+    onLongPress: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = PAGE_GUTTER, end = PAGE_GUTTER, top = 18.dp, bottom = 8.dp)
+            .combinedClickable(onClick = onPlay, onLongClick = onLongPress),
+    ) {
+        Text(
+            text = "Top result",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(
+                model = song.thumbnailUrl.artworkAt(ROW_ART_PX),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = song.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = song.artist,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = onLongPress, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    Icons.Rounded.MoreVert,
+                    contentDescription = "More options",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                onClick = onPlay,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            ) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Play")
+            }
+            OutlinedButton(
+                onClick = onPlaylist,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Playlist")
+            }
+        }
+    }
+}
+
+/**
+ * What YouTube would complete the half-typed query to, in place of the results
+ * while it is being typed.
+ *
+ * The first row is the text as typed, put there by the view model rather than
+ * taken from YouTube's answer, so running exactly what was asked for is always
+ * the nearest row to the keyboard rather than something the thumb has to aim
+ * past.
+ */
+private fun LazyListScope.searchSuggestions(
+    suggestions: List<String>,
+    songs: List<Song>,
+    onClick: (String) -> Unit,
+    onFill: (String) -> Unit,
+    onSongClick: (Song) -> Unit,
+    onSongLongPress: (Song) -> Unit,
+    onSongSwipe: (Song) -> Unit,
+) {
+    // A list-level inset rather than padding hidden inside the first row, so the
+    // gap under the bar stays stable even when that row changes its text.
+    item(key = "suggestions:top-inset") { Spacer(Modifier.height(12.dp)) }
+    itemsIndexed(suggestions, key = { _, term -> "suggest:$term" }) { index, term ->
+        SuggestionRow(
+            term = term,
+            isQueryAction = index == 0,
+            // The lead row *is* what's in the field, so there is nothing to fill
+            // it with and the arrow would be a no-op button.
+            onFill = if (index == 0) null else ({ onFill(term) }),
+            onClick = { onClick(term) },
+        )
+    }
+    // The songs themselves, under the completions. Tapping one plays it on the
+    // spot — the same thing tapping it on the results page does — so the
+    // keywords and the song can be picked from the one list.
+    if (songs.isNotEmpty()) {
+        item(key = "preview:header") {
+            Text(
+                text = "Songs",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(
+                    start = PAGE_GUTTER,
+                    end = PAGE_GUTTER,
+                    top = 18.dp,
+                    bottom = 6.dp,
+                ),
+            )
+        }
+        itemsIndexed(songs, key = { _, song -> "preview:${song.videoId}" }) { index, song ->
+            SongRow(
+                song = song,
+                onClick = { onSongClick(song) },
+                onLongPress = { onSongLongPress(song) },
+                onSwipeToQueue = { onSongSwipe(song) },
+                downloadedTint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (index < songs.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = ROW_DIVIDER_INSET),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One typeahead row: tap the text to search it, or the arrow to put it in the
+ * field and carry on typing — the pair every mobile keyboard's own suggestion
+ * strip uses, and the reason a longer completion isn't a dead end when it's
+ * only nearly right.
+ */
+@Composable
+private fun SuggestionRow(
+    term: String,
+    isQueryAction: Boolean,
+    onFill: (() -> Unit)?,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = PAGE_GUTTER, end = 8.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Rounded.Search,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            // The first row is the deliberate action to search the exact text in
+            // the field, not a server-provided completion. Naming it makes the
+            // otherwise duplicated wording read as intentional.
+            text = if (isQueryAction) "Search \u201C$term\u201D" else term,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (onFill != null) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onFill),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    VelthyIcons.NorthWest,
+                    contentDescription = "Fill \"$term\"",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        } else {
+            // Match the arrow button's full touch target, not only its width: a
+            // width-only spacer left the first row shorter than the ones below.
+            Spacer(Modifier.size(40.dp))
+        }
+    }
+}
+
+/**
+ * What was searched for before, shown in place of the results while the field
+ * is empty.
+ */
+private fun LazyListScope.recentSearches(
+    history: List<String>,
+    onClick: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onClear: () -> Unit,
+) {
     item(key = "recent:header") {
         Row(
             modifier = Modifier
@@ -315,76 +640,23 @@ private fun LazyListScope.recentSearchesSection(
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.weight(1f),
             )
-            if (history.isNotEmpty()) {
-                Text(
-                    text = "Clear",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(percent = 50))
-                        .clickable(onClick = onHistoryClear)
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                )
-            }
+            Text(
+                text = "Clear",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(percent = 50))
+                    .clickable(onClick = onClear)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
         }
     }
-
-    if (recentSongs.isNotEmpty()) {
-        item(key = "recent:songs_row") {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(bottom = 12.dp),
-            ) {
-                items(recentSongs.take(10), key = { "recent_song_${it.videoId}" }) { song ->
-                    RecentSongCard(song = song, onClick = { onSongClick(song) })
-                }
-            }
-        }
-    }
-
-    items(history.take(5), key = { "recent_kw:$it" }) { term ->
+    items(history, key = { "recent_kw:$it" }) { term ->
         RecentSearchRow(
             term = term,
-            onClick = { onHistoryClick(term) },
-            onFill = { onHistoryClick(term) },
-            onRemove = { onHistoryRemove(term) },
-        )
-    }
-}
-
-@Composable
-private fun RecentSongCard(song: Song, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .width(115.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
-    ) {
-        AsyncImage(
-            model = song.thumbnailUrl.artworkAt(ROW_ART_PX),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(115.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .thumbnailBorder(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = song.title,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onBackground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = song.artist,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            onClick = { onClick(term) },
+            onFill = { onClick(term) },
+            onRemove = { onRemove(term) },
         )
     }
 }
@@ -449,114 +721,6 @@ private fun RecentSearchRow(
     }
 }
 
-/**
- * Explore Categories 2x2 grid.
- */
-private fun LazyListScope.exploreCategoriesSection(
-    onCategoryClick: (browseId: String, title: String) -> Unit,
-) {
-    item(key = "categories:header") {
-        Text(
-            text = "Explore Categories",
-            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, top = 20.dp, bottom = 12.dp),
-        )
-    }
-
-    item(key = "categories:grid") {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = PAGE_GUTTER),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                ExploreCategoryCard(
-                    title = "New Releases",
-                    gradient = Brush.linearGradient(listOf(Color(0xFFE91E63), Color(0xFF9C27B0))),
-                    icon = Icons.Rounded.Album,
-                    onClick = { onCategoryClick("FEmusic_new_releases", "New Releases") },
-                    modifier = Modifier.weight(1f),
-                )
-                ExploreCategoryCard(
-                    title = "Top Charts",
-                    gradient = Brush.linearGradient(listOf(Color(0xFFFF5722), Color(0xFFFF9800))),
-                    icon = VelthyIcons.TrendingUp,
-                    onClick = { onCategoryClick("FEmusic_charts", "Top Charts") },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                ExploreCategoryCard(
-                    title = "Moods & Genres",
-                    gradient = Brush.linearGradient(listOf(Color(0xFF3F51B5), Color(0xFF673AB7))),
-                    icon = Icons.Rounded.GraphicEq,
-                    onClick = { onCategoryClick("FEmusic_moods_and_genres", "Moods & Genres") },
-                    modifier = Modifier.weight(1f),
-                )
-                ExploreCategoryCard(
-                    title = "Podcasts & Shows",
-                    gradient = Brush.linearGradient(listOf(Color(0xFF009688), Color(0xFF00BCD4))),
-                    icon = VelthyIcons.Podcasts,
-                    onClick = { onCategoryClick("FEmusic_library_non_music_audio_list", "Podcasts & Shows") },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun ExploreCategoryCard(
-    title: String,
-    gradient: Brush,
-    icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .height(84.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(gradient)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-    ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            color = Color.White,
-            maxLines = 2,
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxWidth(0.64f),
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.22f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BrowseRow(
@@ -606,34 +770,57 @@ private fun BrowseRow(
     }
 }
 
-/** Fully rounded pill; Material's FilterChip can't be padded this tightly. */
+/**
+ * Filter pills rather than a tab row: squarish rounded rectangles, the selected
+ * one inverted. They scroll horizontally so a long label set never squeezes the
+ * text, and the gutter padding sits inside the scroll so it scrolls with them.
+ */
 @Composable
-private fun FilterPill(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun SearchFilterTabs(filter: SearchFilter, onFilterChange: (SearchFilter) -> Unit) {
     val haptics = rememberHaptics()
-    Box(
+    Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(percent = 50))
-            .background(
-                if (selected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-            )
-            .clickable {
-                if (!selected) haptics.play(Haptic.Select)
-                onClick()
-            }
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = PAGE_GUTTER, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            color = if (selected) {
-                MaterialTheme.colorScheme.onPrimary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-        )
+        SearchFilter.entries.forEach { entry ->
+            val selected = entry == filter
+            Box(
+                modifier = Modifier
+                    .clip(FILTER_PILL_SHAPE)
+                    .background(
+                        if (selected) {
+                            MaterialTheme.colorScheme.onBackground
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                    )
+                    // Only the pill that isn't already selected has anything to
+                    // report — re-tapping the current filter changes nothing, so
+                    // buzzing for it would be feedback for a no-op.
+                    .clickable {
+                        if (!selected) haptics.play(Haptic.Select)
+                        onFilterChange(entry)
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = entry.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.background
+                    } else {
+                        MaterialTheme.colorScheme.onBackground
+                    },
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
+
+/** Rounded, but well short of a capsule — the corner reads as a cut, not a curve. */
+private val FILTER_PILL_SHAPE = RoundedCornerShape(12.dp)

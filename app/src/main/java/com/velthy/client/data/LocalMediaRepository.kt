@@ -11,6 +11,7 @@ import android.provider.MediaStore
 import com.velthy.client.data.DebugLog as Log
 import androidx.core.content.ContextCompat
 import com.velthy.client.data.model.Song
+import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.download.DownloadStore
 import com.velthy.client.download.Downloads
 import kotlinx.coroutines.Dispatchers
@@ -113,7 +114,15 @@ object LocalMediaRepository {
             MediaStore.Audio.Media.DATA,
         )
 
-        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 5000"
+        // The music-only clause is a setting rather than a constant: on by
+        // default, which is exactly what this query always did, and off for a
+        // device whose audio library is deliberately everything it holds.
+        val musicOnly = if (AppSettings.filterNonMusicAudio.value) {
+            "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND "
+        } else {
+            ""
+        }
+        val selection = "$musicOnly${MediaStore.Audio.Media.DURATION} >= 5000"
         val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
 
         runCatching {

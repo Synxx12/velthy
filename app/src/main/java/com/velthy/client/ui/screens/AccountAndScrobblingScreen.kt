@@ -24,9 +24,9 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SwitchAccount
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -74,6 +74,7 @@ fun AccountAndScrobblingScreen(
     account: Account?,
     savedAccounts: List<SavedAccount> = emptyList(),
     currentCookie: String? = null,
+    channelName: String? = null,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onSyncNow: () -> Unit,
@@ -81,6 +82,7 @@ fun AccountAndScrobblingScreen(
     onSwitchAccount: (SavedAccount) -> Unit = {},
     onRemoveSavedAccount: (String) -> Unit = {},
     onAddAnotherAccount: () -> Unit = {},
+    onSwitchChannel: () -> Unit = {},
     onOpenDiscord: () -> Unit = {},
     onOpenListenBrainzLogin: () -> Unit,
     onOpenLastfmLogin: () -> Unit,
@@ -188,8 +190,28 @@ fun AccountAndScrobblingScreen(
                     onSignIn()
                 }
             },
-            onSignOutClick = { showSignOutConfirm = true },
         )
+
+        // ── Which channel of the account is playing ─────────────────────────
+        if (signedIn) {
+            SettingsGroup(
+                footer = "Your library, likes and history come from the channel " +
+                    "you pick here.",
+            ) {
+                SettingsRow(
+                    icon = Icons.Rounded.SwitchAccount,
+                    title = "Listen as",
+                    subtitle = channelName ?: "default YouTube profile",
+                    onClick = onSwitchChannel,
+                )
+            }
+
+            // Its own row, deliberately not on the account card: signing out is
+            // not something to catch while reaching for the account switcher.
+            SettingsGroup {
+                DestructiveRow(label = "Sign out", onClick = { showSignOutConfirm = true })
+            }
+        }
 
         // ── General Section ─────────────────────────────────────────────────
         SettingsGroup(
@@ -402,9 +424,17 @@ fun AccountAndScrobblingScreen(
 }
 
 /**
- * Large, premium account profile card mirroring YouTube Music's Account menu.
- * Features verified avatar badge, display name, handle, account switch button,
- * and distinct logout action.
+ * The signed-in profile, shaped the way BitChord's account card is: an avatar,
+ * the account's name and the handle it is known by — and nothing else.
+ *
+ * The verified badge and the inline log-out that used to live here were the
+ * app's own inventions. A YouTube channel is not "verified", and the tick was
+ * being read as "this account is confirmed" when it only ever meant "this is
+ * the one you are signed in as". Signing out is its own row, well away from a
+ * thing a listener taps to switch accounts.
+ *
+ * Tapping the card opens the account switcher; that is the only thing there is
+ * to do with it.
  */
 @Composable
 private fun ProfileAccountCard(
@@ -412,148 +442,63 @@ private fun ProfileAccountCard(
     account: Account?,
     onSignIn: () -> Unit,
     onAccountClick: () -> Unit,
-    onSignOutClick: () -> Unit,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = GROUP_INSET)
             .clip(RoundedCornerShape(22.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .then(if (signedIn) Modifier else Modifier.clickable(onClick = onSignIn))
-            .padding(horizontal = 20.dp, vertical = 20.dp),
+            .clickable(onClick = if (signedIn) onAccountClick else onSignIn)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            // Profile photo with verified badge
+        if (account?.thumbnailUrl != null) {
+            AsyncImage(
+                model = account.thumbnailUrl,
+                contentDescription = "Profile photo",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .thumbnailBorder(CircleShape),
+            )
+        } else {
             Box(
-                modifier = Modifier.size(68.dp),
-                contentAlignment = Alignment.BottomEnd,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
             ) {
-                if (account?.thumbnailUrl != null) {
-                    AsyncImage(
-                        model = account.thumbnailUrl,
-                        contentDescription = "Profile Photo",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(68.dp)
-                            .clip(CircleShape)
-                            .thumbnailBorder(CircleShape),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(68.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Person,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(36.dp),
-                        )
-                    }
-                }
-
-                if (signedIn) {
-                    // Blue verified checkmark circle
-                    Box(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF3B82F6)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Check,
-                            contentDescription = "Verified Account",
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.width(16.dp))
-
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = account?.name ?: if (signedIn) "YouTube User" else "Not signed in",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = account?.email?.takeIf { it.isNotBlank() }
-                        ?: if (signedIn) "YouTube Music connected" else "Tap to sign in with Google",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Icon(
+                    imageVector = Icons.Rounded.Person,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(30.dp),
                 )
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.width(14.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Pill button [ 👤 Account ▾ ]
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.75f),
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable(onClick = onAccountClick),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Person,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(17.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = if (signedIn) "Account" else "Sign in",
-                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            if (signedIn) {
-                // Log out button
-                Text(
-                    text = "Log out",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-                    color = Color(0xFFFF8B8B),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onSignOutClick)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                )
-            }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = account?.name ?: if (signedIn) "YouTube User" else "Not signed in",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = account?.email?.takeIf { it.isNotBlank() }
+                    ?: if (signedIn) "YouTube Music connected" else "Tap to sign in with Google",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
