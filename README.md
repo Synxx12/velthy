@@ -8,6 +8,8 @@
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack_Compose-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/compose)
 [![Website](https://img.shields.io/badge/Website-velthy.my.id-blue?style=for-the-badge)](https://velthy.my.id)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=for-the-badge)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/Synxx12/velthy/total?style=for-the-badge&labelColor=0d1117)](https://github.com/Synxx12/velthy/releases)
+
 
 <br/>
 
