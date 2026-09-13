@@ -17,7 +17,13 @@ object SleepTimer {
     /** Deadline on [SystemClock.elapsedRealtime], or null when no timer is set. */
     val deadline = MutableStateFlow<Long?>(null)
 
-    /** The preset that was chosen, so the picker can tick it. Null when off. */
+    /**
+     * The preset that was chosen, so the picker can tick it.
+     *
+     * Null when off — and null once [extend] has added time, because no rung of
+     * the picker describes that wait any more. Which is why "is a timer armed"
+     * is asked of [deadline] and never of this.
+     */
     val minutes = MutableStateFlow<Int?>(null)
 
     /**
@@ -41,6 +47,26 @@ object SleepTimer {
         deadline.value = SystemClock.elapsedRealtime() + minutes * 60_000L
     }
 
+    /**
+     * Pushes the deadline [minutes] further out.
+     *
+     * Counted from the deadline rather than from now, so adding five minutes to
+     * a timer with twelve left leaves seventeen — and a timer that has already
+     * reached zero starts again from this moment rather than landing in the
+     * past.
+     *
+     * [PRESETS] is deliberately left alone and [minutes] is cleared: what the
+     * picker offers and what the clock says are different questions, and after
+     * this neither rung describes the wait. An armed timer is a set [deadline],
+     * so everything that reads one keeps working.
+     */
+    fun extend(minutes: Int) {
+        val now = SystemClock.elapsedRealtime()
+        val base = deadline.value?.takeIf { it > now } ?: now
+        this.minutes.value = null
+        deadline.value = base + minutes * 60_000L
+    }
+
     /** Pause once the track playing right now finishes. */
     fun startAfterTrack() {
         minutes.value = null
@@ -57,4 +83,14 @@ object SleepTimer {
     /** How long is left, or null when no timer is running. */
     fun remainingMs(): Long? =
         deadline.value?.let { (it - SystemClock.elapsedRealtime()).coerceAtLeast(0L) }
+
+    /**
+     * "m:ss" for a stretch of millis — the shape every countdown readout on this
+     * timer speaks, so the sheet, the picker and anything added later agree on
+     * what is left rather than each rounding it their own way.
+     */
+    fun clock(ms: Long): String {
+        val seconds = (ms / 1000L).coerceAtLeast(0L)
+        return "%d:%02d".format(seconds / 60, seconds % 60)
+    }
 }

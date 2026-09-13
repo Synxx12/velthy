@@ -1,5 +1,9 @@
 package com.velthy.client.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Column
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -30,7 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -51,20 +57,22 @@ import com.velthy.client.data.sources.SourceConfig
 import com.velthy.client.data.sources.SourceHealth
 import com.velthy.client.data.sources.SourceKind
 import com.velthy.client.data.sources.SourceRegistry
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
  * Where the app is allowed to get audio from.
  *
- * Two questions live here. **Lossless** is a preference over the connection's
- * own quality ceiling — the master switch that can only take lossless away,
- * never grant it above the ceiling. **Sources** is the list, and its order is
- * the order they are tried: only the sources the user added can be dragged,
- * because a built-in kind's rank is fixed and a gesture should not be able to
- * argue with it. The arrangement is written when the finger is lifted rather
- * than per frame — persisting and rebuilding every source's instance is not
- * work to do mid-gesture.
+ * The list leads, because it is what the screen is for: **Sources** is the order
+ * they are tried, and only the sources the user added can be dragged, because a
+ * built-in kind's rank is fixed and a gesture should not be able to argue with
+ * it. The arrangement is written when the finger is lifted rather than per
+ * frame — persisting and rebuilding every source's instance is not work to do
+ * mid-gesture. **Lossless** closes the page as its footnote: a preference over
+ * the connection's own quality ceiling, the master switch that can only take
+ * lossless away, never grant it above the ceiling.
  *
  * Nothing here downloads code, and nothing on it can teach the app a new way to
  * behave after it has shipped — a module supplies audio, not instructions.
@@ -90,14 +98,6 @@ fun SourcesScreen(
 
     /** Last known reachability per source, filled in as the probes come back. */
     val health = remember { mutableStateMapOf<String, SourceHealth>() }
-
-    /** The sources the user added — the only rows a drag may move. */
-    val movable = configs.filter { it.kind.isUserAdded }
-
-    /** The arrangement on screen while a drag is in progress; committed on release. */
-    val reorder = remember { SourcesReorderState(movable) }
-    reorder.onCommit = { SourceRegistry.reorderAddons(it) }
-    LaunchedEffect(configs) { reorder.sync(configs.filter { it.kind.isUserAdded }) }
 
     // Every source that has a server to reach is probed, not just the built-in
     // module, so a custom index gets the same reachability line — which is the
@@ -132,91 +132,54 @@ fun SourcesScreen(
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp),
         )
 
-        SettingsGroup(
-            header = "Lossless audio",
-            // Said plainly because the alternative is a switch that appears to
-            // do something and doesn't. YouTube publishes no lossless rendition
-            // of anything, so on a stock install this preference is inert until
-            // a source that can serve lossless is added below.
-            footer = when {
-                !anyLosslessSource ->
-                    "Nothing enabled below can serve lossless yet. Add a module source below, " +
-                        "and tracks it holds a lossless rendition of will play as the file itself " +
-                        "rather than as a transcode."
-                losslessCapped ->
-                    "Currently overridden: the quality ceiling for this connection is set below " +
-                        "Lossless, and that budget wins. Set On Wi-Fi (or On mobile data) to " +
-                        "Lossless to hear the files."
-                else ->
-                    "Asks the source for the file it holds instead of a transcode of it. " +
-                        "Costs considerably more data than High, and does nothing when it has no " +
-                        "lossless rendition to give."
-            },
-        ) {
-            SettingsRow(
-                icon = Icons.Rounded.GraphicEq,
-                title = "Prefer lossless",
-                subtitle = "FLAC and ALAC straight from the source",
-                badge = "Overridden".takeIf { lossless && losslessCapped },
-                trailing = {
-                    Switch(
-                        checked = lossless,
-                        onCheckedChange = AppSettings::setLosslessAudio,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setLosslessAudio(!lossless) },
-            )
-        }
-
+        // The list leads the page and the preference below is the footnote, which
+        // is how the reference screen reads: what you came for first, the one
+        // switch that governs it after.
         SettingsGroup(
             header = "Sources — tried in this order",
-            footer = "A source that doesn't have the track, or can't be reached, is " +
-                "stepped over rather than failing playback — the next one down plays it " +
-                "instead. The sources you add come first, and you can drag them to set " +
-                "which is asked before the others.",
+            footer = "The first source that has the track plays it; the rest are " +
+                "stepped over rather than failing playback. With two or more custom " +
+                "sources, drag them to set which is asked before the others.",
         ) {
-            // One continuously numbered list: the numbers say what order the
-            // sources are tried in, and restarting the count under a second
-            // heading would break the one thing this screen is for. Only the
-            // user's own rows carry a handle — a built-in kind's rank is fixed
-            // in [SourceKind] and a drag could not change what is asked first.
-            val fixed = configs.filterNot { it.kind.isUserAdded }.sortedBy { it.kind.ordinal }
-            val draggable = reorder.order.size > 1
+            // The addons are split out from the rest because they are the only
+            // rows whose order is the *user's*. Everything else ranks by kind,
+            // which is fixed in [SourceKind] and not something a drag should be
+            // able to argue with — a gesture that let JioSaavn be dragged above
+            // an addon would be offering a choice the resolver does not
+            // actually honour.
+            //
+            // They are still one continuously numbered list. The numbers say
+            // what order the sources are tried in, and restarting the count
+            // under a second heading would break the one thing this screen is
+            // for.
+            val addons = configs.filter { it.kind.isUserAdded }
+            val fixed = configs.filterNot { it.kind.isUserAdded }.sortedBy { it.kind.rank }
 
-            reorder.order.forEachIndexed { index, config ->
-                if (index > 0) RowDivider()
-                // Keyed by config id, not by position: a row that keys on its
-                // index is torn down and rebuilt the moment it is swapped, and
-                // the drag gesture dies with it.
-                key(config.id) {
-                    val dragging = reorder.draggedId == config.id
+            val row: @Composable (Int, SourceConfig, (@Composable () -> Unit)?) -> Unit =
+                { position, config, handle ->
                     SourceRow(
-                        position = index + 1,
+                        position = position,
                         config = config,
                         health = health[config.id],
                         onClick = { onEditSource(config) },
                         onToggle = { SourceRegistry.setEnabled(config.id, it) },
-                        draggable = draggable,
-                        dragging = dragging,
-                        onDragStart = { reorder.onDragStart(config.id) },
-                        onDrag = reorder::onDrag,
-                        onDragEnd = reorder::onDragEnd,
-                        onHeight = { reorder.heights[config.id] = it },
-                        modifier = Modifier
-                            .zIndex(if (dragging) 1f else 0f)
-                            .graphicsLayer { translationY = if (dragging) reorder.dragOffset else 0f },
+                        handle = handle,
                     )
                 }
-            }
 
+            ReorderableAddons(
+                addons = addons,
+                onReorder = { SourceRegistry.reorderAddons(it.map(SourceConfig::id)) },
+                row = row,
+            )
+
+            // No leading divider when addons came first: each of those wrappers
+            // ends with one, which is what makes them all the same height for
+            // the drag to measure against.
             fixed.forEachIndexed { index, config ->
-                if (index > 0 || reorder.order.isNotEmpty()) RowDivider()
+                if (index > 0) RowDivider()
                 SourceRow(
-                    position = reorder.order.size + index + 1,
+                    position = addons.size + index + 1,
                     config = config,
                     health = health[config.id],
                     // The built-in module has an address worth editing; JioSaavn
@@ -240,79 +203,257 @@ fun SourcesScreen(
             )
         }
 
+        SettingsGroup(
+            header = "Lossless audio",
+            // Kept to a line each: a footnote here explains one switch, and the
+            // only three states worth spelling out are the ones where the switch
+            // on its own would read as doing nothing.
+            footer = when {
+                !anyLosslessSource -> "Nothing enabled above can serve lossless yet."
+                losslessCapped -> "Overridden — this connection's ceiling sits below Lossless."
+                else -> "Plays the file the source holds instead of a transcode. Uses much more data."
+            },
+        ) {
+            SettingsRow(
+                icon = Icons.Rounded.GraphicEq,
+                title = "Prefer lossless",
+                subtitle = "FLAC and ALAC straight from the source",
+                badge = "Overridden".takeIf { lossless && losslessCapped },
+                trailing = {
+                    Switch(
+                        checked = lossless,
+                        onCheckedChange = AppSettings::setLosslessAudio,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setLosslessAudio(!lossless) },
+            )
+        }
+
         Spacer(Modifier.height(32.dp))
     }
 }
 
 /**
- * Drag-to-reorder for the user's own sources.
+ * The addon rows, draggable by their handles to set which is asked first.
  *
- * The order lives here rather than in [SourceRegistry] while a drag is in
- * progress — the registry is written once, on release, because persisting and
- * rebuilding every source's instance is not work to do per frame. Rows move one
- * slot at a time as the finger clears half of a neighbour, which is what makes
- * each swap unambiguous; [dragOffset] is corrected by that neighbour's height
- * every time, so the dragged row stays put under the finger while its slot
- * moves. Row heights come from layout rather than a constant, because a row
- * whose name wraps to two lines is taller and the threshold has to follow it.
+ * The gesture keeps only how far the finger has travelled and which slot it
+ * started on, and both where the row is drawn and which slot it occupies are
+ * derived from those two numbers, so they cannot drift apart however many swaps
+ * happen along the way.
+ *
+ * It should read as one movement rather than a list of jumps. The row under the
+ * finger tracks it exactly; when a swap is decided, the row it displaced
+ * springs into the slot it vacated and the dragged row lifts a hair with a
+ * shadow over it, and one haptic tick marks the crossing. All of that is drawn
+ * from state read in the draw phase, so the gesture costs a repaint per frame
+ * and never a recomposition of the list.
+ *
+ * The drag lives on the handle alone rather than on the whole row: the handle's
+ * [detectDragGestures] consumes the vertical drag before the scroll container
+ * sees it, while a drag anywhere on the row would make the page impossible to
+ * scroll past. And the order is written back only when the gesture ends —
+ * [SourceRegistry.reorderAddons] persists to encrypted prefs and rebuilds the
+ * source instances, which is not work to do on every frame of a drag.
+ *
+ * No handle is drawn for a single addon. There is nothing to reorder, and a
+ * grip that cannot move anything is a control that lies.
  */
-private class SourcesReorderState(initial: List<SourceConfig>) {
-    val order = mutableStateListOf<SourceConfig>().apply { addAll(initial) }
-
-    /** Row heights by config id, measured from layout. */
-    val heights = mutableStateMapOf<String, Int>()
-
-    var draggedId by mutableStateOf<String?>(null)
-        private set
-    var dragOffset by mutableFloatStateOf(0f)
-        private set
-
-    /** Writes the final arrangement; called once the finger is lifted. */
-    var onCommit: (List<String>) -> Unit = {}
-
-    /** Adopts the registry's list whenever the user is not mid-drag. */
-    fun sync(configs: List<SourceConfig>) {
-        if (draggedId != null) return
-        if (order.map { it.id } == configs.map { it.id }) return
-        order.clear()
-        order.addAll(configs)
+@Composable
+private fun ReorderableAddons(
+    addons: List<SourceConfig>,
+    onReorder: (List<SourceConfig>) -> Unit,
+    row: @Composable (Int, SourceConfig, (@Composable () -> Unit)?) -> Unit,
+) {
+    if (addons.isEmpty()) return
+    if (addons.size == 1) {
+        row(1, addons.first(), null)
+        // The same trailing rule the reorderable rows below emit, so the row
+        // that follows this block is separated whichever branch drew it.
+        RowDivider()
+        return
     }
 
-    fun onDragStart(id: String) {
-        draggedId = id
-        dragOffset = 0f
-    }
+    val haptics = rememberHaptics()
+    val cardShape = remember { RoundedCornerShape(12.dp) }
 
-    fun onDrag(deltaY: Float) {
-        val id = draggedId ?: return
-        dragOffset += deltaY
-        var index = order.indexOfFirst { it.id == id }
-        if (index < 0) return
-        while (index < order.lastIndex) {
-            val below = order[index + 1]
-            val height = heights[below.id] ?: break
-            if (dragOffset <= height / 2f) break
-            dragOffset -= height
-            order.add(index + 1, order.removeAt(index))
-            index++
+    var liveOrder by remember(addons) { mutableStateOf(addons) }
+    var dragged by remember { mutableStateOf<String?>(null) }
+
+    /** Distance the finger has covered since this gesture began, in pixels. */
+    var totalDrag by remember { mutableFloatStateOf(0f) }
+
+    /** Which slot of [liveOrder] it began on. */
+    var startIndex by remember { mutableIntStateOf(0) }
+
+    // The distance from one row's top to the next — the row plus the hairline
+    // after it, measured off the wrapper holding both. Frozen for the duration
+    // of a gesture so a relayout mid-drag cannot move the boundaries the drag
+    // is being measured against underneath it.
+    var pitchPx by remember { mutableFloatStateOf(0f) }
+    var lockedPitchPx by remember { mutableFloatStateOf(0f) }
+
+    liveOrder.forEachIndexed { index, config ->
+        // Keyed on the config's id so this composable — gesture and all —
+        // follows that addon from slot to slot. Matched by position instead,
+        // the first swap would change the key under the finger, restart the
+        // `pointerInput` coroutine mid-gesture, and stall the drag one swap
+        // after it started.
+        key(config.id) {
+            val isDragging = config.id == dragged
+
+            // The row under the finger is the only one with a position of its
+            // own; when a swap hands its neighbour a new slot, that neighbour's
+            // jump is played back as motion instead — the offset snaps to where
+            // it was drawn a moment ago and springs to zero, so the list closes
+            // up behind the drag rather than blinking into place. Read in the
+            // draw phase, so a row on its way repaints without recomposing the
+            // list around it.
+            val slotShift = remember { Animatable(0f) }
+            var settledIndex by remember { mutableIntStateOf(index) }
+            LaunchedEffect(index) {
+                val moved = index - settledIndex
+                settledIndex = index
+                if (moved != 0 && config.id != dragged) {
+                    slotShift.snapTo(-moved * pitchPx)
+                    slotShift.animateTo(0f, spring(dampingRatio = 0.9f, stiffness = 900f))
+                }
+            }
+
+            // The lifted card, kept in step with the queue's own reorder so the
+            // two gestures read alike: the row under the finger rises a hair and
+            // carries a shadow, and nothing else on the screen moves.
+            val lift by animateFloatAsState(
+                targetValue = if (isDragging) 1.02f else 1f,
+                animationSpec = spring(dampingRatio = 0.85f, stiffness = 1200f),
+                label = "sourceRowLift",
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .zIndex(if (isDragging) 1f else 0f)
+                    .onSizeChanged { pitchPx = it.height.toFloat() }
+                    .graphicsLayer {
+                        // Read in the draw phase, so a drag moves the row
+                        // without recomposing the list at all. The row sits
+                        // wherever the finger has carried it from where it was
+                        // picked up, less whatever the swaps have already moved
+                        // its slot — so a swap relocates the slot and shortens
+                        // this by exactly as much, and the row does not budge.
+                        translationY = if (isDragging) {
+                            totalDrag -
+                                (liveOrder.indexOfFirst { it.id == config.id } - startIndex) * lockedPitchPx
+                        } else {
+                            slotShift.value
+                        }
+                        scaleX = lift
+                        scaleY = lift
+                        shape = cardShape
+                        clip = isDragging
+                        shadowElevation = if (isDragging) 8.dp.toPx() else 0f
+                    }
+                    .background(
+                        color = if (isDragging) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                        shape = cardShape,
+                    ),
+            ) {
+                row(index + 1, config) {
+                    Icon(
+                        imageVector = Icons.Rounded.DragHandle,
+                        contentDescription = "Drag to reorder",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            // A constant key on purpose: the row is pinned by
+                            // [key] above, so nothing about a reorder should
+                            // restart this coroutine.
+                            .pointerInput(Unit) {
+                                detectDragGestures(
+                                    onDragStart = {
+                                        dragged = config.id
+                                        totalDrag = 0f
+                                        startIndex = liveOrder.indexOfFirst { it.id == config.id }
+                                        lockedPitchPx = pitchPx
+                                    },
+                                    onDrag = { change, delta ->
+                                        change.consume()
+                                        val pitch = lockedPitchPx
+                                        if (pitch <= 0f) return@detectDragGestures
+                                        var at = liveOrder.indexOfFirst { it.id == config.id }
+                                        if (at < 0) return@detectDragGestures
+
+                                        // Held past either end the row stops
+                                        // there under the finger, rather than
+                                        // running off the list and having to be
+                                        // dragged all the way back.
+                                        totalDrag = (totalDrag + delta.y).coerceIn(
+                                            -startIndex * pitch,
+                                            (liveOrder.lastIndex - startIndex) * pitch,
+                                        )
+
+                                        // A loop, not an `if`: one pointer event
+                                        // can cover several rows when the finger
+                                        // is quick, and settling one row per
+                                        // event would leave the list trailing.
+                                        var swaps = 0
+                                        while (true) {
+                                            val travelled = totalDrag / pitch
+                                            val moved = (at - startIndex).toFloat()
+                                            if (travelled > moved + SWAP_THRESHOLD && at < liveOrder.lastIndex) {
+                                                liveOrder = liveOrder.toMutableList()
+                                                    .apply { add(at + 1, removeAt(at)) }
+                                                at++
+                                                swaps++
+                                            } else if (travelled < moved - SWAP_THRESHOLD && at > 0) {
+                                                liveOrder = liveOrder.toMutableList()
+                                                    .apply { add(at - 1, removeAt(at)) }
+                                                at--
+                                                swaps++
+                                            } else {
+                                                break
+                                            }
+                                        }
+                                        // One tick per crossing, not per row
+                                        // covered — a quick flick that clears
+                                        // three rows is still one movement of
+                                        // the finger, and should feel like one.
+                                        if (swaps > 0) haptics.play(Haptic.Tick)
+                                    },
+                                    onDragEnd = {
+                                        dragged = null
+                                        totalDrag = 0f
+                                        onReorder(liveOrder)
+                                    },
+                                    onDragCancel = {
+                                        dragged = null
+                                        totalDrag = 0f
+                                        liveOrder = addons
+                                    },
+                                )
+                            },
+                    )
+                }
+                // After the row, not before it, so every wrapper is exactly one
+                // row plus one hairline — the pitch the drag measures against.
+                RowDivider()
+            }
         }
-        while (index > 0) {
-            val above = order[index - 1]
-            val height = heights[above.id] ?: break
-            if (dragOffset >= -height / 2f) break
-            dragOffset += height
-            order.add(index - 1, order.removeAt(index))
-            index--
-        }
-    }
-
-    fun onDragEnd() {
-        if (draggedId == null) return
-        draggedId = null
-        dragOffset = 0f
-        onCommit(order.map { it.id })
     }
 }
+
+/**
+ * How far past a neighbour the finger has to carry a row before the two trade
+ * places, as a share of one row's pitch.
+ *
+ * Deliberately more than half: at exactly half, a row that has just swapped
+ * lands precisely on the boundary of swapping back, so the shake in any real
+ * finger flips it back and forth for as long as it is held near a crossing.
+ */
+private const val SWAP_THRESHOLD = 0.6f
 
 @Composable
 private fun SourceRow(
@@ -323,48 +464,22 @@ private fun SourceRow(
     /** Null for a source that cannot be switched off, which gets a label instead. */
     onToggle: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
-    /** Only the user's own sources carry a handle — see [SourcesScreen]. */
-    draggable: Boolean = false,
-    dragging: Boolean = false,
-    onDragStart: () -> Unit = {},
-    onDrag: (Float) -> Unit = {},
-    onDragEnd: () -> Unit = {},
-    onHeight: (Int) -> Unit = {},
+    /**
+     * The drag grip, for a row whose position is the user's to set. Passed in
+     * rather than drawn here because the gesture belongs to the list that knows
+     * the other rows — see [ReorderableAddons] — and null for every row whose
+     * rank is fixed by its kind.
+     */
+    handle: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
-            .onSizeChanged { onHeight(it.height) }
             .fillMaxWidth()
             .clickable(enabled = onClick != null) { onClick?.invoke() }
             .heightIn(min = 60.dp)
             .padding(horizontal = ROW_INSET, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The handle is the only thing that starts a drag — the row itself has
-        // to stay free for a tap and for the page to scroll under a finger.
-        // With one source there is nothing to reorder, so it is not drawn.
-        if (draggable) {
-            Icon(
-                imageVector = Icons.Rounded.DragHandle,
-                contentDescription = "Drag to reorder",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .size(20.dp)
-                    .alpha(if (config.enabled) 1f else 0.4f)
-                    .pointerInput(config.id) {
-                        detectDragGestures(
-                            onDragStart = { onDragStart() },
-                            onDragEnd = { onDragEnd() },
-                            onDragCancel = { onDragEnd() },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                onDrag(amount.y)
-                            },
-                        )
-                    },
-            )
-            Spacer(Modifier.width(4.dp))
-        }
         Text(
             text = "$position",
             style = MaterialTheme.typography.bodyLarge,
@@ -430,6 +545,13 @@ private fun SourceRow(
                     checkedBorderColor = MaterialTheme.colorScheme.primary,
                 ),
             )
+        }
+        // Outside the dimming above, and last in the row: the grip is the
+        // surface that starts the drag, so it has to sit clear of the switch —
+        // a press meant for it must never land on the switch instead.
+        if (handle != null) {
+            Spacer(Modifier.width(4.dp))
+            handle()
         }
     }
 }

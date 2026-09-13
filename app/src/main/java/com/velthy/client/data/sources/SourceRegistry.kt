@@ -164,14 +164,16 @@ object SourceRegistry {
      * The enabled sources, in the order they are tried: the ones the user added
      * first, in the order they arranged them, then the rest by kind.
      *
-     * The sort is stable, so two sources of the same kind keep the order they
+     * The sort is stable, so two sources of the same rank keep the order they
      * are held in — which is what makes the stored list the priority order for
-     * the user's own sources without a rank field to carry it. See [reorderAddons].
+     * the user's own sources. Writing a rank alongside would be a second source
+     * of truth for a fact the list already states, and the two would drift the
+     * first time one was written without the other. See [reorderAddons].
      */
     fun active(): List<MusicSource> =
         configs.value
             .filter { it.enabled && it.isComplete }
-            .sortedBy { it.kind.ordinal }
+            .sortedBy { it.kind.rank }
             .mapNotNull { instances[it.id] }
 
     fun instance(configId: String): MusicSource? = instances[configId]
@@ -186,8 +188,8 @@ object SourceRegistry {
      * Puts the user-added sources in [ids], the order they will be asked in.
      *
      * The stored list *is* the priority order and needs no rank field to carry
-     * it: [active] sorts by [SourceKind.ordinal] and Kotlin's sort is stable,
-     * so two sources of the same kind keep the order they are held in here.
+     * it: [active] sorts by [SourceKind.rank] and Kotlin's sort is stable,
+     * so two sources of the same rank keep the order they are held in here.
      *
      * Ids that name nothing are dropped, and sources the caller forgot are
      * appended, so a list that has moved on since the drag started — a source

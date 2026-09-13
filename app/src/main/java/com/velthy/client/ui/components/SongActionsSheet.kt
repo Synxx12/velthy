@@ -26,9 +26,9 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Bedtime
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Download
@@ -63,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -433,9 +434,8 @@ private fun DownloadRow(song: Song, palette: ArtworkPalette, isOffline: Boolean,
 /** End of track or a duration, plus a way out once one is running. */
 @Composable
 private fun SleepTimerPicker(palette: ArtworkPalette, onBack: () -> Unit) {
-    val chosen by SleepTimer.minutes.collectAsStateWithLifecycle()
     val afterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
-    val countdown = sleepTimerCountdown()
+    val remaining = sleepTimerRemainingMs()
 
     Column(
         modifier = Modifier
@@ -467,64 +467,106 @@ private fun SleepTimerPicker(palette: ArtworkPalette, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.weight(1f),
             )
-            val statusText = when {
-                countdown != null -> "$countdown left"
-                afterTrack -> "End of song"
-                else -> "Off"
-            }
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = if (countdown != null || afterTrack) palette.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
 
-        // Compact Grouped Inset
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.White.copy(alpha = 0.08f)),
-        ) {
-            SleepOption(label = "After this song", selected = afterTrack, accent = palette.accent) {
-                SleepTimer.startAfterTrack()
-                onBack()
-            }
-
-            HorizontalDivider(
-                modifier = Modifier.padding(start = 16.dp),
-                thickness = 0.5.dp,
-                color = palette.divider,
-            )
-
-            val presets = listOf(
-                15 to "15 minutes",
-                30 to "30 minutes",
-                45 to "45 minutes",
-                60 to "1 hour",
-            )
-
-            presets.forEachIndexed { index, (minutes, label) ->
-                SleepOption(
-                    label = label,
-                    selected = minutes == chosen,
-                    accent = palette.accent,
-                ) {
-                    SleepTimer.start(minutes)
+        // Two faces, never both. Before anything is picked this is the menu;
+        // once a timer is armed it is that timer — what is left, five more
+        // minutes, and the way out. The rungs leave with the menu, because
+        // changing the duration now means turning this one off first.
+        if (remaining == null && !afterTrack) {
+            // Compact Grouped Inset
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White.copy(alpha = 0.08f)),
+            ) {
+                SleepOption(label = "After this song") {
+                    SleepTimer.startAfterTrack()
                     onBack()
                 }
-                if (index < presets.lastIndex) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 16.dp),
-                        thickness = 0.5.dp,
-                        color = palette.divider,
-                    )
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 16.dp),
+                    thickness = 0.5.dp,
+                    color = palette.divider,
+                )
+
+                val presets = listOf(
+                    15 to "15 minutes",
+                    30 to "30 minutes",
+                    45 to "45 minutes",
+                    60 to "1 hour",
+                )
+
+                presets.forEachIndexed { index, (minutes, label) ->
+                    SleepOption(label = label) {
+                        SleepTimer.start(minutes)
+                        onBack()
+                    }
+                    if (index < presets.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 16.dp),
+                            thickness = 0.5.dp,
+                            color = palette.divider,
+                        )
+                    }
                 }
             }
-        }
+        } else {
+            if (remaining != null) {
+                // What is left, at the size of a clock rather than a caption —
+                // the one number someone who opened this half asleep wants.
+                Text(
+                    text = SleepTimer.clock(remaining),
+                    style = MaterialTheme.typography.displaySmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-1).sp,
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp, bottom = 16.dp),
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(palette.accent.copy(alpha = 0.18f))
+                        .clickable { SleepTimer.extend(5) }
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = null,
+                        tint = palette.accent,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Add 5 minutes",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                }
+            } else {
+                // No number to add to: an end-of-track timer is an event, not a
+                // duration, so it gets the state and the way out, nothing else.
+                Text(
+                    text = "End of song",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp, bottom = 22.dp),
+                )
+            }
 
-        if (chosen != null || afterTrack) {
-            Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -552,8 +594,6 @@ private fun SleepTimerPicker(palette: ArtworkPalette, onBack: () -> Unit) {
 @Composable
 private fun SleepOption(
     label: String,
-    selected: Boolean,
-    accent: Color,
     onClick: () -> Unit,
 ) {
     Row(
@@ -565,20 +605,9 @@ private fun SleepOption(
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyLarge.copy(
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            ),
-            color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
         )
-        if (selected) {
-            Icon(
-                Icons.Rounded.Check,
-                contentDescription = "Running",
-                tint = accent,
-                modifier = Modifier.size(20.dp),
-            )
-        }
     }
 }
 
@@ -586,24 +615,20 @@ private fun SleepOption(
 @Composable
 private fun sleepTimerStatus(): String? {
     val afterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
-    return sleepTimerCountdown() ?: "After this song".takeIf { afterTrack }
+    return sleepTimerRemainingMs()?.let(SleepTimer::clock) ?: "After this song".takeIf { afterTrack }
 }
 
-/** Live "m:ss" until the sleep timer fires, or null when none is running. */
+/** Live millis until the sleep timer fires, or null when none is running. */
 @Composable
-private fun sleepTimerCountdown(): String? {
+private fun sleepTimerRemainingMs(): Long? {
     val deadline by SleepTimer.deadline.collectAsStateWithLifecycle()
-    val remaining by produceState<Long?>(initialValue = SleepTimer.remainingMs(), deadline) {
+    return produceState<Long?>(initialValue = SleepTimer.remainingMs(), deadline) {
         while (deadline != null) {
             value = SleepTimer.remainingMs()
             delay(1_000)
         }
         value = null
-    }
-    return remaining?.let {
-        val seconds = it / 1000
-        "%d:%02d".format(seconds / 60, seconds % 60)
-    }
+    }.value
 }
 
 /**

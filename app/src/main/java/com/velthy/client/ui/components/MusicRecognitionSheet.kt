@@ -4,14 +4,18 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,8 +23,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,22 +35,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -57,18 +58,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.util.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import com.velthy.client.data.model.ROW_ART_PX
@@ -76,10 +77,35 @@ import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.data.recognition.MusicRecognitionEngine
 import com.velthy.client.data.recognition.MusicRecognitionEngine.RecognitionState
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.Haptics
+import com.velthy.client.ui.haptics.rememberHaptics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+/** How many bars the live level strip is built from. Odd, so one sits dead centre. */
+private const val BAR_COUNT = 21
+
+/**
+ * The stages the sheet animates between.
+ *
+ * Deliberately coarser than [RecognitionState]: the listening state re-emits a
+ * new amplitude thirty times a second, and a transition keyed on the state
+ * itself would restart on every one of those. This is the shape of what is
+ * happening; the numbers ride along inside it.
+ */
+private enum class RecognitionStage { Listening, Identifying, Success, NotFound, Error }
+
+/**
+ * "What is this song?" — the microphone sheet.
+ *
+ * Built from the same parts as every other sheet in the app: the dark card, the
+ * small drag handle, rows of icon-plus-label, and the pill for the one action
+ * that deserves weight. Nothing here is a stock Material button, because a
+ * platform control dropped into a surface where every other control is bespoke
+ * reads as the one thing that was not finished.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MusicRecognitionSheet(
@@ -90,6 +116,7 @@ fun MusicRecognitionSheet(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptics = rememberHaptics()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var hasPermission by remember {
@@ -120,7 +147,7 @@ fun MusicRecognitionSheet(
         if (granted) {
             startRecognition()
         } else {
-            recognitionState = RecognitionState.Error("Izin mikrofon diperlukan untuk mengenali musik")
+            recognitionState = RecognitionState.Error("The microphone permission is needed to listen for music")
         }
     }
 
@@ -132,94 +159,145 @@ fun MusicRecognitionSheet(
         }
     }
 
+    val stage = when (recognitionState) {
+        is RecognitionState.Idle, is RecognitionState.Listening -> RecognitionStage.Listening
+        is RecognitionState.Identifying -> RecognitionStage.Identifying
+        is RecognitionState.Success -> RecognitionStage.Success
+        is RecognitionState.NotFound -> RecognitionStage.NotFound
+        is RecognitionState.Error -> RecognitionStage.Error
+    }
+
+    // Opening the mic is a deliberate act, so it gets a press of its own; the
+    // answer that comes back gets a second one, different when it is a refusal.
+    LaunchedEffect(Unit) { haptics.play(Haptic.Tap) }
+    LaunchedEffect(stage) {
+        when (stage) {
+            RecognitionStage.Success -> haptics.play(Haptic.Select)
+            RecognitionStage.NotFound, RecognitionStage.Error -> haptics.play(Haptic.Tick)
+            else -> Unit
+        }
+    }
+
     ModalBottomSheet(
         onDismissRequest = {
             currentJob?.cancel()
             onDismiss()
         },
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = null,
+        containerColor = Color(0xFF16161A),
+        contentColor = Color.White,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 6.dp)
+                    .size(width = 32.dp, height = 4.dp)
+                    .background(Color.White.copy(alpha = 0.25f), CircleShape),
+            )
+        },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(horizontal = 20.dp, vertical = 6.dp)
+                .navigationBarsPadding(),
         ) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Rounded.GraphicEq,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "Music Recognition",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
+                Text(
+                    text = "Music Recognition",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.2).sp,
+                    ),
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
+                val (status, live) = when (stage) {
+                    RecognitionStage.Listening -> "Listening" to true
+                    RecognitionStage.Identifying -> "Identifying" to true
+                    RecognitionStage.Success -> "Found" to false
+                    RecognitionStage.NotFound -> "Not found" to false
+                    RecognitionStage.Error -> "Failed" to false
                 }
-                IconButton(onClick = {
-                    currentJob?.cancel()
-                    onDismiss()
-                }) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Close",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = if (live || stage == RecognitionStage.Success) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        Color.White.copy(alpha = 0.5f)
+                    },
+                )
             }
 
-            Spacer(Modifier.height(16.dp))
+            // One animated swap for the whole body, so the sheet settles into
+            // the next state — including its new height — instead of the content
+            // blinking over from one layout to another.
+            AnimatedContent(
+                targetState = stage,
+                transitionSpec = {
+                    (
+                        fadeIn(tween(260, easing = FastOutSlowInEasing)) togetherWith
+                            fadeOut(tween(140))
+                        ).using(SizeTransform(clip = false))
+                },
+                label = "recognitionStage",
+                modifier = Modifier.fillMaxWidth(),
+            ) { current ->
+                when (current) {
+                    RecognitionStage.Listening -> {
+                        val listening = recognitionState as? RecognitionState.Listening
+                        ListeningView(
+                            amplitude = listening?.amplitude ?: 0f,
+                            progress = listening?.progress ?: 0f,
+                        )
+                    }
 
-            when (val state = recognitionState) {
-                is RecognitionState.Idle,
-                is RecognitionState.Listening,
-                -> {
-                    val amp = (state as? RecognitionState.Listening)?.amplitude ?: 0f
-                    val progress = (state as? RecognitionState.Listening)?.progress ?: 0f
-                    ListeningView(amplitude = amp, progress = progress)
-                }
-                is RecognitionState.Identifying -> {
-                    IdentifyingView()
-                }
-                is RecognitionState.Success -> {
-                    RecognizedSongView(
-                        recognizedTitle = state.recognizedTitle,
-                        recognizedArtist = state.recognizedArtist,
-                        matchedSong = state.matchedSong,
-                        onPlay = {
-                            state.matchedSong?.let { onPlaySong(it) }
-                            onDismiss()
-                        },
-                        onQueue = {
-                            state.matchedSong?.let { onAddToQueue(it) }
-                            onDismiss()
-                        },
-                        onSearch = {
-                            onSearchSong("${state.recognizedTitle} ${state.recognizedArtist}")
-                            onDismiss()
-                        },
-                    )
-                }
-                is RecognitionState.NotFound -> {
-                    NotFoundView(
-                        message = state.message,
+                    RecognitionStage.Identifying -> IdentifyingView()
+
+                    RecognitionStage.Success -> {
+                        val success = recognitionState as? RecognitionState.Success
+                        if (success != null) {
+                            RecognizedSongView(
+                                recognizedTitle = success.recognizedTitle,
+                                recognizedArtist = success.recognizedArtist,
+                                matchedSong = success.matchedSong,
+                                haptics = haptics,
+                                onPlay = {
+                                    success.matchedSong?.let(onPlaySong)
+                                    onDismiss()
+                                },
+                                onQueue = {
+                                    success.matchedSong?.let(onAddToQueue)
+                                    onDismiss()
+                                },
+                                onSearch = {
+                                    onSearchSong("${success.recognizedTitle} ${success.recognizedArtist}")
+                                    onDismiss()
+                                },
+                            )
+                        }
+                    }
+
+                    RecognitionStage.NotFound -> MessageView(
+                        icon = Icons.Rounded.Search,
+                        tint = Color.White.copy(alpha = 0.6f),
+                        message = (recognitionState as? RecognitionState.NotFound)?.message
+                            ?: "Nothing was recognised",
                         onRetry = startRecognition,
                     )
-                }
-                is RecognitionState.Error -> {
-                    ErrorView(
-                        error = state.error,
+
+                    RecognitionStage.Error -> MessageView(
+                        icon = Icons.Rounded.Close,
+                        tint = MaterialTheme.colorScheme.error,
+                        message = (recognitionState as? RecognitionState.Error)?.error
+                            ?: "Recognition failed",
                         onRetry = {
                             if (!hasPermission) {
                                 permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -231,155 +309,159 @@ fun MusicRecognitionSheet(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
+/**
+ * Waiting for something to listen to: the microphone with two rings breathing
+ * with it, and below them the live level strip.
+ *
+ * Every moving part of this is read while the frame is drawn. The bars are a
+ * fixed height and only their layer is scaled, so a bouncing strip is a repaint
+ * and never a relayout of the twenty-one boxes inside it — which is the whole
+ * difference between this and a row of views being re-measured thirty times a
+ * second.
+ */
 @Composable
 private fun ListeningView(amplitude: Float, progress: Float) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulsePhase by infiniteTransition.animateFloat(
+    val infiniteTransition = rememberInfiniteTransition(label = "listening")
+    val phase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = (2 * Math.PI).toFloat(),
         animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
+            animation = tween(1400, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
-        label = "pulsePhase",
+        label = "phase",
     )
 
-    val dynamicScale by animateFloatAsState(
-        targetValue = 1f + (amplitude * 0.35f),
-        label = "dynamicScale",
-    )
+    val accent = MaterialTheme.colorScheme.primary
+    val accentSoft = MaterialTheme.colorScheme.tertiary
+    val orbBrush = remember(accent, accentSoft) { Brush.linearGradient(listOf(accent, accentSoft)) }
+    val barBrush = remember(accent, accentSoft) { Brush.verticalGradient(listOf(accent, accentSoft)) }
+    val loud = amplitude > 0.12f
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 14.dp),
+            .padding(top = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Glowing Orb with Microphone
         Box(
-            modifier = Modifier.size(136.dp),
+            modifier = Modifier.size(132.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // Ambient ripple layer 2
+            // Outer ring: breathes with the room, and dims back to nothing when
+            // the room goes quiet.
             Box(
                 modifier = Modifier
-                    .size(130.dp)
+                    .size(132.dp)
                     .graphicsLayer {
-                        scaleX = 1f + (amplitude * 0.40f)
-                        scaleY = 1f + (amplitude * 0.40f)
-                        alpha = (0.08f + amplitude * 0.22f).coerceIn(0f, 0.4f)
+                        val spread = 1f + amplitude * 0.30f
+                        scaleX = spread
+                        scaleY = spread
+                        alpha = (0.10f + amplitude * 0.24f).coerceIn(0.10f, 0.34f)
                     }
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
+                    .background(accent),
             )
-            // Ripple layer 1
             Box(
                 modifier = Modifier
-                    .size(104.dp)
-                    .scale(dynamicScale)
+                    .size(102.dp)
+                    .graphicsLayer {
+                        val spread = 0.94f + amplitude * 0.10f
+                        scaleX = spread
+                        scaleY = spread
+                    }
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)),
+                    .background(accent.copy(alpha = 0.22f)),
             )
-            // Center icon orb
             Box(
                 modifier = Modifier
-                    .size(74.dp)
+                    .size(72.dp)
                     .clip(CircleShape)
-                    .background(
-                        Brush.linearGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary,
-                                MaterialTheme.colorScheme.tertiary,
-                            ),
-                        ),
-                    ),
+                    .background(orbBrush),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Mic,
                     contentDescription = null,
                     tint = Color.White,
-                    modifier = Modifier.size(34.dp),
+                    modifier = Modifier.size(32.dp),
                 )
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(18.dp))
 
-        // Real-Time 22-Band Equalizer Sound Wave Visualizer Graph (Kedut-kedut Live Sesuai Suara)
-        val barCount = 22
         Row(
             modifier = Modifier
-                .fillMaxWidth(0.85f)
-                .height(44.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .fillMaxWidth()
+                .height(46.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.06f))
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
         ) {
-            for (i in 0 until barCount) {
-                // Bell-shaped harmonic weight (center bars react stronger to bass/voice)
-                val distFromCenter = Math.abs(i - (barCount / 2f)) / (barCount / 2f)
-                val harmonicWeight = (1.0f - distFromCenter * 0.55f).coerceIn(0.35f, 1.0f)
-                val waveOffset = Math.sin(pulsePhase.toDouble() + i * 0.45).toFloat() * 0.16f
-                val barFactor = ((amplitude * harmonicWeight + waveOffset).coerceIn(0.08f, 1.0f))
-
-                val animatedHeight by animateFloatAsState(
-                    targetValue = lerp(4f, 32f, barFactor),
-                    animationSpec = tween(durationMillis = 60),
-                    label = "bar_$i",
-                )
-
+            for (i in 0 until BAR_COUNT) {
+                // A bell over the strip: the middle bars carry the most, so a
+                // voice lands as a shape rather than as a block of equal spikes.
+                val distance = Math.abs(i - (BAR_COUNT - 1) / 2f) / ((BAR_COUNT - 1) / 2f)
+                val weight = (1f - distance * 0.55f).coerceIn(0.35f, 1f)
                 Box(
                     modifier = Modifier
-                        .width(3.5.dp)
-                        .height(animatedHeight.dp)
+                        .width(3.dp)
+                        .height(30.dp)
+                        .graphicsLayer {
+                            val ripple = Math.sin(phase.toDouble() + i * 0.45).toFloat()
+                            val level = (amplitude * weight + ripple * 0.14f).coerceIn(0.06f, 1f)
+                            transformOrigin = TransformOrigin(0.5f, 1f)
+                            scaleY = level
+                        }
                         .clip(RoundedCornerShape(2.dp))
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primary,
-                                    MaterialTheme.colorScheme.tertiary,
-                                ),
-                            ),
-                        ),
+                        .background(barBrush),
                 )
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(18.dp))
 
         Text(
-            text = "Mendengarkan musik di sekitarmu...",
+            text = "Listening…",
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onSurface,
+            color = Color.White,
         )
 
         Spacer(Modifier.height(4.dp))
 
         Text(
-            text = if (amplitude > 0.12f) "🎶 Menangkap frekuensi musik..." else "Dekatkan perangkat ke sumber suara",
+            text = if (loud) "Hearing it — hold still" else "Hold your phone near the music",
             style = MaterialTheme.typography.bodyMedium,
-            color = if (amplitude > 0.12f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (loud) accent else Color.White.copy(alpha = 0.55f),
         )
 
         Spacer(Modifier.height(16.dp))
 
-        LinearProgressIndicator(
-            progress = { progress },
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.65f)
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            strokeCap = StrokeCap.Round,
-            color = MaterialTheme.colorScheme.primary,
-        )
+                .fillMaxWidth(0.7f)
+                .height(5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(Color.White.copy(alpha = 0.12f)),
+        ) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .graphicsLayer {
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                        scaleX = progress.coerceIn(0f, 1f)
+                    }
+                    .background(accent, RoundedCornerShape(3.dp)),
+            )
+        }
     }
 }
 
@@ -388,25 +470,26 @@ private fun IdentifyingView() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 32.dp),
+            .padding(top = 34.dp, bottom = 26.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         CircularProgressIndicator(
-            modifier = Modifier.size(56.dp),
-            strokeWidth = 4.dp,
+            modifier = Modifier.size(52.dp),
+            strokeWidth = 3.5.dp,
             color = MaterialTheme.colorScheme.primary,
+            trackColor = Color.White.copy(alpha = 0.10f),
         )
         Spacer(Modifier.height(20.dp))
         Text(
-            text = "Mengidentifikasi lagu...",
+            text = "Identifying the song…",
             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onSurface,
+            color = Color.White,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Mencocokkan fingerprint audio",
+            text = "Matching what it heard",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color.White.copy(alpha = 0.55f),
         )
     }
 }
@@ -416,25 +499,26 @@ private fun RecognizedSongView(
     recognizedTitle: String,
     recognizedArtist: String,
     matchedSong: Song?,
+    haptics: Haptics,
     onPlay: () -> Unit,
     onQueue: () -> Unit,
     onSearch: () -> Unit,
 ) {
+    val title = matchedSong?.title ?: recognizedTitle
+    val artist = matchedSong?.artist ?: recognizedArtist
+    val artwork = matchedSong?.thumbnailUrl
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            .padding(top = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        val title = matchedSong?.title ?: recognizedTitle
-        val artist = matchedSong?.artist ?: recognizedArtist
-        val artwork = matchedSong?.thumbnailUrl
-
         Box(
             modifier = Modifier
-                .size(130.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .size(148.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.White.copy(alpha = 0.06f)),
             contentAlignment = Alignment.Center,
         ) {
             if (artwork != null) {
@@ -442,24 +526,24 @@ private fun RecognizedSongView(
                     model = artwork.artworkAt(ROW_ART_PX),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(130.dp),
+                    modifier = Modifier.fillMaxSize(),
                 )
             } else {
                 Icon(
                     imageVector = Icons.Rounded.MusicNote,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = Color.White.copy(alpha = 0.4f),
                     modifier = Modifier.size(48.dp),
                 )
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(16.dp))
 
         Text(
             text = title,
             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onSurface,
+            color = Color.White,
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -470,124 +554,149 @@ private fun RecognizedSongView(
         Text(
             text = artist,
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Color.White.copy(alpha = 0.6f),
             textAlign = TextAlign.Center,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(18.dp))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Button(
-                onClick = onPlay,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                ),
-            ) {
-                Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Putar")
-            }
-
-            OutlinedButton(
-                onClick = onQueue,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Antrean")
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        Text(
-            text = "Cari di YouTube Music",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
+        // The three things to do with it, as the same inset row the rest of the
+        // app uses for actions.
+        Column(
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onSearch)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-        )
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.White.copy(alpha = 0.08f)),
+        ) {
+            RecognitionActionRow(
+                icon = Icons.Rounded.PlayArrow,
+                label = "Play",
+                onClick = { haptics.play(Haptic.Tap); onPlay() },
+            )
+            RowDivider()
+            RecognitionActionRow(
+                icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                label = "Add to queue",
+                onClick = { haptics.play(Haptic.Tap); onQueue() },
+            )
+            RowDivider()
+            RecognitionActionRow(
+                icon = Icons.Rounded.Search,
+                label = "Search on YouTube Music",
+                onClick = { haptics.play(Haptic.Tap); onSearch() },
+            )
+        }
     }
 }
 
 @Composable
-private fun NotFoundView(
+private fun MessageView(
+    icon: ImageVector,
+    tint: Color,
     message: String,
     onRetry: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 20.dp),
+            .padding(top = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(
-            imageVector = Icons.Rounded.Search,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(48.dp),
-        )
-        Spacer(Modifier.height(12.dp))
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(tint.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(28.dp),
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+
         Text(
             text = message,
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = Color.White.copy(alpha = 0.8f),
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onRetry,
-            shape = RoundedCornerShape(12.dp),
+
+        Spacer(Modifier.height(18.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color.White.copy(alpha = 0.12f))
+                .clickable(onClick = onRetry)
+                .padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(
+                imageVector = Icons.Rounded.Refresh,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+            )
             Spacer(Modifier.width(6.dp))
-            Text("Coba Lagi")
+            Text(
+                text = "Try Again",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+            )
         }
     }
 }
 
 @Composable
-private fun ErrorView(
-    error: String,
-    onRetry: () -> Unit,
+private fun RecognitionActionRow(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = Icons.Rounded.Close,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.error,
-            modifier = Modifier.size(48.dp),
-        )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = error,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.error,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onRetry,
-            shape = RoundedCornerShape(12.dp),
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.08f)),
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Coba Lagi")
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(17.dp),
+            )
         }
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White,
+        )
     }
+}
+
+@Composable
+private fun RowDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 16.dp),
+        thickness = 0.5.dp,
+        color = Color.White.copy(alpha = 0.08f),
+    )
 }

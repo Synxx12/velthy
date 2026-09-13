@@ -3,13 +3,13 @@ package com.velthy.client.data.sources
 /**
  * The kinds of source this build knows how to talk to.
  *
- * Fixed and small on purpose. **Declaration order is the order sources are
- * tried** — see `SourceRegistry.active()`, which sorts on `kind.ordinal` — so
- * a source the user added comes first, then the built-in module, then JioSaavn,
- * then YouTube Music. Adding a source means adding a [MusicSource]
- * implementation and an entry here, which is the point — every protocol the app
- * speaks is one someone can read in this repo, and a source can't teach the app
- * a new way to behave after it ships.
+ * Fixed and small on purpose. **[rank] is the order sources are tried** — see
+ * `SourceRegistry.active()`, which sorts on it — so a source the user added
+ * comes first, then the built-in module, then JioSaavn, then YouTube Music.
+ * Adding a source means adding a [MusicSource] implementation and an entry
+ * here, which is the point — every protocol the app speaks is one someone can
+ * read in this repo, and a source can't teach the app a new way to behave after
+ * it ships.
  *
  * A kind's rank is not the user's to set: only a source whose [isUserAdded] is
  * true can be dragged on the Sources screen, and only among its own kind. A drag
@@ -28,14 +28,6 @@ enum class SourceKind(
     /** Whether this kind can serve bit-exact audio when asked. */
     val canServeLossless: Boolean,
     /**
-     * Whether this is a source the user configured, rather than one that ships.
-     *
-     * The one kind whose position is the user's to arrange on the Sources
-     * screen — see `SourceRegistry.reorderAddons`. Everything else ranks by its
-     * declaration order above.
-     */
-    val isUserAdded: Boolean = false,
-    /**
      * Whether this kind answers quickly enough to be worth asking *before* a
      * track is played, so its copy can be pinned and cached ahead of time.
      *
@@ -53,6 +45,18 @@ enum class SourceKind(
      * ids directly and needs no cross-source match to find the track.
      */
     val worthPrefetching: Boolean = false,
+    /**
+     * Where this kind sits in the walk, low first.
+     *
+     * Separate from [ordinal] because every source the user added shares one
+     * position: which of *those* is asked first is theirs to set by dragging —
+     * see [SourceRegistry.reorderAddons]. A stable sort on `ordinal` could not
+     * express that if more than one user-added kind existed, since it would
+     * always put the earlier-declared one ahead whatever order the list was in
+     * — the drag would have moved a row on screen and changed nothing about
+     * what was actually asked first.
+     */
+    val rank: Int,
 ) {
     /**
      * A module index the user pointed at themselves, tried ahead of the one
@@ -70,7 +74,9 @@ enum class SourceKind(
         labels = listOf("FLAC", "Lossless", "Hi-Res", "Plugins"),
         needsServer = true,
         canServeLossless = true,
-        isUserAdded = true,
+        // Literal, not [USER_ADDED]: an enum entry is constructed before
+        // its own companion exists.
+        rank = 0,
     ),
 
     /**
@@ -92,6 +98,7 @@ enum class SourceKind(
         labels = listOf("FLAC", "Lossless", "Hi-Res", "Plugins"),
         needsServer = true,
         canServeLossless = true,
+        rank = 1,
     ),
 
     /**
@@ -107,6 +114,7 @@ enum class SourceKind(
         needsServer = false,
         canServeLossless = false,
         worthPrefetching = true,
+        rank = 2,
     ),
 
     YOUTUBE(
@@ -116,5 +124,24 @@ enum class SourceKind(
         labels = listOf("Lossy", "Full catalogue", "Radio"),
         needsServer = false,
         canServeLossless = false,
+        rank = 3,
     ),
+    ;
+
+    /**
+     * Whether this is a source the user configured, rather than one that ships.
+     *
+     * The one rank whose position is the user's to arrange on the Sources
+     * screen — see `SourceRegistry.reorderAddons`. Everything else ranks by its
+     * declaration order above.
+     */
+    val isUserAdded: Boolean get() = rank == USER_ADDED
+
+    companion object {
+        /**
+         * The shared rank of every source the user added. Their order among
+         * themselves is the stored list order, which is what a drag rewrites.
+         */
+        const val USER_ADDED = 0
+    }
 }

@@ -70,7 +70,7 @@ object MusicRecognitionEngine {
             )
 
             if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-                emit(RecognitionState.Error("Mikrofon tidak dapat diinisialisasi"))
+                emit(RecognitionState.Error("The microphone could not be started"))
                 return@flow
             }
 
@@ -117,7 +117,7 @@ object MusicRecognitionEngine {
 
             val rawPcm = audioBuffer.toByteArray()
             if (rawPcm.isEmpty()) {
-                emit(RecognitionState.NotFound("Tidak ada audio yang terekam. Pastikan suara musik terdengar jelas."))
+                emit(RecognitionState.NotFound("Nothing was recorded. Make sure the music is clearly audible."))
                 return@flow
             }
 
@@ -146,13 +146,13 @@ object MusicRecognitionEngine {
                     ),
                 )
             } else {
-                emit(RecognitionState.NotFound("Lagu tidak ditemukan. Coba dekatkan perangkat ke speaker dan coba lagi."))
+                emit(RecognitionState.NotFound("No match found. Hold the phone closer to the music and try again."))
             }
         } catch (e: SecurityException) {
-            emit(RecognitionState.Error("Izin mikrofon belum diberikan"))
+            emit(RecognitionState.Error("The microphone permission has not been granted"))
         } catch (e: Exception) {
             Log.e(TAG, "Recognition failed", e)
-            emit(RecognitionState.Error(e.message ?: "Gagal mengenali lagu"))
+            emit(RecognitionState.Error(e.message ?: "Recognition failed"))
         } finally {
             try {
                 audioRecord?.release()

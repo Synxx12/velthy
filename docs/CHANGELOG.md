@@ -6,6 +6,17 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
+### [1.4.6.4] — Pengenalan Musik, Sleep Timer & Sumber
+> 📅 2026-09-14
+
+#### ✨ Fitur Baru & Tampilan
+- **Tampilan Music Recognition Disamakan dengan Panel Lain**: Panel pengenal musik kini memakai bahasa visual yang sama dengan sheet lain di aplikasi — kartu gelap dengan pegangan geser, baris aksi berikon, dan tombol pil — menggantikan tombol bawaan sistem yang terasa asing di tengah permukaan yang seluruhnya custom. Perpindahan antar tahap (mendengarkan, mengidentifikasi, hasil) mengalir dengan animasi halus dan tidak lagi melompat, visualizer suaranya berjalan lebih ringan, tiap aksi memberi umpan balik getaran, dan seluruh teksnya kini konsisten berbahasa Inggris seperti bagian lain aplikasi.
+- **Sleep Timer dengan Hitung Mundur Besar & Tombol "+5 Menit"**: Memilih durasi kini punya layarnya sendiri, dan begitu timer berjalan tampilannya berganti menjadi hanya tiga hal: sisa waktu sebagai hitung mundur besar yang terus berjalan, tombol **Add 5 minutes** untuk menambah waktu tanpa perlu memilih ulang, dan tombol untuk mematikan timer — daftar durasi tidak lagi menumpuk di layar yang sama. Berlaku sama di panel pemutar maupun di menu opsi lagu, dan badge bulan di pemutar tetap menyala selama timer berjalan.
+- **Tata Letak Layar Sources Dirapikan**: Daftar sumber kini tampil paling atas dan menjadi fokus layar, sementara pengaturan kualitas suara turun ke bagian bawah sebagai catatan penutup. Keterangan panjang di bawah tiap bagian dipangkas menjadi satu–dua baris, sehingga layarnya lebih lapang dan enak dibaca.
+
+#### 🐛 Perbaikan Masalah
+- **Urutan Sumber Kini Benar-Benar Bisa Digeser**: Pegangan geser di layar Sources kini berada di ujung kanan tiap baris, dan barisnya mengikuti jari dengan mulus saat ditarik naik atau turun sementara baris di sekitarnya bergeser lembut mengisi tempat yang ditinggalkan — bukan melompat kaku. Baris yang sedang diangkat tampak terangkat dengan bayangan halus, dan tiap kali melewati satu baris ada getaran kecil sebagai penanda. Urutan hasil geseran langsung dipakai saat memutar dan tersimpan begitu jari dilepas, sehingga sumber tambahan dicoba lebih dulu sesuai susunan yang kamu pilih. Sumber bawaan tetap menempati urutan tetap sesuai jenisnya, dan keterangan di layar kini menyebut dengan jelas bahwa geser-ubah-urutan tersedia begitu ada dua sumber tambahan atau lebih.
+
 ### [1.4.6.3] — Sumber, Pencarian & Album
 > 📅 2026-09-12
 
