@@ -27,7 +27,7 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * ⚡ In-App APK Updater for Musique Native
+ * ⚡ In-App APK Updater for Velthy Native
  *
  * Downloads APK releases directly from GitHub Releases with live progress tracking,
  * status bar notification progress, and launches the Android Package Installer via FileProvider.

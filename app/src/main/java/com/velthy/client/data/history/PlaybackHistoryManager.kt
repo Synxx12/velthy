@@ -278,7 +278,7 @@ object PlaybackHistoryManager {
     }
 
     /**
-     * Groups history items into chronological sections like YouTube Music & Musique.
+     * Groups history items into chronological sections like YouTube Music & Velthy.
      * Guarantees each song appears at most once in its most recent time group.
      */
     fun groupHistory(items: List<HistoryItem>): List<GroupedHistory> {

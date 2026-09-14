@@ -16,7 +16,7 @@ import java.io.OutputStream
 /**
  * Where a downloaded track goes, and how it gets there.
  *
- * The destination is the device's own Music folder, in a `Musique`
+ * The destination is the device's own Music folder, in a `Velthy`
  * subfolder — somewhere the file manager lists, other players can open, and a
  * user can back up or delete without going through this app. That choice is
  * what makes this class necessary at all: an app-private directory would be
@@ -47,7 +47,7 @@ import java.io.OutputStream
  */
 object DownloadStore {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /** The subfolder of Music that everything lands in. */
     const val FOLDER = "Velthy"

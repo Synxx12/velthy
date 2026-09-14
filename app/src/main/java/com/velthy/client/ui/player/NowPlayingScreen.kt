@@ -3133,7 +3133,7 @@ private fun LyricsLoadingLine(trackKey: Any, modifier: Modifier = Modifier) {
  * [active] brightens the disc rather than only the glyph: this sits on album
  * artwork of any colour, and a white icon on a white-ish sleeve has no tint
  * change left to make. The filled heart carries the state as a shape too —
- * see [MusiqueIcons.HeartFilled].
+ * see [VelthyIcons.HeartFilled].
  */
 @Composable
 private fun CircleGlyph(

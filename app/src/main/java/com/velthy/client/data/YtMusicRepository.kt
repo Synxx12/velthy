@@ -36,7 +36,7 @@ import kotlinx.serialization.json.JsonObject
 /** Suspend API over Innertube. Every call returns a Result so the UI can show a real error. */
 object YtMusicRepository {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /** How many queue tracks are resolved at once — see [resolveAudioAll]. */
     private const val RESOLVE_CONCURRENCY = 4

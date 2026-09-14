@@ -35,7 +35,7 @@ object SearchHistory {
     val recent: StateFlow<List<String>> = _recent.asStateFlow()
 
     fun init(context: Context) {
-        prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
+        prefs = migrateLegacyPrefs(context, "musique_settings", "velthy_settings")
         reload()
     }
 

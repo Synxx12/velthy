@@ -60,7 +60,7 @@ data class SourceConfig(
  */
 object SourceRegistry {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     private lateinit var prefs: SharedPreferences
 
@@ -82,7 +82,7 @@ object SourceRegistry {
         prefs = runCatching {
             EncryptedSharedPreferences.create(
                 context,
-                "musique_sources",
+                "velthy_sources",
                 MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
@@ -92,8 +92,10 @@ object SourceRegistry {
             // init the keystore, and refusing to run at all is worse than
             // storing this the way every other setting in the app is stored.
             TrackLog.w(TAG, "EncryptedSharedPreferences unavailable for sources: ${it.message}")
-            context.getSharedPreferences("musique_sources_plain", Context.MODE_PRIVATE)
+            context.getSharedPreferences("velthy_sources_plain", Context.MODE_PRIVATE)
         }
+
+        migrateLegacySources(context)
 
         val stored = prefs.getString(KEY_SOURCES, null)?.let(::decodeStored) ?: emptyList()
 
@@ -150,6 +152,31 @@ object SourceRegistry {
      * one bad enum value and the user's real, working module config is
      * silently gone along with it.
      */
+    /**
+     * Copies the user's configured sources from the pre-rebrand encrypted store
+     * ("musique_sources", or its plain fallback) onto the new name. The sources
+     * a user added are not re-creatable by any migration — they hold a private
+     * module index they typed in — so losing this file would silently strip the
+     * app back to YouTube alone.
+     */
+    private fun migrateLegacySources(context: Context) {
+        if (prefs.getString(KEY_SOURCES, null) != null) return
+
+        val legacy = runCatching {
+            EncryptedSharedPreferences.create(
+                context,
+                "musique_sources",
+                MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }.getOrElse {
+            context.getSharedPreferences("musique_sources_plain", Context.MODE_PRIVATE)
+        }
+
+        legacy.getString(KEY_SOURCES, null)?.let { prefs.edit().putString(KEY_SOURCES, it).apply() }
+    }
+
     private fun decodeStored(raw: String): List<SourceConfig> {
         val elements = runCatching { json.parseToJsonElement(raw).jsonArray }
             .getOrElse { return emptyList() }
@@ -324,7 +351,7 @@ object SourceRegistry {
     /** The playback URI for a source-backed track; [PlaybackService] resolves it at open time. */
     fun trackUri(configId: String, trackId: String): String =
         Uri.Builder()
-            .scheme("musique")
+            .scheme("velthy")
             .authority("source")
             .appendQueryParameter("s", configId)
             .appendQueryParameter("t", trackId)

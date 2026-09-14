@@ -295,8 +295,7 @@ class MainActivity : ComponentActivity() {
         }
         val uri = intent?.data ?: return
         val isDiscordCallback = uri.scheme == "discord-1541308554173227080" ||
-            (uri.scheme == "velthy" && (uri.host == "discord" || uri.path?.contains("discord") == true)) ||
-            (uri.scheme == "musique" && (uri.host == "discord" || uri.path?.contains("discord") == true))
+            (uri.scheme == "velthy" && (uri.host == "discord" || uri.path?.contains("discord") == true))
 
         if (isDiscordCallback) {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {

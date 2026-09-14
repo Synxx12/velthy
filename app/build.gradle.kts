@@ -9,9 +9,9 @@ plugins {
 
 /**
  * Signing details, kept out of the repository in `keystore.properties`
- * (see keystore.properties.example). Absent on a fresh checkout, in which case
- * the release build still runs and simply comes out unsigned rather than
- * failing — only whoever holds the key can produce a shippable APK.
+ * (see keystore.properties.example). Absent on a fresh checkout, the release
+ * build is refused by [releaseSigningGuard] rather than quietly signed with the
+ * debug key — only whoever holds the key can produce a shippable APK.
  */
 val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
@@ -35,6 +35,16 @@ val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
+val hasReleaseSigning: Boolean = signing.isNotEmpty()
+
+// Release identity comes from the release tag when CI drives the build
+// (-Pvelthy.versionName / -Pvelthy.versionCode), and from the checked-in values
+// otherwise. Keeping the tag and the APK's versionName in lockstep stops a
+// release from shipping under a name that does not match its tag.
+val appVersionName: String =
+    providers.gradleProperty("velthy.versionName").orNull ?: "1.4.6.5"
+val appVersionCode: Int =
+    providers.gradleProperty("velthy.versionCode").orNull?.toInt() ?: 26
 
 android {
     namespace = "com.velthy.client"
@@ -46,8 +56,8 @@ android {
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "1.4.6.4"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -83,7 +93,11 @@ android {
     }
 
     signingConfigs {
-        if (signing.isNotEmpty()) {
+        // Only ever the real release key. A debug-key fallback here used to let a
+        // "release" APK come out that Android would refuse to install over an
+        // existing one — the failure surfaced on the user's phone, not in the
+        // build. [releaseSigningGuard] now stops that build before it starts.
+        if (hasReleaseSigning) {
             create("release") {
                 val path = signing.getProperty("storeFile")
                 val resolved = if (file(path).exists()) file(path) else rootProject.file(path)
@@ -92,35 +106,33 @@ android {
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
             }
-        } else {
-            create("release") {
-                val debugConfig = signingConfigs.getByName("debug")
-                storeFile = debugConfig.storeFile
-                storePassword = debugConfig.storePassword
-                keyAlias = debugConfig.keyAlias
-                keyPassword = debugConfig.keyPassword
-            }
         }
     }
 
     buildTypes {
         release {
             /*
-             * Off deliberately. Stream resolution runs YouTube's own player
-             * JavaScript through Rhino, and NewPipe, Ktor and
-             * kotlinx.serialization all reach for classes reflectively — none
-             * of which R8 can see. Shrinking that reliably is a set of keep
-             * rules to be written and then proven on a device, because the
-             * breakage it causes appears at runtime rather than at build time.
-             * Until then, a larger APK that works beats a smaller one that
-             * might not. The rules below stay wired up for when it's revisited.
+             * R8 is on. The classes that reach for themselves by name — NewPipe's
+             * extractors, Rhino's script-engine factory, Ktor's serializers,
+             * kotlinx.serialization's generated companions, the QuickJS and ONNX
+             * JNI entry points — carry keep rules in proguard-rules.pro rather
+             * than being left out of the shrinker's reach entirely. Resource
+             * shrinking is on too; there are no getIdentifier() lookups, so no
+             * res/raw/keep.xml is needed.
+             *
+             * If a release ever crashes at runtime with a NoClassDefFoundError or
+             * a missing-serializer error, that is a keep rule to add, not a
+             * reason to switch minification back off.
              */
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
@@ -142,6 +154,38 @@ kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+}
+
+/*
+ * A release without the real key is not a release: it would either be unsigned
+ * or signed with the debug key, and either way Android rejects it over an
+ * installed copy. Fail the build up front with an explanation instead of
+ * producing an APK that only fails on the device.
+ *
+ * Wired only into the tasks that actually package the release APK/AAB —
+ * matching `package*` broadly would also catch `packageProdReleaseResources`
+ * and make even a plain compile require the key.
+ */
+val releaseSigningGuard by tasks.registering {
+    doFirst {
+        if (!hasReleaseSigning) {
+            throw GradleException(
+                "Release signing is not configured. Create keystore.properties " +
+                    "(see keystore.properties.example) before building a release. " +
+                    "Refusing to produce an APK signed with the debug key."
+            )
+        }
+    }
+}
+
+listOf(
+    "assembleProdRelease",
+    "assembleProdReleaseUniversal",
+    "bundleProdRelease",
+    "packageProdRelease",
+    "packageProdReleaseUniversal",
+).forEach { taskName ->
+    tasks.matching { it.name == taskName }.configureEach { dependsOn(releaseSigningGuard) }
 }
 
 /*
@@ -249,7 +293,7 @@ dependencies {
     implementation("org.mozilla:rhino-engine:1.8.1")
 
     // ---- Auth/session storage ----
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
 
     // Audio is progressive, but Apple serves its motion artwork as HLS — this
     // is what lets the animated sleeve play it. See CanvasArtworkPlayer.

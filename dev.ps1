@@ -239,9 +239,9 @@ try {
         } elseif ($keyChar -eq "l") {
             Write-Host "`n--- Logcat Terbaru (40 Baris) dari $Global:SelectedDevice ---" -ForegroundColor Yellow
             if ($Global:SelectedDevice) {
-                adb -s "$Global:SelectedDevice" logcat -d -t 40 -s Musique:V AndroidRuntime:E
+                adb -s "$Global:SelectedDevice" logcat -d -t 40 -s Velthy:V AndroidRuntime:E
             } else {
-                adb logcat -d -t 40 -s Musique:V AndroidRuntime:E
+                adb logcat -d -t 40 -s Velthy:V AndroidRuntime:E
             }
         } elseif ($keyChar -eq "c") {
             Clear-Host

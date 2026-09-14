@@ -114,6 +114,40 @@ internal object QuickJsExecutor {
 
     private val engineLock = Any()
 
+    /**
+     * Serialises `QuickJs.create()` and `QuickJs.close()` across every module.
+     *
+     * These two are where the library is not thread-safe: creating an
+     * interpreter runs `initGlobals`, which builds a table of JNI global refs,
+     * and closing it releases them. Run two of either at once and the native
+     * side deletes a ref the other thread already deleted — ART answers that
+     * with
+     *
+     * ```
+     * JNI ERROR (app bug): attempt to remove stale Global 0x3aea (should be 0x3aee)
+     *   at com.dokar.quickjs.QuickJs.<init>
+     *   at ...QuickJsExecutor.newEngine
+     * ```
+     *
+     * and aborts the whole process, not the call. That is exactly the shape
+     * this app kept hitting: a search fans out to every module in the index at
+     * once, and a pool that grows under contention makes another interpreter at
+     * the same moment the LRU is closing an old one. The player dies with it —
+     * the symptom looks like "switching to a higher-quality source closes the
+     * app and stops the music", because that switch is what triggers the
+     * search that loads the modules.
+     *
+     * Held only around create/close, never around `evaluate`: the interpreter
+     * is single-threaded per instance, and evaluating while holding a global
+     * lock would serialise every module's search behind the slowest one.
+     *
+     * A JVM monitor rather than a coroutine [Mutex]: `create`/`close` are
+     * blocking native calls with no suspension point inside, and the non-suspend
+     * [unload]/[unloadAll] have to take the same lock to be safe against a
+     * concurrent pool growth.
+     */
+    private val nativeLifecycleLock = Any()
+
     /** LRU map: access-ordered so the oldest-used entry is first. */
     private val pools = LinkedHashMap<String, Pool>(16, 0.75f, true)
 
@@ -133,7 +167,7 @@ internal object QuickJsExecutor {
                 }
             }
         }
-        evicted.forEach { runCatching { it.close() } }
+        evicted.forEach { closeEngine(it) }
 
         TrackLog.d(TAG, "QuickJsExecutor.loadModule($moduleId) fetchBase=$fetchBase jsCodeLength=${jsCode.length}")
         return withContext(Dispatchers.Default) {
@@ -155,7 +189,10 @@ internal object QuickJsExecutor {
 
     /** A fresh interpreter with [jsCode] evaluated into it, or a throw saying why not. */
     private suspend fun newEngine(jsCode: String, fetchBase: String): QuickJs {
-        val qjs = QuickJs.create(Dispatchers.Default)
+        // Creating the interpreter installs the JNI global refs that every
+        // later call uses, and the native side is not safe to do that on two
+        // threads at once. See [nativeLifecycleLock].
+        val qjs = synchronized(nativeLifecycleLock) { QuickJs.create(Dispatchers.Default) }
         qjs.maxStackSize = 512 * 1024L
         try {
             bindConsole(qjs)
@@ -193,9 +230,20 @@ internal object QuickJsExecutor {
             TrackLog.d(TAG, "  Module exports: [$keys]")
             return qjs
         } catch (e: Throwable) {
-            qjs.close()
+            closeEngine(qjs)
             throw e
         }
+    }
+
+    /**
+     * Closes [qjs] under [nativeLifecycleLock].
+     *
+     * Same lock as creation, for the same reason: `close()` releases the global
+     * refs `create()` installed, and doing that while another thread is
+     * installing its own is the race that aborts the process.
+     */
+    private fun closeEngine(qjs: QuickJs) {
+        synchronized(nativeLifecycleLock) { runCatching { qjs.close() } }
     }
 
     // ── Pool ─────────────────────────────────────────────────────────────
@@ -303,7 +351,7 @@ internal object QuickJsExecutor {
 
     fun unload(moduleId: String) {
         val closing = synchronized(engineLock) { pools.remove(moduleId) }?.made.orEmpty()
-        closing.forEach { runCatching { it.close() } }
+        closing.forEach { closeEngine(it) }
         TrackLog.d(TAG, "QuickJsExecutor.unload($moduleId)")
     }
 
@@ -313,7 +361,7 @@ internal object QuickJsExecutor {
             pools.clear()
             values
         }
-        all.forEach { runCatching { it.close() } }
+        all.forEach { closeEngine(it) }
         TrackLog.d(TAG, "QuickJsExecutor.unloadAll()")
     }
 

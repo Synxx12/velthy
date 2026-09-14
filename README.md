@@ -107,7 +107,7 @@ Velthy Android is engineered to be **completely autonomous** and serverless:
 
 You can download the compiled APK directly from:
 
-1. **[GitHub Releases Page](https://github.com/Synxx12/musique-app-releases/releases)**
+1. **[GitHub Releases Page](https://github.com/Synxx12/velthy/releases)**
 2. **Velthy Web Portal**: Directly downloadable from the downloads section at [velthy.my.id](https://velthy.my.id).
 
 > [!NOTE]
@@ -145,10 +145,11 @@ The compiled APK will be output to:
 This repository includes automated GitHub Actions workflows located in [`.github/workflows/build_release_apk.yml`](.github/workflows/build_release_apk.yml).
 
 - **Automated Releases**:
-  - Automatically triggered on push tags (e.g. `native-v1.4.2`) or on-demand via `workflow_dispatch`.
-  - Automatically compiles and signs APKs (`Velthy-native-v1.4.2.apk` and `Velthy-latest.apk`).
-  - Publishes releases to [`Synxx12/musique-app-releases`](https://github.com/Synxx12/musique-app-releases).
+  - Automatically triggered on push tags (e.g. `v1.4.6.4`) or on-demand via `workflow_dispatch`.
+  - Automatically compiles and signs the APK (`Velthy-v1.4.6.4.apk` plus per-ABI variants).
+  - Publishes releases to [`Synxx12/velthy`](https://github.com/Synxx12/velthy/releases).
   - Automatically sends release webhook triggers to `https://velthy.my.id/api/webhooks/github-release`.
+- **Continuous Integration** ([`ci.yml`](.github/workflows/ci.yml)): runs unit tests and a debug build on every push to `main` and on pull requests.
 
 ---
 

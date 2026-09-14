@@ -2,11 +2,11 @@
  * Ported from Orchard (https://github.com/SFG5453/Orchard).
  *
  * Copyright (C) 2026 SFG545 (original Orchard implementation)
- * Copyright (C) 2026 Kushagra Singh (Musique adaptation)
+ * Copyright (C) 2026 Kushagra Singh (Velthy adaptation)
  *
  * Orchard's original source is licensed under the GNU Affero General Public
  * License, version 3 or later. Per AGPLv3 section 13, this file is combined
- * here into Musique -- a work licensed under the GNU General Public
+ * here into Velthy -- a work licensed under the GNU General Public
  * License, version 3 or later -- and remains itself governed by the AGPLv3
  * as part of that combination.
  *
@@ -87,7 +87,7 @@ object VocalSpectrogram {
  * CC-BY-NC-4.0, which a distributed application cannot ship, and its ONNX export additionally has
  * unresolved blockers around complex-valued STFT ops.
  *
- * Only the vocals target is used. open-unmix trains four independent checkpoints; Musique needs to
+ * Only the vocals target is used. open-unmix trains four independent checkpoints; Velthy needs to
  * know how much vocal content is present at an instant, not to reconstruct four stems.
  */
 class VocalTracker(private val context: Context) {

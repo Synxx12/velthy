@@ -96,6 +96,14 @@ enum class LibrarySort(val label: String) {
 object AppSettings {
 
     private lateinit var prefs: SharedPreferences
+
+    /**
+     * Credentials live in their own store so Auto Backup can exclude exactly
+     * this file (see res/xml/data_extraction_rules.xml) without also dropping
+     * the ordinary preferences. Kept out of [velthy_settings][prefs] because a
+     * backup rule cannot exclude a single key.
+     */
+    private lateinit var secretsPrefs: SharedPreferences
     private lateinit var authStore: AuthStore
 
     /**
@@ -302,7 +310,7 @@ object AppSettings {
     val spotifySpdcToken = MutableStateFlow<String?>(null)
     fun setSpotifySpdcToken(token: String?) {
         spotifySpdcToken.value = token
-        prefs.edit().putString("spotify_spdc_token", token).apply()
+        secretsPrefs.edit().putString(SPOTIFY_TOKEN_KEY, token).apply()
     }
 
     val animatedCanvas = MutableStateFlow(true)
@@ -509,7 +517,9 @@ object AppSettings {
         }
 
     fun init(context: Context) {
-        prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
+        prefs = migrateLegacyPrefs(context, "musique_settings", "velthy_settings")
+        secretsPrefs = migrateLegacyPrefs(context, "musique_secrets", "velthy_secrets")
+        migrateSecretsOutOfSettings()
         migrateSingleQuality()
         audioQualityWifi.value = readQuality(KEY_QUALITY_WIFI)
         audioQualityCellular.value = readQuality(KEY_QUALITY_CELLULAR)
@@ -547,7 +557,7 @@ object AppSettings {
             LibrarySort.valueOf(prefs.getString(KEY_LIBRARY_SORT, null) ?: "")
         }.getOrDefault(LibrarySort.DEFAULT)
         hapticFeedback.value = prefs.getBoolean(KEY_HAPTIC_FEEDBACK, true)
-        spotifySpdcToken.value = prefs.getString("spotify_spdc_token", null)
+        spotifySpdcToken.value = secretsPrefs.getString(SPOTIFY_TOKEN_KEY, null)
         animatedCanvas.value = prefs.getBoolean(KEY_ANIMATED_CANVAS, true)
         fullBleedArtwork.value = prefs.getBoolean(KEY_FULL_BLEED_ARTWORK, true)
         legacyMeshGradient.value = prefs.getBoolean(KEY_LEGACY_MESH_GRADIENT, false)
@@ -568,9 +578,9 @@ object AppSettings {
             .coerceIn(DEFAULT_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES)
         lastfmEnabled.value = prefs.getBoolean(KEY_LASTFM_ENABLED, false)
         lastfmUsername.value = prefs.getString(KEY_LASTFM_USERNAME, "").orEmpty()
-        lastfmSessionKey.value = prefs.getString(KEY_LASTFM_SESSION_KEY, "").orEmpty()
-        lastfmApiKey.value = prefs.getString(KEY_LASTFM_API_KEY, "").orEmpty().ifBlank { BuildConfig.LASTFM_API_KEY }
-        lastfmSecret.value = prefs.getString(KEY_LASTFM_SECRET, "").orEmpty().ifBlank { BuildConfig.LASTFM_SECRET }
+        lastfmSessionKey.value = secretsPrefs.getString(KEY_LASTFM_SESSION_KEY, "").orEmpty()
+        lastfmApiKey.value = secretsPrefs.getString(KEY_LASTFM_API_KEY, "").orEmpty().ifBlank { BuildConfig.LASTFM_API_KEY }
+        lastfmSecret.value = secretsPrefs.getString(KEY_LASTFM_SECRET, "").orEmpty().ifBlank { BuildConfig.LASTFM_SECRET }
         lastfmEndpoint.value = prefs.getString(KEY_LASTFM_ENDPOINT, "").orEmpty()
         lastfmScrobbleEnabled.value = prefs.getBoolean(KEY_LASTFM_SCROBBLE_ENABLED, false)
         lastfmNowPlaying.value = prefs.getBoolean(KEY_LASTFM_NOW_PLAYING, false) && lastfmScrobbleEnabled.value
@@ -578,7 +588,7 @@ object AppSettings {
         scrobbleDelayPercent.value = prefs.getFloat(KEY_SCROBBLE_DELAY_PERCENT, 0.5f)
         scrobbleDelaySeconds.value = prefs.getInt(KEY_SCROBBLE_DELAY_SECONDS, 180)
         listenBrainzEnabled.value = prefs.getBoolean(KEY_LISTENBRAINZ_ENABLED, false)
-        listenBrainzToken.value = prefs.getString(KEY_LISTENBRAINZ_TOKEN, "").orEmpty()
+        listenBrainzToken.value = secretsPrefs.getString(KEY_LISTENBRAINZ_TOKEN, "").orEmpty()
         authStore = AuthStore(context)
         discordToken.value = authStore.discordToken.orEmpty()
         discordUsername.value = prefs.getString(KEY_DISCORD_USERNAME, "").orEmpty()
@@ -699,7 +709,7 @@ object AppSettings {
      * the very first call seeds the stored value from [currentVersionCode]
      * rather than reporting an update.
      *
-     * Musique ships sideloaded (see [com.velthy.client.data.AppUpdateChecker]),
+     * Velthy ships sideloaded (see [com.velthy.client.data.AppUpdateChecker]),
      * so installing a new APK over the old one is the only "update" there is —
      * app data, this pref included, survives it exactly like a Play Store
      * update. Call once per process start, before anything reads a cache that
@@ -725,6 +735,31 @@ object AppSettings {
             .putString(KEY_QUALITY_CELLULAR, legacy)
             .remove(KEY_QUALITY_LEGACY)
             .apply()
+    }
+
+    /**
+     * Moves credentials that used to sit alongside the ordinary settings — in
+     * the pre-rebrand `musique_settings` file, now carried into
+     * `velthy_settings` — into the dedicated secrets store, then drops them
+     * from the settings file so no ordinary backup can carry them. Runs once
+     * per credential; after it completes the reads below never touch the
+     * settings file for a secret again.
+     */
+    private fun migrateSecretsOutOfSettings() {
+        val secretKeys = SECRETS + SPOTIFY_TOKEN_KEY
+        val stale = secretKeys.filter { prefs.contains(it) }
+        if (stale.isEmpty()) return
+
+        secretsPrefs.edit().apply {
+            stale.forEach { key ->
+                val value = prefs.getString(key, null)
+                if (value != null) putString(key, value)
+            }
+        }.apply()
+
+        prefs.edit().apply {
+            stale.forEach { remove(it) }
+        }.apply()
     }
 
     private fun readQuality(key: String): AudioQuality {
@@ -948,17 +983,17 @@ object AppSettings {
 
     fun setLastfmSessionKey(value: String) {
         lastfmSessionKey.value = value
-        prefs.edit().putString(KEY_LASTFM_SESSION_KEY, value).apply()
+        secretsPrefs.edit().putString(KEY_LASTFM_SESSION_KEY, value).apply()
     }
 
     fun setLastfmApiKey(value: String) {
         lastfmApiKey.value = value
-        prefs.edit().putString(KEY_LASTFM_API_KEY, value).apply()
+        secretsPrefs.edit().putString(KEY_LASTFM_API_KEY, value).apply()
     }
 
     fun setLastfmSecret(value: String) {
         lastfmSecret.value = value
-        prefs.edit().putString(KEY_LASTFM_SECRET, value).apply()
+        secretsPrefs.edit().putString(KEY_LASTFM_SECRET, value).apply()
     }
 
     fun setLastfmEndpoint(value: String) {
@@ -1003,7 +1038,7 @@ object AppSettings {
 
     fun setListenBrainzToken(value: String) {
         listenBrainzToken.value = value
-        prefs.edit().putString(KEY_LISTENBRAINZ_TOKEN, value).apply()
+        secretsPrefs.edit().putString(KEY_LISTENBRAINZ_TOKEN, value).apply()
     }
 
     fun setFullBleedArtwork(value: Boolean) {
@@ -1189,6 +1224,7 @@ object AppSettings {
     private const val KEY_LASTFM_API_KEY = "lastfm_api_key"
     private const val KEY_LASTFM_SECRET = "lastfm_secret"
     private const val KEY_LASTFM_ENDPOINT = "lastfm_endpoint"
+    private const val SPOTIFY_TOKEN_KEY = "spotify_spdc_token"
     private const val KEY_LIBRARY_SORT = "library_sort"
     private const val KEY_LASTFM_SCROBBLE_ENABLED = "lastfm_scrobble_enabled"
     private const val KEY_LASTFM_NOW_PLAYING = "lastfm_now_playing"
@@ -1250,6 +1286,7 @@ object AppSettings {
         KEY_LASTFM_API_KEY,
         KEY_LASTFM_SECRET,
         KEY_LISTENBRAINZ_TOKEN,
+        SPOTIFY_TOKEN_KEY,
     )
 
     private val DEVICE_LOCAL = setOf(

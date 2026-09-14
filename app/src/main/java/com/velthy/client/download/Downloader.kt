@@ -1,4 +1,4 @@
-﻿package com.velthy.client.download
+package com.velthy.client.download
 
 import com.velthy.client.data.DebugLog as Log
 import com.velthy.client.data.Http
@@ -37,7 +37,7 @@ import kotlin.coroutines.coroutineContext
  */
 object Downloader {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /** Matches the range size read-ahead settled on; large enough to amortise, small enough to cancel promptly. */
     private const val CHUNK_BYTES = 2L * 1024 * 1024

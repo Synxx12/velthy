@@ -93,7 +93,7 @@ const val BACK_RESTARTS_AFTER_MS = 10_000L
  * notification, lockscreen/Bluetooth controls, and Android Auto surface for
  * free; UI processes attach with a MediaController.
  *
- * Queue items carry a `musique://watch?v=<videoId>` URI. The actual stream
+ * Queue items carry a `Velthy://watch?v=<videoId>` URI. The actual stream
  * URL is resolved lazily by [ResolvingDataSource] the moment ExoPlayer opens
  * the item — stream URLs expire after a few hours, so resolving at play time
  * (on Media3's loader thread, hence runBlocking is safe) keeps queues valid.
@@ -289,7 +289,7 @@ class PlaybackService : MediaSessionService() {
                 // one that reached it and got nothing back, and the two have
                 // opposite fixes.
                 TrackLog.d(
-                    "Musique",
+                    "Velthy",
                     "${if (proving) "auditioning" else "serving"} upgraded $videoId " +
                         "from ${Uri.parse(upgraded.url).host} " +
                         "at ${dataSpec.position} (${upgraded.format.summary})",
@@ -426,7 +426,7 @@ class PlaybackService : MediaSessionService() {
                 if (isPlaying) {
                     trackSelectedAt?.let {
                         TrackLog.d(
-                            "Musique",
+                            "Velthy",
                             "TIMING first audio: ${SystemClock.elapsedRealtime() - it}ms since track selected",
                         )
                         trackSelectedAt = null
@@ -523,7 +523,7 @@ class PlaybackService : MediaSessionService() {
                         StreamChoice.forget(id)
                     }
                 }
-                TrackLog.d("Musique", "TIMING track selected: ${mediaItem?.mediaId} (reason=$reason)")
+                TrackLog.d("Velthy", "TIMING track selected: ${mediaItem?.mediaId} (reason=$reason)")
 
                 // currentPosition already belongs to the new item by now, so
                 // the outgoing track is closed out on the last sampled value.
@@ -709,7 +709,7 @@ class PlaybackService : MediaSessionService() {
             ) {
                 val cutAt = swapCutAt ?: return
                 swapCutAt = null
-                TrackLog.d("Musique", "swap seam: ${SystemClock.elapsedRealtime() - cutAt}ms of silence")
+                TrackLog.d("Velthy", "swap seam: ${SystemClock.elapsedRealtime() - cutAt}ms of silence")
             }
 
             /**
@@ -721,7 +721,7 @@ class PlaybackService : MediaSessionService() {
             override fun onPlaybackStateChanged(eventTime: AnalyticsListener.EventTime, state: Int) {
                 val cutAt = swapCutAt ?: return
                 if (state == Player.STATE_READY) {
-                    TrackLog.d("Musique", "swap leg: ready ${SystemClock.elapsedRealtime() - cutAt}ms after the cut")
+                    TrackLog.d("Velthy", "swap leg: ready ${SystemClock.elapsedRealtime() - cutAt}ms after the cut")
                 }
             }
 
@@ -733,7 +733,7 @@ class PlaybackService : MediaSessionService() {
             ) {
                 val cutAt = swapCutAt ?: return
                 TrackLog.d(
-                    "Musique",
+                    "Velthy",
                     "swap leg: $decoderName stood up in ${initializationDurationMs}ms, " +
                         "${SystemClock.elapsedRealtime() - cutAt}ms after the cut",
                 )
@@ -906,13 +906,13 @@ class PlaybackService : MediaSessionService() {
         val attempts = recoveries.getOrDefault(mediaId, 0) + 1
         recoveries[mediaId] = attempts
         TrackLog.w(
-            "Musique",
+            "Velthy",
             "playback failed for $mediaId at ${position}ms (${error.errorCodeName}), attempt $attempts",
             error,
         )
         val givingUp = attempts > MAX_RECOVERIES
         if (givingUp) {
-            TrackLog.w("Musique", "$mediaId has failed $attempts times; leaving it alone")
+            TrackLog.w("Velthy", "$mediaId has failed $attempts times; leaving it alone")
         }
         // The upgraded rendition goes with the cache entry it lived in, so the
         // marker on the URI would otherwise point at nothing.
@@ -940,7 +940,7 @@ class PlaybackService : MediaSessionService() {
         uri?.getQueryParameter("v")?.takeIf(StreamChoice::isSubstitute)?.let { videoId ->
             StreamChoice.refuseSubstitutes(videoId)
             TrackLog.w(
-                "Musique",
+                "Velthy",
                 "$videoId broke on a substituted stream; YouTube serves it for now",
             )
             // And no swapping back to it mid-song either: the second look asks
@@ -964,7 +964,7 @@ class PlaybackService : MediaSessionService() {
             withContext(Dispatchers.Main) {
                 val player = this@PlaybackService.player ?: return@withContext
                 if (player.currentMediaItem?.mediaId != mediaId) return@withContext
-                TrackLog.d("Musique", "retrying $mediaId from ${position}ms")
+                TrackLog.d("Velthy", "retrying $mediaId from ${position}ms")
                 if (isUpgradedUri) {
                     val cleanUriString = uri.toString()
                         .replace("&${QualityUpgrade.MARKER}=hifi", "")
@@ -1046,7 +1046,7 @@ class PlaybackService : MediaSessionService() {
             upgradeJob?.cancel()
         }
         upgradeFor = mediaId
-        if (alreadyPending) TrackLog.d("Musique", "looking again for a better copy of $mediaId")
+        if (alreadyPending) TrackLog.d("Velthy", "looking again for a better copy of $mediaId")
         upgradeJob = scope.launch {
             // A previous visit to this track already did all the expensive
             // parts and lost the swap to a skip. Nothing about the answer has
@@ -1054,7 +1054,7 @@ class PlaybackService : MediaSessionService() {
             // on disk — so this goes straight to the swap and skips the ten
             // seconds of catalogue searching it would otherwise repeat.
             if (shelved != null) {
-                TrackLog.d("Musique", "re-offering the upgrade already proved for $mediaId")
+                TrackLog.d("Velthy", "re-offering the upgrade already proved for $mediaId")
                 NerdStats.onLosslessRaceStart(mediaId)
                 try {
                     swapIn(mediaId, shelved)
@@ -1165,7 +1165,7 @@ class PlaybackService : MediaSessionService() {
      * Two measurements, in order of directness:
      *
      *  - **What the decoder says.** `Format.bitrate` is populated for the
-     *    containers that carry the field, which for what Musique plays means
+     *    containers that carry the field, which for what Velthy plays means
      *    MP4/AAC — the 320kbps copy a module served last session reports itself
      *    exactly.
      *  - **What the cache entry weighs.** Opus in WebM, which is what YouTube
@@ -1250,7 +1250,7 @@ class PlaybackService : MediaSessionService() {
     private suspend fun swapIn(mediaId: String, stream: SourceStream) {
         val at = withContext(Dispatchers.Main) { swapPointFor(mediaId) } ?: return
         if (at.duration > 0 && at.duration - at.position < UPGRADE_MIN_REMAINING_MS) {
-            TrackLog.d("Musique", "upgrade abandoned: only ${at.duration - at.position}ms of the track left")
+            TrackLog.d("Velthy", "upgrade abandoned: only ${at.duration - at.position}ms of the track left")
             return
         }
 
@@ -1314,27 +1314,27 @@ class PlaybackService : MediaSessionService() {
             val now = swapPointFor(mediaId)
             if (crossfade?.isTransitioning() == true) {
                 QualityUpgrade.shelve(mediaId, stream)
-                TrackLog.d("Musique", "upgrade for $mediaId shelved: a crossfade was still running")
+                TrackLog.d("Velthy", "upgrade for $mediaId shelved: a crossfade was still running")
                 return@withContext
             }
             if (now == null) {
                 QualityUpgrade.shelve(mediaId, stream)
-                TrackLog.d("Musique", "upgrade for $mediaId proved but the queue moved on; shelved")
+                TrackLog.d("Velthy", "upgrade for $mediaId proved but the queue moved on; shelved")
                 return@withContext
             }
             val player = player ?: return@withContext
             if (now.duration > 0 && now.duration - now.position < UPGRADE_MIN_REMAINING_MS) {
-                TrackLog.d("Musique", "upgrade abandoned: only ${now.duration - now.position}ms of the track left")
+                TrackLog.d("Velthy", "upgrade abandoned: only ${now.duration - now.position}ms of the track left")
                 QualityUpgrade.forget(mediaId)
                 return@withContext
             }
             if (QualityUpgrade.forcedStream(Uri.parse(upgradedUri)) == null) {
-                TrackLog.d("Musique", "upgrade abandoned: its stream was dropped while it was being proved")
+                TrackLog.d("Velthy", "upgrade abandoned: its stream was dropped while it was being proved")
                 return@withContext
             }
             if (now.position > warmedThrough) {
                 TrackLog.d(
-                    "Musique",
+                    "Velthy",
                     "upgrade landing at ${now.position}ms, past the ${warmedThrough}ms warmed for it",
                 )
             }
@@ -1369,7 +1369,7 @@ class PlaybackService : MediaSessionService() {
 
             StreamChoice.remember(mediaId, stream, substituted = true)
             QualityUpgrade.unshelve(mediaId)
-            TrackLog.d("Musique", "upgraded to ${stream.format.summary} at ${now.position}ms")
+            TrackLog.d("Velthy", "upgraded to ${stream.format.summary} at ${now.position}ms")
             watchUpgrade(mediaId, now.uri, now.position, now.duration, previousFormat)
             // The opening again, this time sized for Smart Fade rather than for
             // a container header.
@@ -1496,7 +1496,7 @@ class PlaybackService : MediaSessionService() {
                     when (verdict) {
                         is Audition.Ready -> return@withTimeoutOrNull verdict.bufferedTo
                         is Audition.Rejected -> {
-                            TrackLog.w("Musique", "upgrade dropped before it was heard: ${verdict.why}")
+                            TrackLog.w("Velthy", "upgrade dropped before it was heard: ${verdict.why}")
                             return@withTimeoutOrNull null
                         }
                         Audition.Waiting -> delay(UPGRADE_PROVE_STEP_MS)
@@ -1513,11 +1513,11 @@ class PlaybackService : MediaSessionService() {
         }
         val took = SystemClock.elapsedRealtime() - startedAt
         if (warmedThrough == null) {
-            TrackLog.d("Musique", "upgrade for $mediaId never proved itself in ${took}ms")
+            TrackLog.d("Velthy", "upgrade for $mediaId never proved itself in ${took}ms")
             return null
         }
         TrackLog.d(
-            "Musique",
+            "Velthy",
             "upgrade to ${stream.format.summary} proved in ${took}ms, buffered through ${warmedThrough}ms",
         )
         // Media3 locks a cache entry to one writer, and the audition lets go of
@@ -1527,7 +1527,7 @@ class PlaybackService : MediaSessionService() {
         // the stall [AudioCache]'s key factory documents. Free to wait for: the
         // old stream is still playing.
         delay(AUDITION_RELEASE_MS)
-        TrackLog.d("Musique", AudioCache.cachedSummary(Uri.parse(upgradedUri)))
+        TrackLog.d("Velthy", AudioCache.cachedSummary(Uri.parse(upgradedUri)))
         return warmedThrough
     }
 
@@ -1690,7 +1690,7 @@ class PlaybackService : MediaSessionService() {
             // to one that never loaded at all, and only the second is a fault
             // in the stream rather than a wrong match.
             TrackLog.w(
-                "Musique",
+                "Velthy",
                 "upgrade reverted: replacement reports ${player.duration}ms against " +
                     "${previousDuration}ms (state=${player.playbackState}, " +
                     "buffered=${player.bufferedPosition}ms)",
@@ -1925,7 +1925,7 @@ class PlaybackService : MediaSessionService() {
                         if (losslessStream != null && !losslessStream.belowRequest) {
                             StreamChoice.remember(nextMediaId, losslessStream, substituted = true)
                             QualityUpgrade.force(nextMediaId, losslessStream)
-                            TrackLog.d("Musique", "Prefetched Lossless FLAC for next queue track: '${target.title}'")
+                            TrackLog.d("Velthy", "Prefetched Lossless FLAC for next queue track: '${target.title}'")
                         }
                     }
                 }
@@ -2419,7 +2419,7 @@ class PlaybackService : MediaSessionService() {
                 activityName = AppSettings.discordActivityName.value,
                 showAlbum = AppSettings.discordShowAlbum.value,
             ).onFailure {
-                TrackLog.d("Musique", "Discord presence failed: ${it.message}")
+                TrackLog.d("Velthy", "Discord presence failed: ${it.message}")
             }
         }
     }
@@ -2577,7 +2577,7 @@ class PlaybackService : MediaSessionService() {
                 .onFailure {
                     LikeState.set(videoId, previous)
                     mediaSession?.setCustomLayout(notificationButtons())
-                    TrackLog.w("Musique", "notification favorite failed: ${it.message}")
+                    TrackLog.w("Velthy", "notification favorite failed: ${it.message}")
                 }
         }
     }
@@ -2713,8 +2713,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
-        const val CHANNEL_ID = "musique_playback"
-        const val SESSION_ID = "MusiquePlayback"
+        const val CHANNEL_ID = "velthy_playback"
+        const val SESSION_ID = "VelthyPlayback"
         const val ACTION_TOGGLE_FAVORITE = "com.velthy.client.action.TOGGLE_FAVORITE"
         const val ACTION_TOGGLE_AUTOPLAY = "com.velthy.client.action.TOGGLE_AUTOPLAY"
         const val ACTION_TOGGLE_SHUFFLE = "com.velthy.client.action.TOGGLE_SHUFFLE"

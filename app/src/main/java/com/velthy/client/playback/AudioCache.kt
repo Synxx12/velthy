@@ -55,13 +55,13 @@ import kotlin.coroutines.coroutineContext
  * expire within hours, and differ between resolves of the same track, so
  * keying on them would cache every track afresh on every play. Because
  * [CacheDataSource] sits *outside* the resolving data source it sees the
- * original `musique://watch?v=<id>` request, and a cache hit never resolves a
+ * original `Velthy://watch?v=<id>` request, and a cache hit never resolves a
  * URL at all.
  */
 @UnstableApi
 object AudioCache {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /**
      * The disk budget, straight from [AppSettings] — 512MB by default, roughly

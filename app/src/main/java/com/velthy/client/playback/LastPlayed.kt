@@ -3,6 +3,7 @@
 import android.content.Context
 import android.content.SharedPreferences
 import com.velthy.client.data.model.Song
+import com.velthy.client.data.settings.migrateLegacyPrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -24,7 +25,7 @@ object LastPlayed {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun init(context: Context) {
-        prefs = context.getSharedPreferences("musique_last_played", Context.MODE_PRIVATE)
+        prefs = migrateLegacyPrefs(context, "musique_last_played", "velthy_last_played")
     }
 
     fun save(songs: List<Song>, index: Int, positionMs: Long) {

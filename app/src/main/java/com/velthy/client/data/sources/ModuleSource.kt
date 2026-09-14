@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.sources
+package com.velthy.client.data.sources
 
 import android.util.Log
 import com.velthy.client.data.TrackLog
@@ -376,7 +376,7 @@ class ModuleSource(
         }
 
     internal companion object {
-        const val TAG = "Musique"
+        const val TAG = "Velthy"
 
         /**
          * Whether a module's stream URL is one no server could answer, decided

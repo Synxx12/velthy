@@ -70,13 +70,9 @@ jobs:
             RAW_VER="${GITHUB_REF#refs/tags/native-v}"
             TAG="v${RAW_VER}"
           else
-            # Fetch latest tag from releases (Synxx12/velthy first, fallback musique-app-releases)
+            # Fetch the latest tag from this repository's own releases.
             LATEST=$(gh release list --repo Synxx12/velthy --limit 30 2>/dev/null \
               | awk '{print $3}' | grep -E '^(native-v|v)' | head -n 1 || echo "")
-            if [ -z "$LATEST" ]; then
-              LATEST=$(gh release list --repo Synxx12/musique-app-releases --limit 30 2>/dev/null \
-                | awk '{print $3}' | grep -E '^(native-v|v)' | head -n 1 || echo "")
-            fi
             if [ -n "$LATEST" ]; then
               RAW="${LATEST#native-v}"
               RAW="${RAW#v}"
@@ -94,9 +90,16 @@ jobs:
           DISPLAY_VER="${TAG#native-v}"
           DISPLAY_VER="${DISPLAY_VER#v}"
           
+          # Derive a monotonic versionCode from the display version so the APK
+          # the build produces is always the tag it was built from: an A.B.C.D
+          # tag maps to A*1000000 + B*10000 + C*100 + D (missing parts are 0).
+          IFS='.' read -r V_MAJOR V_MINOR V_PATCH V_BUILD <<< "${DISPLAY_VER}"
+          VERSION_CODE=$(( ${V_MAJOR:-0} * 1000000 + ${V_MINOR:-0} * 10000 + ${V_PATCH:-0} * 100 + ${V_BUILD:-0} ))
+          
           echo "VERSION_TAG=${TAG}" >> $GITHUB_ENV
           echo "DISPLAY_VERSION=${DISPLAY_VER}" >> $GITHUB_ENV
-          echo "✅ Release Tag: ${TAG} (Display: v${DISPLAY_VER})"
+          echo "VERSION_CODE=${VERSION_CODE}" >> $GITHUB_ENV
+          echo "✅ Release Tag: ${TAG} (Display: v${DISPLAY_VER}, Code: ${VERSION_CODE})"
 
       # ── 5. RESTORE RELEASE KEYSTORE & CONFIGURATION ──
       - name: Setup Keystore
@@ -138,7 +141,10 @@ jobs:
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
         run: |
-          ./gradlew assembleProdRelease --stacktrace
+          ./gradlew assembleProdRelease \
+            -Pvelthy.versionName="${DISPLAY_VERSION}" \
+            -Pvelthy.versionCode="${VERSION_CODE}" \
+            --stacktrace
           
           mkdir -p release_assets
           

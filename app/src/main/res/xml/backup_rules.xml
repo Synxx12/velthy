@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older that API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+    pre-API 31 counterpart of data_extraction_rules.xml (see that file for the
+    reasoning). Credentials live in dedicated stores and are excluded from Auto
+    Backup; ordinary preferences still are. The legacy `musique_*` names are
+    excluded too for installs that predate the rebrand.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="velthy_secrets.xml" />
+    <exclude domain="sharedpref" path="velthy_auth.xml" />
+    <exclude domain="sharedpref" path="velthy_auth_plain.xml" />
+    <exclude domain="sharedpref" path="velthy_sources.xml" />
+    <exclude domain="sharedpref" path="velthy_sources_plain.xml" />
+    <exclude domain="sharedpref" path="musique_secrets.xml" />
+    <exclude domain="sharedpref" path="musique_auth.xml" />
+    <exclude domain="sharedpref" path="musique_auth_plain.xml" />
+    <exclude domain="sharedpref" path="musique_sources.xml" />
+    <exclude domain="sharedpref" path="musique_sources_plain.xml" />
+    <!-- Holds credentials until the one-time move into velthy_secrets runs. -->
+    <exclude domain="sharedpref" path="musique_settings.xml" />
+    <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs_key_keyset__.xml" />
+    <exclude domain="sharedpref" path="__androidx_security_crypto_encrypted_prefs_value_keyset__.xml" />
 </full-backup-content>

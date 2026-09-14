@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.os.SystemClock
 import android.util.Log
@@ -699,7 +699,7 @@ class CrossfadeController(
         return if (seconds > 0) seconds * 1000L else 0L
     }
 
-    /** Musique doesn't carry album metadata on [MediaMetadata] yet, so [TransitionTrackInfo.album] stays blank. */
+    /** Velthy doesn't carry album metadata on [MediaMetadata] yet, so [TransitionTrackInfo.album] stays blank. */
     private fun MediaItem.toTransitionInfo(durationMs: Long) = TransitionTrackInfo(
         id = mediaId,
         durationMs = durationMs,
@@ -1364,7 +1364,7 @@ class CrossfadeController(
     private fun lapFall(progress: Float): Float = 1f - lapRise(progress)
 
     private companion object {
-        const val TAG = "MusiqueCrossfade"
+        const val TAG = "VelthyCrossfade"
 
         /**
          * Used only before a pair has been analysed, or when the evidence is

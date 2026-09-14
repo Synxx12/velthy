@@ -6,6 +6,17 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
+### [1.4.6.5] — Perbaikan Aplikasi Tertutup Sendiri
+> 📅 2026-09-14
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Unduhan Aplikasi Jauh Lebih Ringan**: Berkas APK rilis kini dikompresi dan dipangkas menyeluruh — kode serta aset yang tidak pernah dipakai lagi dibuang saat build, sehingga ukuran unduhan turun drastis tanpa mengurangi satu pun fitur.
+- **Kredensial Tidak Lagi Ikut Cadangan Cloud**: Sesi login, kunci Last.fm, token ListenBrainz, dan token Spotify dipindahkan ke penyimpanan terpisah dan dikecualikan dari cadangan otomatis serta transfer antar perangkat. Setelan biasa tetap ikut tercadang seperti sebelumnya.
+- **Nama Aplikasi Sepenuhnya Velthy**: Seluruh sisa nama lama pada teks, folder ekspor, dan tautan kini seragam memakai nama Velthy. Pengaturan, riwayat pencarian, antrean terakhir, dan sumber yang sudah tersimpan ikut dipindahkan otomatis sehingga tidak ada yang hilang setelah pembaruan.
+
+#### 🐛 Perbaikan Masalah
+- **Aplikasi Tidak Lagi Tertutup Sendiri Saat Memuat Sumber**: Sebuah kerusakan di mesin sandbox yang menjalankan modul sumber membuat aplikasi tertutup mendadak — musik berhenti dan ikut hilang dari latar belakang — tepat ketika berpindah ke sumber kualitas lebih tinggi atau memuat daftar sumber. Setiap modul kini disiapkan secara berurutan sehingga tidak ada lagi yang saling bertabrakan saat dimuat bersamaan.
+
 ### [1.4.6.4] — Pengenalan Musik, Sleep Timer & Sumber
 > 📅 2026-09-14
 

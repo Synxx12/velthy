@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.components
+package com.velthy.client.ui.components
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -195,7 +195,7 @@ fun ShelfSkeleton(index: Int = 0, cardWidth: Dp = SHELF_CARD_WIDTH, cardCorner: 
     }
 }
 
-/** The Quick Picks 4-song columns skeleton matching YouTube Music / Musique home feed. */
+/** The Quick Picks 4-song columns skeleton matching YouTube Music / Velthy home feed. */
 @Composable
 private fun QuickPicksShelfSkeleton() {
     Column(Modifier.padding(bottom = 26.dp)) {

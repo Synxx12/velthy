@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data.sources.module
+package com.velthy.client.data.sources.module
 
 import android.util.Log
 import com.velthy.client.data.TrackLog
@@ -15,7 +15,7 @@ import okhttp3.Request
  * Fetches a module index, downloads and loads module JS, and calls the
  * module's exported search/stream functions.
  *
- * Ported from Convx's `ModuleManager`, adapted to use Musique's shared
+ * Ported from Convx's `ModuleManager`, adapted to use Velthy's shared
  * [Http.client] OkHttp instance rather than a separate Ktor client.
  *
  * One instance should be held per [ModuleSource] config so that loaded
@@ -265,7 +265,7 @@ class ModuleManager {
     }
 
     private companion object {
-        const val TAG = "Musique"
+        const val TAG = "Velthy"
 
         /**
          * How long a fetched index is trusted. Long enough that a run of

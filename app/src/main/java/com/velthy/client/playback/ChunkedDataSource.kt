@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.net.Uri
 import android.util.Log
@@ -187,7 +187,7 @@ class ChunkedDataSource(
     }
 
     private companion object {
-        const val TAG = "Musique"
+        const val TAG = "Velthy"
 
         /** Enough to ride out a truncated range, not enough to hang on a dead one. */
         const val MAX_EMPTY_RANGES = 3

@@ -20,7 +20,7 @@ import java.io.File
 
 object LocalMediaRepository {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
 
     /** Check if storage/audio permission is granted to query device local music. */
     fun hasStoragePermission(context: Context): Boolean {

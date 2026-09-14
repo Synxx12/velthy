@@ -30,15 +30,15 @@ object FlutterMigrationEngine {
      * Checks if migration has already been automatically executed.
      */
     fun isMigrationDone(context: Context): Boolean {
-        val prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("velthy_settings", Context.MODE_PRIVATE)
         return prefs.getBoolean(MIGRATION_DONE_KEY, false)
     }
 
     /**
-     * Performs thorough metadata-rich migration from Flutter Musique to Android Native.
+     * Performs thorough metadata-rich migration from the previous Flutter app to Android Native.
      */
     suspend fun migrate(context: Context, force: Boolean = false): FlutterMigrationResult = withContext(Dispatchers.IO) {
-        val prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("velthy_settings", Context.MODE_PRIVATE)
         if (!force && prefs.getBoolean(MIGRATION_DONE_KEY, false)) {
             Log.d(TAG, "Flutter migration already completed. Skipping automatic run.")
             return@withContext FlutterMigrationResult(0, 0, "Already migrated")

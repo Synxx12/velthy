@@ -32,8 +32,6 @@ object AppUpdateChecker {
 
     private const val RELEASES_API_URL =
         "https://api.github.com/repos/Synxx12/velthy/releases"
-    private const val FALLBACK_API_URL =
-        "https://api.github.com/repos/Synxx12/musique-app-releases/releases"
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -47,7 +45,6 @@ object AppUpdateChecker {
 
             // 2. Try GitHub REST API for detailed release notes & asset metadata
             val apiUpdate = fetchLatestNativeRelease(RELEASES_API_URL)
-                ?: fetchLatestNativeRelease(FALLBACK_API_URL)
 
             val finalUpdate = when {
                 apiUpdate != null -> apiUpdate
@@ -114,7 +111,7 @@ object AppUpdateChecker {
             val request = Request.Builder()
                 .url(url)
                 .head()
-                .header("User-Agent", "Mozilla/5.0 (Android) MusiqueNative")
+                .header("User-Agent", "Mozilla/5.0 (Android) VelthyNative")
                 .build()
             Http.client.newCall(request).execute().use { response ->
                 response.header("Content-Length")?.toLongOrNull() ?: 0L
@@ -189,10 +186,10 @@ object AppUpdateChecker {
                             if (isX86 && !isArm64 && name.contains("x86", ignoreCase = true)) return@firstOrNull true
                             false
                         } ?: assets.firstOrNull { assetEl ->
-                            // 2. Default lightweight release APK (Velthy-v1.X.apk or Musique-v1.X-client.apk)
+                            // 2. Default lightweight release APK (Velthy-v1.X.apk)
                             val name = (assetEl as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty()
                             name.endsWith(".apk", ignoreCase = true) &&
-                                (name.contains("velthy", ignoreCase = true) || name.contains("musique", ignoreCase = true) || name.contains("client", ignoreCase = true)) &&
+                                (name.contains("velthy", ignoreCase = true) || name.contains("client", ignoreCase = true)) &&
                                 !name.contains("latest", ignoreCase = true) &&
                                 !name.contains("universal", ignoreCase = true)
                         } ?: assets.firstOrNull { assetEl ->

@@ -1,4 +1,4 @@
-﻿package com.velthy.client.data
+package com.velthy.client.data
 
 import android.os.Build
 import android.util.Log
@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * The obvious implementation shells out to `logcat`, and it works. But from
  * Android 13 an app that does so trips a system consent dialog — *"Allow
- * Musique to access all device logs?"* — which appears whenever the process
+ * Velthy to access all device logs?"* — which appears whenever the process
  * happens to spawn, asks for far more than this needs, and puts every other
  * app's output within reach of a paste made from a music player. None of that
  * is a reasonable price for a debug button.
@@ -44,7 +44,7 @@ import java.util.concurrent.ConcurrentHashMap
  * the answer to "why did this song sound wrong".
  *
  * Call [d], [w] and [e] exactly where `Log.d`/`w`/`e` would go; they forward
- * to logcat as well, so `adb logcat -s Musique` is unchanged.
+ * to logcat as well, so `adb logcat -s Velthy` is unchanged.
  */
 object TrackLog {
 
@@ -153,7 +153,7 @@ object TrackLog {
      * what the player believed it was playing when the log was taken.
      */
     private fun header(song: Song, stats: NerdStats.Snapshot?, from: Long?, count: Int) = buildString {
-        appendLine("Musique log — ${song.title} — ${song.artist}")
+        appendLine("Velthy log — ${song.title} — ${song.artist}")
         appendLine("id=${song.videoId} duration=${song.durationText ?: "?"} album=${song.albumName ?: "?"}")
         appendLine("playing: ${stats.describe()}")
         appendLine(

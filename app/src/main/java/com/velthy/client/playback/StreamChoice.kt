@@ -1,4 +1,4 @@
-﻿package com.velthy.client.playback
+package com.velthy.client.playback
 
 import android.os.SystemClock
 import com.velthy.client.data.settings.AppSettings
@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Two sources cannot share one cache entry, and [AudioCache]'s key factory
  * cannot tell them apart: it runs *before* the resolve, off the
- * `musique://watch?v=…` URI, and at that point which server will answer is
+ * `Velthy://watch?v=…` URI, and at that point which server will answer is
  * not yet known. So the fix goes the other way round — the entry does not
  * learn who is filling it, the resolver is held to whoever filled it first.
  *

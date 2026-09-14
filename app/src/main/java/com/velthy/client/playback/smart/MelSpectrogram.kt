@@ -1,12 +1,12 @@
-﻿/*
+/*
  * Ported from Orchard (https://github.com/SFG5453/Orchard).
  *
  * Copyright (C) 2026 SFG545 (original Orchard implementation)
- * Copyright (C) 2026 Kushagra Singh (Musique adaptation)
+ * Copyright (C) 2026 Kushagra Singh (Velthy adaptation)
  *
  * Orchard's original source is licensed under the GNU Affero General Public
  * License, version 3 or later. Per AGPLv3 section 13, this file is combined
- * here into Musique -- a work licensed under the GNU General Public
+ * here into Velthy -- a work licensed under the GNU General Public
  * License, version 3 or later -- and remains itself governed by the AGPLv3
  * as part of that combination.
  *
@@ -36,7 +36,7 @@ package com.velthy.client.playback.smart
 object MelSpectrogram {
 
     /** True when the native library loaded. Analysis is optional, so this is a fact, not a fault. */
-    val available: Boolean = runCatching { System.loadLibrary("musique_analysis") }.isSuccess
+    val available: Boolean = runCatching { System.loadLibrary("velthy_analysis") }.isSuccess
 
     /** Mel bands per frame; the model's input width. */
     val mels: Int by lazy { if (available) nativeMelCount() else 128 }

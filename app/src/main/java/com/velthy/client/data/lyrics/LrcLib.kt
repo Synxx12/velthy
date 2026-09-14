@@ -24,7 +24,7 @@ import kotlin.math.abs
 object LrcLib {
 
     private const val BASE = "https://lrclib.net/api"
-    private const val AGENT = "Musique (https://github.com/musique)"
+    private const val AGENT = "Velthy (https://github.com/Synxx12/velthy)"
     private const val DURATION_TOLERANCE_SECONDS = 12
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }

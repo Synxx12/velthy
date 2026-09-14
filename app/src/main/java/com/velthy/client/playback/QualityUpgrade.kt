@@ -37,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * ### How the swap reaches the player
  *
- * The queue holds `musique://watch?v=…` URIs that
+ * The queue holds `Velthy://watch?v=…` URIs that
  * [PlaybackService][PlaybackService]'s resolving data source turns into real
  * URLs at open time. An upgrade re-points that indirection rather than
  * touching the queue: the stream is parked in [forced], the item is replaced

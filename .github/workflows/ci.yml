@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every push to main and on pull requests. Kept separate from the release
+# workflow so a broken commit is caught here, minutes after it lands, instead of
+# when a release tag is pushed. Never builds a release variant, so no keystore is
+# required.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests & debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # Tests and a debug build read these, and both have safe defaults, but
+      # supplying them keeps the CI build identical to a developer's.
+      - name: Setup Local Properties
+        env:
+          MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
+        run: |
+          echo "MODULE_INDEX_URL=${MODULE_INDEX_URL:-https://monochrome.rickyaddons.dpdns.org/8spine-source.json}" > local.properties
+
+      - name: Run unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Compile debug build
+        run: ./gradlew assembleDevDebug --stacktrace
+
+      # Lint never gates the build (lint.abortOnError is false), but a report is
+      # still produced for anyone who wants to look.
+      - name: Run lint
+        run: ./gradlew lintDevDebug --stacktrace
+        continue-on-error: true
+
+      - name: Upload test & lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-reports
+          path: |
+            app/build/reports/tests/**
+            app/build/reports/lint-results-*.html
+          if-no-files-found: ignore

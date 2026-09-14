@@ -205,7 +205,9 @@ fun StorageSettingsSheet(
                         loader.diskCache?.clear()
                         runCatching {
                             context.cacheDir.listFiles()?.forEach {
-                                if (it.name != "musique_audio") it.deleteRecursively()
+                                // The audio cache is managed by its own evictor
+                                // and its own clear action; leave it alone here.
+                                if (it.name != "audio") it.deleteRecursively()
                             }
                         }
                         refreshStats()
@@ -274,13 +276,13 @@ fun StorageSettingsSheet(
                     iconBg = Color(0xFF43A047).copy(alpha = 0.18f),
                     iconTint = Color(0xFF81C784),
                     title = "Export Songs to File Manager",
-                    subtitle = "Copy all downloaded songs to Phone Music folder (/Music/Musique)",
+                    subtitle = "Copy all downloaded songs to Phone Music folder (/Music/Velthy)",
                     onClick = {
                         scope.launch {
                             val count = Downloads.exportAllToMusicFolder(context)
                             Toast.makeText(
                                 context,
-                                if (count > 0) "$count songs exported to /Music/Musique" else "No downloaded songs to export",
+                                if (count > 0) "$count songs exported to /Music/Velthy" else "No downloaded songs to export",
                                 Toast.LENGTH_SHORT,
                             ).show()
                             refreshStats()
@@ -298,8 +300,8 @@ fun StorageSettingsSheet(
                     icon = Icons.Rounded.Sync,
                     iconBg = Color(0xFF0288D1).copy(alpha = 0.18f),
                     iconTint = Color(0xFF4FC3F7),
-                    title = "Migrate Flutter Musique Downloads",
-                    subtitle = "Scan & import offline songs downloaded in the previous Flutter app",
+                    title = "Migrate Legacy App Downloads",
+                    subtitle = "Scan & import offline songs downloaded in the previous app",
                     onClick = {
                         scope.launch {
                             val res = FlutterMigrationEngine.migrate(context, force = true)
@@ -541,13 +543,13 @@ fun DownloadSettingsSheet(
                     iconBg = Color(0xFF43A047).copy(alpha = 0.18f),
                     iconTint = Color(0xFF81C784),
                     title = "Export to File Manager",
-                    subtitle = "Copy all songs to /Music/Musique folder",
+                    subtitle = "Copy all songs to /Music/Velthy folder",
                     onClick = {
                         scope.launch {
                             val count = Downloads.exportAllToMusicFolder(context)
                             Toast.makeText(
                                 context,
-                                if (count > 0) "$count songs exported to /Music/Musique" else "No downloaded songs to export",
+                                if (count > 0) "$count songs exported to /Music/Velthy" else "No downloaded songs to export",
                                 Toast.LENGTH_SHORT,
                             ).show()
                         }
@@ -894,7 +896,7 @@ fun StorageLocationPickerDialog(
                             Text(
                                 text = when (location) {
                                     DownloadLocation.APP_INTERNAL -> "App Internal (Secure)"
-                                    DownloadLocation.PHONE_MUSIC -> "Phone Music Folder (/Music/Musique)"
+                                    DownloadLocation.PHONE_MUSIC -> "Phone Music Folder (/Music/Velthy)"
                                     DownloadLocation.DOWNLOADS -> "Downloads Folder (/Download/Velthy)"
                                 },
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),

@@ -20,7 +20,7 @@ import com.my.kizzy.rpc.RpcImage
  * The presence Discord renders from one [updateSong] call:
  *
  * ```
- *   Listening to Musique          <- activityName, or the app's own name
+ *   Listening to Velthy          <- activityName, or the app's own name
  *   ┌────┐  Song title             <- details
  *   │art │  Artist                 <- state
  *   └────┘  Album                  <- the artwork's text, see [showAlbum]
@@ -156,7 +156,7 @@ class DiscordRPC(
     /**
      * The name Discord puts after "Listening to". Taken from the app's own
      * label so it tracks a rename, with the dev flavor's suffix dropped —
-     * a side-by-side dev install should still look like Musique to everyone
+     * a side-by-side dev install should still look like Velthy to everyone
      * else on Discord.
      */
     private fun appName(): String =

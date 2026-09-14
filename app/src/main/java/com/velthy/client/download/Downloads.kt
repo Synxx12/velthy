@@ -10,6 +10,7 @@ import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.data.settings.migrateLegacyPrefs
 import com.velthy.client.data.sources.SourceResolver
 import com.velthy.client.data.sources.SourceStream
 import com.velthy.client.data.sources.TrackMatcher
@@ -66,7 +67,7 @@ sealed interface DownloadState {
  */
 object Downloads {
 
-    private const val TAG = "Musique"
+    private const val TAG = "Velthy"
     private const val KEY_SAVED_METADATA = "downloaded_tracks_metadata"
 
     private lateinit var prefs: SharedPreferences
@@ -102,7 +103,7 @@ object Downloads {
     private val running = mutableMapOf<String, Job?>()
 
     fun init(context: Context) {
-        prefs = context.getSharedPreferences("musique_settings", Context.MODE_PRIVATE)
+        prefs = migrateLegacyPrefs(context, "musique_settings", "velthy_settings")
         _saved.value = runCatching {
             json.decodeFromString(serializer, prefs.getString(KEY_SAVED, null) ?: "{}")
         }.getOrDefault(emptyMap())
@@ -552,8 +553,14 @@ object Downloads {
         val audioBytes = AudioCache.sizeBytes()
         val audioCount = AudioCache.cachedCount()
 
+        // The audio cache lives in the same cacheDir and is reported separately
+        // as streamingCacheBytes, so it is left out here rather than counted
+        // twice. [AudioCache] owns `cacheDir/audio`.
+        val audioCacheDir = File(context.cacheDir, "audio").absolutePath
         val tempBytes = runCatching {
-            context.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("velthy_audio") && !it.path.contains("musique_audio") }.sumOf { it.length() }
+            context.cacheDir.walkTopDown()
+                .filter { it.isFile && !it.absolutePath.startsWith(audioCacheDir) }
+                .sumOf { it.length() }
         }.getOrDefault(0L)
 
         var dlBytes = 0L
