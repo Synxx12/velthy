@@ -107,6 +107,19 @@ data class SourceStream(
      * against the runtime being played.
      */
     val durationSec: Int? = null,
+    /**
+     * The [MusicSource.configId] that actually produced this stream, when known.
+     *
+     * Recorded because the source a track ends up playing on is not always the
+     * one it was pinned to — a cross-source match can win, and the live lookup
+     * can be substituted. Knowing who served the stream is what lets the
+     * background upgrade skip re-asking that same source, since the same
+     * source, asked the same query at the same tier, can only reproduce the
+     * stream already playing. See
+     * [SourceResolver.upgradeFor][com.velthy.client.data.sources.SourceResolver.upgradeFor]'s
+     * `servedBy`.
+     */
+    val sourceConfigId: String? = null,
 )
 
 /**

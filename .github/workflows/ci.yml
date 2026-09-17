@@ -42,8 +42,15 @@ jobs:
       - name: Setup Local Properties
         env:
           MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
+          PARTY_SERVER_URL: ${{ secrets.PARTY_SERVER_URL }}
         run: |
           echo "MODULE_INDEX_URL=${MODULE_INDEX_URL:-https://monochrome.rickyaddons.dpdns.org/8spine-source.json}" > local.properties
+          # Listen Together's server, when a runner is given one. The build has a
+          # default, so an absent secret is not a failure — the app simply ships
+          # with the checked-in address.
+          if [ -n "${PARTY_SERVER_URL}" ]; then
+            echo "PARTY_SERVER_URL=${PARTY_SERVER_URL}" >> local.properties
+          fi
 
       - name: Run unit tests
         run: ./gradlew test --stacktrace

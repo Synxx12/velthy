@@ -6,6 +6,10 @@ import android.net.Uri
 import android.util.Log
 import com.velthy.client.BuildConfig
 import com.velthy.client.data.TrackLog
+import com.velthy.client.data.sources.addon.AddonClient
+import com.velthy.client.data.sources.addon.AddonException
+import com.velthy.client.data.sources.addon.DetectedFormat
+import com.velthy.client.data.sources.addon.SourceFormats
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +17,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.UUID
 
 /**
@@ -203,6 +208,18 @@ object SourceRegistry {
             .sortedBy { it.kind.rank }
             .mapNotNull { instances[it.id] }
 
+    /**
+     * [active], as the playback and substitution paths see it.
+     *
+     * Kept as a distinct name rather than inlined so the playback list has one
+     * definition to point at. Today it is [active] unchanged: every enabled,
+     * complete source is a candidate, and quality is negotiated per request by
+     * [SourceResolver.requestForNow] rather than by dropping sources from the
+     * list before they can answer. A ceiling-aware narrowing can be added here
+     * later without every caller having to be found.
+     */
+    fun activeForPlayback(): List<MusicSource> = active()
+
     fun instance(configId: String): MusicSource? = instances[configId]
 
     fun config(configId: String): SourceConfig? = configs.value.firstOrNull { it.id == configId }
@@ -282,6 +299,16 @@ object SourceRegistry {
             val existing = previous[config.id]?.takeIf { it.configuredBy(config) }
             config.id to (existing ?: build(config))
         }
+        // Whatever the rebuild above left behind, told so. An addon that was
+        // edited or removed is holding a manifest, a set of search answers and
+        // a handful of stream URLs that all describe the server it used to
+        // point at, and its client's own scope keeps them alive whether or not
+        // anything still references the source. Serving one of those afterwards
+        // would be answering a question about the old address with the new one
+        // selected.
+        previous.values.filterNot { it in instances.values }
+            .filterIsInstance<AddonSource>()
+            .forEach { it.release() }
         if (persist && ::prefs.isInitialized) {
             prefs.edit()
                 .putString(KEY_SOURCES, json.encodeToString(ListSerializer(SourceConfig.serializer()), next))
@@ -300,6 +327,83 @@ object SourceRegistry {
      */
     suspend fun probeCandidate(config: SourceConfig): SourceHealth = build(config).health()
 
+    /**
+     * Works out what is at [url] and returns a config that speaks to it, or a
+     * refusal saying what was found instead.
+     *
+     * This is what makes the editor accept "any JSON" rather than one shape.
+     * The kind is *detected* rather than chosen up front: pasting an addon's
+     * root, an addon's `manifest.json`, or a module index all end here, and
+     * which [MusicSource] gets built is decided by what the server actually
+     * returned. Anything recognised but unplayable — an extension registry, a
+     * manifest that cannot stream — comes back as a failure carrying a line
+     * written for the person reading it.
+     *
+     * [existing] is carried through so editing a saved source keeps its id and
+     * its on/off state; a new source gets a fresh config.
+     */
+    suspend fun identify(url: String, existing: SourceConfig? = null): Result<SourceConfig> {
+        val detected = SourceFormats.identify(url).getOrElse { return Result.failure(it) }
+        return when (detected) {
+            is DetectedFormat.Addon -> Result.success(
+                (existing ?: SourceConfig(kind = SourceKind.ADDON)).copy(
+                    kind = SourceKind.ADDON,
+                    baseUrl = detected.baseUrl,
+                    label = detected.manifest.displayName,
+                ),
+            )
+            is DetectedFormat.ModuleIndex -> Result.success(
+                (existing ?: SourceConfig(kind = SourceKind.CUSTOM_MODULE)).copy(
+                    kind = SourceKind.CUSTOM_MODULE,
+                    // The index URL itself, not a base: a module index is the
+                    // document, where an addon's manifest only points at one.
+                    baseUrl = detected.url,
+                    label = existing?.label.orEmpty(),
+                ),
+            )
+            is DetectedFormat.Unsupported -> Result.failure(AddonException(detected.reason))
+        }
+    }
+
+    /**
+     * The already-configured source pointing at [url], if there is one.
+     *
+     * Compared after [identify] has run rather than on the raw text, which is
+     * what makes this catch the cases worth catching: an addon's root and its
+     * `manifest.json` are the same server typed two ways, and both normalise to
+     * one base before they reach here. A trailing slash, a `MANIFEST.JSON`, and
+     * a host in a different case are all the same source too.
+     *
+     * [exceptId] is the source being edited, which is not its own duplicate —
+     * without it, saving an existing addon without touching its URL would
+     * refuse itself.
+     */
+    fun duplicateOf(url: String, exceptId: String? = null): SourceConfig? {
+        val wanted = canonicalUrl(url)
+        if (wanted.isEmpty()) return null
+        return configs.value.firstOrNull { it.id != exceptId && canonicalUrl(it.baseUrl) == wanted }
+    }
+
+    /**
+     * A URL reduced to the form two spellings of the same address share.
+     *
+     * Scheme and host are lowercased because they are case-insensitive; the
+     * path deliberately is not, because on this protocol the path can carry a
+     * user's token and two tokens differing only in case are two different
+     * credentials. Falls back to the trimmed text when the URL will not parse,
+     * so a malformed entry still compares equal to itself.
+     */
+    private fun canonicalUrl(raw: String): String {
+        val trimmed = raw.trim().trimEnd('/')
+        val parsed = trimmed.toHttpUrlOrNull() ?: return trimmed
+        val path = parsed.encodedPath.trimEnd('/')
+        val query = parsed.encodedQuery?.let { "?$it" }.orEmpty()
+        val port = if (parsed.port != defaultPort(parsed.scheme)) ":${parsed.port}" else ""
+        return "${parsed.scheme}://${parsed.host}$port$path$query"
+    }
+
+    private fun defaultPort(scheme: String) = if (scheme == "https") 443 else 80
+
     /** The user's own custom module index, if they have set one. */
     fun customModule(): SourceConfig? =
         configs.value.firstOrNull { it.kind == SourceKind.CUSTOM_MODULE }
@@ -307,6 +411,7 @@ object SourceRegistry {
     private fun build(config: SourceConfig): MusicSource = when (config.kind) {
         // Same protocol, same implementation — the kinds differ only in rank.
         SourceKind.CUSTOM_MODULE -> ModuleSource(config)
+        SourceKind.ADDON -> AddonSource(config)
         SourceKind.JIOSAAVN -> JioSaavnSource(config)
         SourceKind.MODULE -> ModuleSource(config)
         SourceKind.YOUTUBE -> YouTubeSource(config)

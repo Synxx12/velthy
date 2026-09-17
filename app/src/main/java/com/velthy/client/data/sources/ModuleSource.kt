@@ -468,6 +468,32 @@ class ModuleSource(
         }
 
         /**
+         * Whether a stream a module handed back is one this device cannot play.
+         *
+         * Only Dolby Atmos, and only because it is the one tier a module can
+         * serve that a phone can be flatly unable to decode — see
+         * [DeviceCodecs] for why the player is the wrong place to find that
+         * out. Every other codec a module returns is either in Android's own
+         * set or fails loudly enough for the recovery path to hear it.
+         *
+         * [atmosAllowed] is the two answers folded into one, because from here
+         * they mean the same thing and neither is more binding than the other:
+         * the device has no decoder
+         * ([DeviceCodecs.playsDolbyAtmos]) or the listener turned it off
+         * ([AppSettings.dolbyAtmos]). The caller keeps them apart only to say
+         * which it was in the log.
+         *
+         * Caught *here*, where the module answers, rather than by ranking it
+         * lower in [SourceResolver]: an Atmos rendition is routinely the only
+         * one a module will give for a track, so there is no lower-ranked
+         * sibling of it to fall to and a ranking has nothing to choose between.
+         * Refusing is what lets [SourceResolver] move to a source that can be
+         * heard.
+         */
+        internal fun unplayable(format: StreamFormat, atmosAllowed: Boolean): Boolean =
+            format.isDolbyAtmos && !atmosAllowed
+
+        /**
          * The three tiers every Convx-compatible module speaks, whatever it
          * calls them on the way out: `LOSSLESS`, `FLAC 16-bit / 44.1kHz` and
          * `hires-96` are one tier; `320kbps` and `HIGH` are another.

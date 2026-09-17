@@ -23,6 +23,7 @@ import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.sources.SourceResolver
+import com.velthy.client.data.sources.TrackMatcher
 import com.velthy.client.download.Downloads
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -448,7 +449,8 @@ object AudioCache {
      * is left alone, and a different one replaces it outright, since on a run
      * of skips only wherever the listener actually lands is worth chasing.
      */
-    fun prefetchQueue(mediaIds: List<String>) {
+    fun prefetchQueue(upcoming: List<Upcoming>) {
+        val mediaIds = upcoming.map { it.mediaId }
         if (mediaIds == pendingQueue) return
         pendingQueue = mediaIds
         job?.cancel()
@@ -460,6 +462,11 @@ object AudioCache {
         // typically a good deal closer than googlevideo anyway.
         //
         val videoIds = mediaIds.filter { SourceRegistry.parseTrackKey(it) == null }
+            // A track already on disk needs no reading ahead, and read-ahead
+            // speaks only to googlevideo: warming one would spend mobile data
+            // fetching a second copy of a file the listener deliberately saved,
+            // then cache it under a key playback is never going to ask for —
+            // it plays the download instead. See [Song.toMediaItem].
             .filter { it !in Downloads.saved.value }
         // With substitution possible, only the *bytes* half drops out. Read-
         // ahead builds its own spec below from an id alone and carries none of
@@ -477,9 +484,41 @@ object AudioCache {
         // rather than waiting behind it, that walk is what a track waits on
         // whenever the modules are slow, and warming it here is what makes the
         // race worth running at all.
-        val cacheBytes = !SourceResolver.canSubstituteForYouTube()
+        val substitutable = SourceResolver.canSubstituteForYouTube()
         job = videoIds.firstOrNull()?.let { next ->
+            val target = upcoming.firstOrNull { it.mediaId == next }?.target
             scope.launch {
+                // With substitution on, the *bytes* half above used to be
+                // switched off outright, and the paragraph explaining why is
+                // still correct as far as it goes: read-ahead resolving to
+                // YouTube on its own would write Opus into the entry a
+                // higher-ranked source is about to fill.
+                //
+                // What it treated as impossible was knowing the answer in
+                // advance. A quick source can be asked *here* — see
+                // [SourceResolver.prefetchSubstitute] — and once its stream is
+                // recorded in [StreamChoice], the question stops being open:
+                // every later resolve for this track, read-ahead's own included,
+                // is held to that one stream. Both writers then agree on the
+                // file and on the `#alt` key it lands under, which is exactly
+                // the condition the byte half was missing.
+                //
+                // A source that is disabled, doesn't have the track, or fails
+                // leaves nothing pinned, and this falls through to the same
+                // URL-only warm-up it did before — YouTube resolves the track at
+                // playback time as usual.
+                val warmed = if (substitutable && target != null) {
+                    runCatching { SourceResolver.prefetchSubstitute(target) }
+                        .onFailure { TrackLog.d(TAG, "warm-up substitute failed for $next: ${it.message}") }
+                        .getOrNull()
+                        ?.also { StreamChoice.remember(next, it, substituted = true) }
+                } else {
+                    null
+                }
+                // Safe to fill for the same reason in both cases: either nothing
+                // outranks YouTube and read-ahead is the only writer, or a
+                // source has been pinned and every writer now resolves to it.
+                val cacheBytes = !substitutable || warmed != null
                 if (cacheBytes) {
                     launch {
                         delay(PREFETCH_DELAY_MS)
@@ -490,6 +529,11 @@ object AudioCache {
                 launch {
                     delay(PREFETCH_DELAY_MS)
                     for (id in videoIds.take(QUEUE_LOOKAHEAD + 1).let { if (cacheBytes) it.drop(1) else it }) {
+                        // A track already pinned to another source has no use
+                        // for a YouTube URL: nothing will ask for one, and
+                        // minting it spends a client walk to fill a cache entry
+                        // that is never read.
+                        if (id == next && warmed != null) continue
                         runCatching { StreamResolver.resolve(id) }
                             .onFailure { TrackLog.d(TAG, "queue warm-up skipped $id: ${it.message}") }
                         delay(QUEUE_RESOLVE_STAGGER_MS)
@@ -498,6 +542,18 @@ object AudioCache {
             }
         }
     }
+
+    /**
+     * A queued track as read-ahead needs it.
+     *
+     * [target] is what a cross-source match is made on, and read-ahead cannot
+     * reach it any other way: it runs for tracks that are not the current item,
+     * so the session's metadata is the wrong track's, and the plain
+     * `velthy://watch?v=…` URI it builds for itself carries an id and nothing
+     * else. It rides along from the queue instead — see
+     * [PlaybackService.prefetchAround][com.velthy.client.playback.PlaybackService].
+     */
+    data class Upcoming(val mediaId: String, val target: TrackMatcher.Target)
 
     /**
      * Nothing to read ahead for once playback stops. The queue is cleared with

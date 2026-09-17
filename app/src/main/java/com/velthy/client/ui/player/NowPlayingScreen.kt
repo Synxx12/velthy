@@ -1,4 +1,4 @@
-package com.velthy.client.ui.player
+﻿package com.velthy.client.ui.player
 
 import android.content.Intent
 import android.database.ContentObserver
@@ -10,11 +10,10 @@ import android.os.Looper
 import android.provider.Settings
 import android.content.pm.PackageManager
 import android.view.View
+import android.widget.Toast
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
@@ -24,13 +23,19 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -38,22 +43,26 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -79,7 +88,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.VolumeDown
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
@@ -95,13 +103,14 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.PlayArrow
 import com.velthy.client.playback.AudioDeviceHelper
-import com.velthy.client.playback.AudioDeviceType
-import com.velthy.client.playback.AudioOutputOption
 import com.velthy.client.playback.SleepTimer
-import com.velthy.client.playback.SmartTvCastManager
 import com.velthy.client.playback.rememberActiveAudioDevice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -138,8 +147,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -149,6 +161,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -163,6 +177,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -186,19 +202,32 @@ import com.velthy.client.data.NerdStats
 import com.velthy.client.data.settings.TrackAnalysisState
 import com.velthy.client.data.canvas.CanvasArtwork
 import com.velthy.client.data.canvas.CanvasRepository
+import com.velthy.client.data.lyrics.CharGrowth
+import com.velthy.client.data.lyrics.Genius
+import com.velthy.client.data.lyrics.GrowingWord
+import com.velthy.client.data.lyrics.LyricAlignment
 import com.velthy.client.data.lyrics.LyricLine
 import com.velthy.client.data.lyrics.LyricsSource
+import com.velthy.client.data.listentogether.ListenTogether
+import com.velthy.client.data.lyrics.LyricsTranslation
+import com.velthy.client.data.lyrics.translationLanguageName
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.settings.AudioQuality
 import com.velthy.client.data.model.LikeStatus
 import com.velthy.client.data.model.Song
+import com.velthy.client.data.model.PlaybackSourceType
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.playback.BACK_RESTARTS_AFTER_MS
 import com.velthy.client.playback.autoplaySectionStart
+import com.velthy.client.ui.rememberIsForeground
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.random.Random
 
 /** Collapsed-header geometry, shared by the layout and its animation. */
 /** Comfortably over the sleeve's drawn size on a phone, without wasting bytes. */
@@ -242,8 +271,55 @@ private val ART_BOX_TOP_PAD = 14.dp
  * that was cut off rather than one that ran out.
  */
 private const val HERO_FADE_FRACTION = 0.42f
+/**
+ * How often a frame is read back off a playing clip to re-tint the backdrop
+ * behind it — see [CanvasArtworkPlayer]'s `refreshFrameEveryMs`.
+ *
+ * A clip pans or cuts as it loops, so its dominant colours move; a backdrop
+ * that only read the opening frame would drift out of step with the picture on
+ * top of it within a bar or two. Often enough to follow that, and affordable
+ * because the read is a small one rather than full-bleed.
+ */
+private const val MESH_REFRESH_MS = 500L
+
+/**
+ * Where the lyrics panel is with respect to a translation of the track.
+ *
+ * [Idle] is "not asked for yet" — the panel is showing the original words. A
+ * [Ready] set is kept around rather than re-requested so toggling back and forth
+ * between the original and the translation is instant, and [SameLanguage] is
+ * its own state rather than a failure: the lyrics are already in the language
+ * asked for, which is a different thing to say than "could not translate".
+ */
+private sealed interface LyricsTranslationUiState {
+    data object Idle : LyricsTranslationUiState
+    data object Loading : LyricsTranslationUiState
+    data class Ready(val lines: List<LyricLine>) : LyricsTranslationUiState
+    data object SameLanguage : LyricsTranslationUiState
+}
+
 /** The player's side margin. Scrollable panels reach back across it. */
 private val PLAYER_GUTTER = 30.dp
+
+/** The height of a control in the player's bottom row, circle or capsule segment alike. */
+private val BOTTOM_ACTION_SIZE = 44.dp
+
+/** How wide one segment of a capsule comes out. */
+private val PILL_SEGMENT_WIDTH = 54.dp
+
+/** How wide a capsule of [segments] comes out, dividers included. */
+private fun pillWidth(segments: Int): Dp =
+    PILL_SEGMENT_WIDTH * segments + 1.dp * (segments - 1)
+
+/**
+ * Optical sizes, not equal ones.
+ *
+ * Headphones is a tall, narrow glyph and Person a taller, narrower one, so
+ * drawn at the same nominal size the second reads as the bigger of the two.
+ * These are the numbers at which they look like a matched pair.
+ */
+private val PILL_HEADPHONES_SIZE = 23.dp
+private val PILL_PARTY_SIZE = 22.dp
 /**
  * How wide the player's content is ever allowed to get. A sleeve and a volume
  * slider stretched right across a tablet aren't a bigger player, just a coarser
@@ -279,6 +355,42 @@ private const val UNSUNG_ALPHA = 0.45f
 private const val UNSUNG_ALPHA_STRIP = 0.55f
 
 /**
+ * How a lyric line fades and blurs by its distance from the one being sung.
+ *
+ * A table rather than a gradient, and symmetric either side of the playing line:
+ * the two rows around it stay comfortably readable — so a listener can follow
+ * back over what was just sung as well as ahead to what is coming — and
+ * everything past that settles on the same floor instead of continuing to fade
+ * to nothing. A formula that kept scaling with distance made a long song's
+ * early lines vanish entirely, which reads as the panel losing text rather than
+ * as depth.
+ */
+private val LINE_FALLOFF_ALPHA = floatArrayOf(1f, 0.8f, 0.7f, 0.58f, 0.46f)
+private val LINE_FALLOFF_BLUR = arrayOf(0.dp, 1.dp, 1.dp, 1.7.dp, 2.4.dp)
+
+/**
+ * What every line flattens to while a finger is reading the panel by hand.
+ *
+ * All one brightness, because browsing is not following along — there is no
+ * line being pointed at, and keeping the gradient would have the panel claiming
+ * to know where the song is while somebody scrolls away from it.
+ */
+private const val BROWSING_ALPHA = 0.8f
+
+/** How an interruption is drawn: three dots counting the break out. */
+private val GAP_ROW_HEIGHT = 40.dp
+private val GAP_ROW_SPACING = 16.dp
+private val GAP_DOT_SIZE = 13.dp
+private val GAP_DOT_GAP = 5.dp
+private const val GAP_DOTS = 3
+private const val GAP_DOT_REST = 0.25f
+private const val GAP_REST_SCALE = 0.76f
+
+/** The curve and duration every lyric transition settles on. */
+private val LYRIC_EASING = CubicBezierEasing(0.41f, 0f, 0.12f, 0.99f)
+private const val LYRIC_SETTLE_MS = 400
+
+/**
  * The bloom behind the line being sung, at its very strongest.
  *
  * Kept well under half strength: the halo is drawn from the same white as the
@@ -291,16 +403,16 @@ private const val GLOW_ALPHA = 0.62f
 private val GLOW_RADIUS = 9.dp
 
 /**
- * How far behind the sweep's leading edge the bloom reaches, at full strength.
+ * How far the lines around the one being sung sit back, and how far a row dips
+ * under a finger.
  *
- * The glow belongs to the word being sung, not to everything sung so far —
- * lighting the whole revealed stretch made the line brighten as it went and
- * turned the last line of a verse into a slab of white. Scaled down towards
- * [GLOW_TRAIL_FLOOR] as the singing quickens; see
- * [LyricLine.glowIntensity][com.velthy.client.data.lyrics.LyricLine.glowIntensity].
+ * The move is small on purpose. The playing line comes *forward* to meet the
+ * reader rather than swelling past its neighbours, so a handover does not shove
+ * the type around — and a half of one percent is enough for the eye to read as
+ * depth without the list looking like it is breathing.
  */
-private val GLOW_TRAIL = 62.dp
-private const val GLOW_TRAIL_FLOOR = 0.55f
+private const val INACTIVE_LYRIC_SCALE = 0.98f
+private const val PRESSED_LYRIC_SCALE = 0.96f
 
 /**
  * Room reserved inside each copy of a line for the halo to spread into.
@@ -436,9 +548,139 @@ private const val LYRICS_UNAVAILABLE_FADE_MS = 900
 // so a short pause mid-browse doesn't flash the controls in and out.
 private const val PANEL_REST_MS = 900L
 
-private val BACKING_FONT_SIZE = 19.sp
-private val BACKING_LINE_HEIGHT = 24.sp
+private val BACKING_FONT_SIZE = 23.sp
+private val BACKING_LINE_HEIGHT = 29.sp
 private const val BACKING_ALPHA = 0.72f
+
+/**
+ * How far the sweep's leading edge fades out instead of ending on a cut.
+ *
+ * A hard boundary is legible as a boundary: the eye reads a bar travelling
+ * across the words rather than the words themselves lighting up as they are
+ * sung. Feathering it over roughly a character and a half is what turns the
+ * cut back into a wavefront.
+ */
+private val WIPE_FEATHER = 30.dp
+
+/**
+ * How far the word being sung lifts off the line.
+ *
+ * Two pixels, and it has to be about two: enough that the eye catches the
+ * words moving under the sweep, little enough that nothing appears to come
+ * loose from the line it belongs to.
+ */
+private val WORD_RISE = 2.dp
+
+/**
+ * How much further up a row is opened when it holds a word being animated
+ * letter by letter, in multiples of [WORD_RISE].
+ *
+ * A letter that swells has to be given the room above the line it grew out of
+ * or the top of it is shaved off by the band it is drawn in. Covers the lift
+ * and the swell together, which is why it is well over the one rise an
+ * ordinary word needs.
+ */
+private const val GROW_HEADROOM = 3f
+
+/**
+ * The lane kept clear on the far side of a duet line.
+ *
+ * Only ever applied to a song that actually has two voices laid out. Without
+ * it a long right-hand line reaches all the way back across the panel and the
+ * split stops reading as a split at all; with it, each voice keeps its own
+ * column even when only one of them is singing.
+ */
+private val DUET_LANE = 44.dp
+
+/** How long the panel takes to settle on a new line, and how far ahead it starts. */
+private const val SCROLL_LEAD_MIN_MS = 350L
+private const val SCROLL_LEAD_MAX_MS = 500L
+
+/**
+ * How the rows fan out as the panel moves between lines.
+ *
+ * They do not travel as a block. Each row after the one being scrolled to sets
+ * off slightly later than the row before it, up to a few rows back, so the
+ * spacing opens as the panel leaves and closes as it arrives. A block of text
+ * sliding rigidly is a list being scrolled; the same lines arriving one behind
+ * another is the panel handing over.
+ *
+ * Deliberately under half of what the renderer this came from uses. Its lines
+ * carry the whole scroll themselves, so a long delay only means arriving late;
+ * here the list has already moved underneath them, and the same delay reads as
+ * the rows being dragged rather than following.
+ */
+private const val STAGGER_STEPS = 3
+private const val STAGGER_FRACTION = 0.06f
+
+/** One handover: how far the panel is going, and how long it is taking. */
+private class ScrollRun(val id: Int, val delta: Float, val durationMs: Int) {
+    /** The last row to arrive does so this long after the panel sets off. */
+    val spanMs: Float get() = durationMs * (1f + STAGGER_FRACTION * STAGGER_STEPS)
+}
+
+/**
+ * How long before a line lands the panel starts moving to it — and how long
+ * the move then takes, which is the same number.
+ *
+ * It is the run-up: the silence between the last word of the line being sung
+ * and the first of the next. Bounded either side, because that silence is a
+ * held breath in one song and half a verse in another, and neither the snap
+ * nor the drift is what you want to be reading against.
+ */
+private fun scrollLead(lines: List<LyricLine>, positionMs: Long): Long {
+    val current = lines.indexOfLast { it.timeMs <= positionMs }
+    // Before the first line's own timestamp there is no current line to
+    // measure a run-up from. [indexOfLast] answers -1 there, and the guard
+    // below does not catch it: `current + 1` is 0, which is a perfectly real
+    // line, so the elvis never fires and `lines[current]` indexes at -1.
+    //
+    // Only reachable while the playhead is genuinely before the first lyric —
+    // a track paused at 0:00 whose words start a few seconds in, which is
+    // every track that opens on an intro.
+    if (current < 0) return SCROLL_LEAD_MIN_MS
+    val next = lines.getOrNull(current + 1) ?: return SCROLL_LEAD_MIN_MS
+    val gap = next.timeMs - lines[current].endMs
+    return gap.coerceIn(SCROLL_LEAD_MIN_MS, SCROLL_LEAD_MAX_MS)
+}
+
+/**
+ * Stands in for the lyrics while the lookup is still out.
+ *
+ * Without it the panel had one empty state doing two jobs: a lookup that had
+ * come back with nothing and a lookup that had not come back yet both said "No
+ * lyrics for this track", so every track was declared to have none for as long
+ * as it took to find out that it did.
+ */
+private val SKELETON_BLOCKS = listOf(
+    floatArrayOf(0.97f, 0.54f),
+    floatArrayOf(0.92f, 0.99f, 0.41f),
+    floatArrayOf(0.68f),
+    floatArrayOf(0.95f, 0.73f),
+    floatArrayOf(0.89f, 0.96f, 0.37f),
+)
+
+/**
+ * Set to the panel's own metrics: a bar stands the cap height of the 34sp the
+ * lines are drawn in, rows of one line sit a line-height apart, and lines are a
+ * row's own padding further apart again than that.
+ */
+private val SKELETON_BAR = 26.dp
+private val SKELETON_LEADING = 15.dp
+private val SKELETON_BLOCK_GAP = 35.dp
+private const val SKELETON_PERIOD_MS = 1_400
+
+/** Every unfinished vocal kept visible; see [activeLyricRows]. */
+private fun activeLyricRows(lines: List<LyricLine>, positionMs: Long): List<Int> {
+    val latest = lines.indexOfLast { it.timeMs <= positionMs }
+    if (latest < 0) return emptyList()
+    return (0..latest).filter { index ->
+        val line = lines[index]
+        index == latest || (!line.isGap &&
+            (line.hasKnownEnd || line.background?.hasKnownEnd == true) &&
+            line.timeMs <= positionMs && positionMs < line.endMs)
+    }
+}
 
 /**
  * How visible the player's own sleeve/banner should be while the host's cover
@@ -501,6 +743,27 @@ fun NowPlayingScreen(
     lyrics: List<LyricLine>?,
     lyricsSource: LyricsSource?,
     lyricsUnavailable: Boolean,
+    /** Opens the Listen Together screen, from the right half of the output capsule. */
+    onOpenParty: () -> Unit = {},
+    /**
+     * Where tapping the origin caption goes: back to the album, playlist or
+     * artist page the queue was started from, or the tab it came in on. Only
+     * called for an origin this app can resolve — see [PlayingFromCaption].
+     */
+    onOpenPlaybackSource: () -> Unit = {},
+    /**
+     * Swaps a music video for the catalogue audio version, or back.
+     *
+     * The button only appears while one of those two is true — a video upload,
+     * or a catalogue track already swapped *away* from its video — because for
+     * every other track there is no second version to offer. Null hides it
+     * outright, which is what a track with no video anywhere is.
+     */
+    onToggleAudioVersion: (() -> Unit)? = null,
+    /** True while this track is the catalogue audio version of a video upload. */
+    isAudioVersion: Boolean = false,
+    /** True while that swap is in flight, so the button can show it. */
+    audioVersionSwitching: Boolean = false,
     /** Fired as the player is pulled down from the top strip, with the current
      *  expanded fraction (1 = fully open, 0 = collapsed). */
     onPull: (Float) -> Unit = {},
@@ -561,6 +824,15 @@ fun NowPlayingScreen(
     // [rememberArtworkColors] instead.
     val meshColors = if (legacyMesh) rememberArtworkColors(song.thumbnailUrl, canvasFrame) else null
     val artMesh = if (legacyMesh) null else rememberArtworkMesh(song.thumbnailUrl, canvasFrame, ART_PX)
+    // Asked of every clip, Spotify's Canvas and every other source alike — see
+    // CanvasArtworkPlayer's refreshFrameEveryMs. A clip's own colours move as it
+    // plays regardless of who published it, and the backdrop should follow.
+    //
+    // Often enough that the backdrop moves with the clip rather than catching up
+    // with it every few seconds. What keeps that affordable is the size of each
+    // read, not the number of them: the frame comes back at `frameCapturePx`
+    // rather than full-bleed, and is averaged on a stride off the main thread.
+    val meshRefreshMs = MESH_REFRESH_MS
     LaunchedEffect(song.videoId, song.albumName, canvasAllowedNow) {
         if (!canvasAllowedNow) {
             canvas = null
@@ -590,6 +862,7 @@ fun NowPlayingScreen(
     var lyricsOpen by remember { mutableStateOf(false) }
     var showSleepTimerSheet by remember { mutableStateOf(false) }
     var showAudioOutputSheet by remember { mutableStateOf(false) }
+    var showLyricsOffset by remember { mutableStateOf(false) }
     // Apple-style: while the queue or lyrics list is being scrolled the whole
     // transport block ducks out of the way so the content gets the screen,
     // then slides back on its own once the list rests. Raised by the lists
@@ -611,13 +884,131 @@ fun NowPlayingScreen(
     }
     LaunchedEffect(song.videoId) { lyricsOpen = false }
 
+    // ---- Lyrics translation -------------------------------------------
+    //
+    // The language the translate button renders into. Settings wins where it
+    // has been set; blank means follow the app, which is only narrowed to a
+    // base language on that path — a code chosen in Settings is already
+    // exactly what the endpoint wants, and narrowing it would throw away the
+    // script half of zh-TW.
+    val preferredTranslation by AppSettings.translationLanguage.collectAsStateWithLifecycle()
+    val appLanguageTag = configuration.locales.get(0)?.toLanguageTag().orEmpty()
+    val translationLanguage = remember(appLanguageTag, preferredTranslation) {
+        preferredTranslation.ifBlank {
+            java.util.Locale.forLanguageTag(appLanguageTag.ifBlank { "en" }).language.ifBlank { "en" }
+        }
+    }
+    val translationLanguageLabel = remember(appLanguageTag, translationLanguage) {
+        translationLanguageName(
+            translationLanguage,
+            java.util.Locale.forLanguageTag(appLanguageTag.ifBlank { "en" }),
+        )
+    }
+    var translationState by remember(song.videoId, translationLanguage, lyrics) {
+        mutableStateOf<LyricsTranslationUiState>(LyricsTranslationUiState.Idle)
+    }
+    var showingTranslation by remember(song.videoId, translationLanguage, lyrics) {
+        mutableStateOf(false)
+    }
+    var translationJob by remember(song.videoId, translationLanguage, lyrics) {
+        mutableStateOf<Job?>(null)
+    }
+    DisposableEffect(song.videoId, translationLanguage, lyrics) {
+        onDispose { translationJob?.cancel() }
+    }
+    // Bumped every time the panel swaps between the original words and their
+    // translation. Read as a *transition trigger* by [LyricsTranslationMotion],
+    // which is how the particle pass knows to replay: the lines are replaced
+    // wholesale, and a value read off them would fire on every recomposition.
+    val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+    var translationTransition by remember(song.videoId) { mutableIntStateOf(0) }
+    LaunchedEffect(showingTranslation, translationState) {
+        if (translationState is LyricsTranslationUiState.Ready) translationTransition++
+    }
+    // What the panel actually draws: the translation when one is being shown,
+    // the original words otherwise.
+    val displayedLyrics = if (showingTranslation) {
+        (translationState as? LyricsTranslationUiState.Ready)?.lines ?: lyrics.orEmpty()
+    } else {
+        lyrics.orEmpty()
+    }
+    // Whether this device is in a party, for the capsule's right half. Collected
+    // here rather than deeper so the lit half lights for the whole player.
+    val party by ListenTogether.state.collectAsStateWithLifecycle()
+    // A lookup still in flight, as opposed to one that has come back empty.
+    // The two used to share "No lyrics for this track", so every track was
+    // declared to have none for as long as it took to find out that it did.
+    // [lyricsUnavailable] is the "came back empty" flag; empty without it is
+    // still out.
+    val lyricsLooking = !lyricsUnavailable && lyrics.isNullOrEmpty()
+
+    val translationScope = rememberCoroutineScope()
+    val toggleTranslation: () -> Unit = toggleTranslation@{
+        when (val state = translationState) {
+            is LyricsTranslationUiState.Ready -> {
+                showingTranslation = !showingTranslation
+                haptics.play(Haptic.Select)
+            }
+            LyricsTranslationUiState.Loading -> Unit
+            LyricsTranslationUiState.SameLanguage -> {
+                haptics.play(Haptic.Tap)
+                Toast.makeText(
+                    context,
+                    "Lyrics are already in $translationLanguageLabel",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            LyricsTranslationUiState.Idle -> {
+                val source = lyrics.orEmpty()
+                if (source.isEmpty()) return@toggleTranslation
+                haptics.play(Haptic.Tap)
+                translationState = LyricsTranslationUiState.Loading
+                translationJob?.cancel()
+                translationJob = translationScope.launch {
+                    when (
+                        val result = LyricsTranslation.translate(
+                            context = context.applicationContext,
+                            trackId = song.videoId,
+                            lines = source,
+                            targetLanguageTag = translationLanguage,
+                        )
+                    ) {
+                        is LyricsTranslation.Result.Translated -> {
+                            translationState = LyricsTranslationUiState.Ready(result.lines)
+                            showingTranslation = true
+                            haptics.play(Haptic.ToggleOn)
+                        }
+                        is LyricsTranslation.Result.SameLanguage -> {
+                            translationState = LyricsTranslationUiState.SameLanguage
+                            Toast.makeText(
+                                context,
+                                "Lyrics are already in $translationLanguageLabel",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                        LyricsTranslation.Result.Unavailable -> {
+                            translationState = LyricsTranslationUiState.Idle
+                            Toast.makeText(
+                                context,
+                                "Couldn't translate these lyrics",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         val view = LocalView.current
-        val hasOverlay = lyricsOpen || queueOpen || showSleepTimerSheet || showAudioOutputSheet
+        val hasOverlay = lyricsOpen || queueOpen || showSleepTimerSheet || showAudioOutputSheet || showLyricsOffset
         DisposableEffect(view, hasOverlay) {
             val callback = if (hasOverlay) {
                 OverlayBack.register(view) {
-                    if (showSleepTimerSheet) {
+                    if (showLyricsOffset) {
+                        showLyricsOffset = false
+                    } else if (showSleepTimerSheet) {
                         showSleepTimerSheet = false
                     } else if (showAudioOutputSheet) {
                         showAudioOutputSheet = false
@@ -633,8 +1024,10 @@ fun NowPlayingScreen(
         }
     }
 
-    BackHandler(enabled = lyricsOpen || queueOpen || showSleepTimerSheet || showAudioOutputSheet) {
-        if (showSleepTimerSheet) {
+    BackHandler(enabled = lyricsOpen || queueOpen || showSleepTimerSheet || showAudioOutputSheet || showLyricsOffset) {
+        if (showLyricsOffset) {
+            showLyricsOffset = false
+        } else if (showSleepTimerSheet) {
             showSleepTimerSheet = false
         } else if (showAudioOutputSheet) {
             showAudioOutputSheet = false
@@ -928,6 +1321,7 @@ fun NowPlayingScreen(
                         onRenderedChanged = { canvasRendered = it },
                         onFrameCaptured = { canvasFrame = it },
                         onCoverChanged = { canvasCover.floatValue = it },
+                        refreshFrameEveryMs = meshRefreshMs,
                         bottomFade = HERO_FADE_FRACTION,
                         modifier = Modifier
                             .align(Alignment.TopStart)
@@ -1021,13 +1415,55 @@ fun NowPlayingScreen(
                     },
                 contentAlignment = Alignment.Center,
             ) {
+                // The handle sits at the top of the strip, and the origin caption
+                // takes its foot — the strip is the only place above the artwork
+                // that is not the picture, which is exactly where this belongs: a
+                // caption *about* the track must not be read as part of the
+                // credits under it.
                 Box(
                     Modifier
+                        .align(Alignment.TopCenter)
+                        .offset(y = 6.dp)
                         .width(38.dp)
                         .height(5.dp)
                         .clip(RoundedCornerShape(3.dp))
                         .background(Color.White.copy(alpha = 0.32f)),
                 )
+
+                // Kept in composition until the panel handover's last frame so
+                // it fades rather than blinks, but stripped of its click target
+                // once the lyrics or the queue owns the player.
+                if (p < 0.999f) {
+                    PlayingFromCaption(
+                        song = song,
+                        playedBy = party.playback
+                            .takeIf {
+                                party.inParty && it.track?.videoId == song.videoId
+                            }
+                            ?.let { playback ->
+                                playback.startedByName?.takeIf(String::isNotBlank)
+                                    ?: party.members
+                                        .firstOrNull { it.memberId == playback.startedBy }
+                                        ?.displayName
+                                        ?.takeIf(String::isNotBlank)
+                            }
+                            ?.trim()
+                            ?.split(Regex("\\s+"))
+                            ?.firstOrNull(),
+                        // Party caption opens the party; a queue source opens the
+                        // queue; anything else opens the page it names.
+                        onParty = onOpenParty,
+                        onOpenQueue = {
+                            queueOpen = true
+                            lyricsOpen = false
+                        },
+                        onOpenSource = onOpenPlaybackSource,
+                        alpha = 1f - p,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 1.dp),
+                    )
+                }
             }
 
             Column(
@@ -1190,6 +1626,7 @@ fun NowPlayingScreen(
                                     isPlaying = isPlaying,
                                     onRenderedChanged = { canvasRendered = it },
                                     onFrameCaptured = { canvasFrame = it },
+                                    refreshFrameEveryMs = meshRefreshMs,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
@@ -1258,8 +1695,28 @@ fun NowPlayingScreen(
                     }
                 }
 
+                // Video or music: the one explicit opt-in to a catalogue match,
+                // offered on a video upload. Rides just under the sleeve's top
+                // edge rather than straddling it — everything above the sleeve
+                // is spoken for by the dismiss strip and the origin caption.
+                // Hidden once the lyrics or queue owns the player: both of those
+                // are about the track, and a control that reloads it would be
+                // the one thing on screen able to throw away what is being read.
+                if (onToggleAudioVersion != null && (song.isVideo || isAudioVersion) &&
+                    !lyricsOpen && !queueOpen && p < 0.5f
+                ) {
+                    VideoAudioVersionButton(
+                        audioVersion = isAudioVersion,
+                        loading = audioVersionSwitching,
+                        onClick = onToggleAudioVersion,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(y = artTop + ART_BOX_TOP_PAD),
+                    )
+                }
+
                 // Sits in the gap under the sleeve, clear of its rounded
-                // corners and shadow — no box, no clip, nothing for the art
+                // corners and shadow - no box, no clip, nothing for the art
                 // itself to be cropped by. Just a glyph that fades in with
                 // the drag to hint which way a release would skip.
                 //
@@ -1362,16 +1819,52 @@ fun NowPlayingScreen(
                 }
 
                 if (lyricsOpen) {
-                    LyricsPanel(
-                        lines = lyrics.orEmpty(),
-                        positionMs = positionMs,
-                        isPlaying = isPlaying,
-                        onSeekToLine = onSeek,
-                        onUserScroll = { panelScrollHidden = it },
+                    Box(
+                        // A tap on the lower half brings the transport back once
+                        // a scroll has ducked it away. The detector is only
+                        // installed while it is actually hidden, so with the
+                        // controls on screen the list scrolls off its own slop
+                        // as it always has — see [revealLyricsControlsOnTap].
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(top = HEADER_HEIGHT + 10.dp),
-                    )
+                            .revealLyricsControlsOnTap(
+                                enabled = panelScrollHidden,
+                                onReveal = { panelScrollHidden = false },
+                            ),
+                    ) {
+                        // Swapping between the original words and the
+                        // translation is a short particle dissolve rather than
+                        // a hard cut, with the panel itself staying put — no
+                        // second scroll, no blank frame, and the playback clock
+                        // untouched. Collapses to an instant swap under Reduce
+                        // animation.
+                        LyricsTranslationMotion(
+                            trigger = translationTransition,
+                            reduceMotion = reduceAnimation,
+                            modifier = Modifier.fillMaxSize(),
+                        ) { particleProgress ->
+                            LyricsPanel(
+                                lines = displayedLyrics,
+                                trackKey = song.videoId,
+                                positionMs = positionMs,
+                                looking = lyricsLooking,
+                                isPlaying = isPlaying,
+                                onSeekToLine = onSeek,
+                                onUserScroll = { panelScrollHidden = it },
+                                translationState = translationState,
+                                showingTranslation = showingTranslation,
+                                onToggleTranslation = toggleTranslation,
+                                onOpenOffset = {
+                                    haptics.play(Haptic.Tap)
+                                    showLyricsOffset = true
+                                },
+                                translationProgress = particleProgress,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(top = HEADER_HEIGHT + 10.dp),
+                            )
+                        }
+                    }
                 }
 
                 // Toggles and the queue arrive after the sleeve has finished
@@ -1390,11 +1883,6 @@ fun NowPlayingScreen(
                             queue = queue,
                             currentIndex = queueIndex,
                             autoplayEnabled = autoplayEnabled,
-                            shuffleEnabled = shuffleEnabled,
-                            onToggleShuffle = onToggleShuffle,
-                            repeatMode = repeatMode,
-                            onCycleRepeat = onCycleRepeat,
-                            onToggleAutoplay = onToggleAutoplay,
                             onJumpTo = onJumpTo,
                             onRemove = onRemoveFromQueue,
                             onMove = onMoveInQueue,
@@ -1662,17 +2150,33 @@ fun NowPlayingScreen(
                     Spacer(Modifier.height(20.dp))
                 }
 
-                // ---- Bottom: Lyrics · Sleep Timer · Audio Output Switcher · Queue ----
+                // ---- Bottom: Lyrics · Sleep/Audio/Party capsule · Queue ----
                 val sleepAfterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
-                // Asked of the deadline, never of a ticked preset: adding
-                // minutes to a running timer clears the preset, and a lit moon
-                // that goes out while the timer it stands for is still counting
-                // down would be the loudest kind of wrong.
-                val isSleepActive = sleepDeadline != null || sleepAfterTrack
+                // The capsule's sleep half lights from the badge it draws, which
+                // is non-null exactly while a timer is running — asked of the
+                // deadline rather than of a ticked preset, because adding minutes
+                // to a running timer clears the preset, and a lit moon that went
+                // out while the timer it stands for was still counting down would
+                // be the loudest kind of wrong.
 
+                // Three controls — lyrics, the capsule, the queue — laid out so
+                // the gaps between them are equal.
+                //
+                // The width is summed from the controls themselves rather than
+                // left to SpaceEvenly: the capsule is three segments wide and the
+                // three glyphs are one square each, so even spacing would divide
+                // the free space into equal *slots* and leave visibly different
+                // gaps beside the wide one. The row is then centred by an equal
+                // inset at each end, and SpaceBetween distributes what is left
+                // evenly between the four — which is what makes the spacing
+                // read as deliberate at every screen width. The sum is fixed, so
+                // nothing shifts when the party half lights up.
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val rowWidth = BOTTOM_ACTION_SIZE * 2 + pillWidth(3)
+                val edgeInset = ((maxWidth - rowWidth) / 4).coerceAtLeast(0.dp)
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // 1. Lyrics Button
@@ -1687,7 +2191,7 @@ fun NowPlayingScreen(
                         highlighted = lyricsOpen,
                     )
 
-                    // 2. Sleep Timer Button
+                    // 2. Sleep timer + audio output + party, one capsule.
                     val sleepBadge = remember(sleepRemaining, sleepAfterTrack, durationMs, positionMs) {
                         val rem = sleepRemaining
                         when {
@@ -1709,32 +2213,70 @@ fun NowPlayingScreen(
                             else -> null
                         }
                     }
-                    BottomGlyph(
-                        icon = VelthyIcons.Moon,
-                        contentDescription = "Sleep Timer",
-                        onClick = {
-                            haptics.play(Haptic.Tap)
-                            showSleepTimerSheet = true
+                    // The middle control is a capsule either way, and only its
+                    // contents change: the things that surround the *track*
+                    // while the artwork is showing, and the things that govern
+                    // the *queue* once it is. One control rather than two,
+                    // because the row has exactly one slot of this width and
+                    // swapping what it holds is how both states get to have it.
+                    //
+                    // The capsule is sized for the wider of the two in both
+                    // states — three equal segments either way — so it does not
+                    // resize under the finger when the panel opens, and the two
+                    // glyphs beside it never move.
+                    AnimatedContent(
+                        targetState = queueOpen,
+                        transitionSpec = {
+                            (fadeIn(tween(180, delayMillis = 140)) togetherWith fadeOut(tween(140)))
+                                // Unclipped: the capsule's own rounded ends are
+                                // what the eye follows through the change, and
+                                // the default clip cuts them square while it
+                                // happens.
+                                .using(SizeTransform(clip = false) { _, _ -> tween(220) })
                         },
-                        highlighted = isSleepActive,
-                        badgeText = sleepBadge,
-                    )
+                        label = "playerBottomPill",
+                    ) { showQueueModes ->
+                        if (showQueueModes) {
+                            QueueModesPill(
+                                shuffleEnabled = shuffleEnabled,
+                                repeatMode = repeatMode,
+                                autoplayEnabled = autoplayEnabled,
+                                onShuffle = {
+                                    haptics.play(if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn)
+                                    onToggleShuffle()
+                                },
+                                onRepeat = {
+                                    haptics.play(Haptic.Select)
+                                    onCycleRepeat()
+                                },
+                                onAutoplay = {
+                                    haptics.play(if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn)
+                                    onToggleAutoplay()
+                                },
+                            )
+                        } else {
+                            OutputPartyPill(
+                                onSleep = {
+                                    haptics.play(Haptic.Tap)
+                                    showSleepTimerSheet = true
+                                },
+                                onOutput = {
+                                    haptics.play(Haptic.Tap)
+                                    showAudioOutputSheet = true
+                                },
+                                onParty = {
+                                    haptics.play(Haptic.Tap)
+                                    onOpenParty()
+                                },
+                                inParty = party.inParty,
+                                sleepBadge = sleepBadge,
+                            )
+                        }
+                    }
 
-                    // 3. Audio Output Switcher Button
+                    // 3. Queue Button
                     BottomGlyph(
-                        icon = activeDevice.icon,
-                        contentDescription = "Audio Output (${activeDevice.name})",
-                        onClick = {
-                            haptics.play(Haptic.Tap)
-                            showAudioOutputSheet = true
-                        },
-                        highlighted = activeDevice.isExternal,
-                        label = activeDevice.name,
-                    )
-
-                    // 4. Queue Button
-                    BottomGlyph(
-                        icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                        icon = VelthyIcons.Queue,
                         contentDescription = "Queue",
                         onClick = {
                             haptics.play(if (!queueOpen) Haptic.ToggleOn else Haptic.ToggleOff)
@@ -1744,11 +2286,54 @@ fun NowPlayingScreen(
                         highlighted = queueOpen,
                     )
                 }
+                }
             }
             }
 
+            // Where the sound is going, under the controls and kept there in
+            // both player and queue modes — it is a fact about the track, not
+            // about the panel that happens to be open. In a party the jam takes
+            // the line over, because once four devices are playing the same song
+            // the room is no longer what the listener is checking. The tap
+            // follows the label: whichever is on screen is what it opens.
+            Spacer(Modifier.height(18.dp))
+            Box(
+                modifier = Modifier.fillMaxWidth().height(20.dp),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                OutputCaption(
+                    // A connected device names itself; the phone's own speaker
+                    // does not — it reports the *phone's* model name, which is
+                    // why the line used to read like a serial number — so it is
+                    // named here instead.
+                    outputName = if (activeDevice.isExternal) {
+                        activeDevice.name
+                    } else {
+                        "This phone"
+                    },
+                    hostFirstName = party.members.firstOrNull { it.isHost }
+                        ?.displayName
+                        ?.trim()
+                        ?.split(Regex("\\s+"))
+                        ?.firstOrNull(),
+                    inParty = party.inParty,
+                    onOpenOutput = {
+                        haptics.play(Haptic.Tap)
+                        showAudioOutputSheet = true
+                    },
+                    onOpenParty = {
+                        haptics.play(Haptic.Tap)
+                        onOpenParty()
+                    },
+                )
+            }
             Spacer(Modifier.height(18.dp))
         }
+    }
+
+    // The lyrics offset drawer, raised from the lyrics panel.
+    if (showLyricsOffset) {
+        LyricsOffsetSheet(onDismiss = { showLyricsOffset = false })
     }
 
     // ---- Compact Sleep Timer Modal Sheet ----
@@ -1930,373 +2515,10 @@ fun NowPlayingScreen(
             }
         }
 
-        // ---- Compact Audio Output / AirPlay Sheet ----
+        // Where the music comes out, and how loud â€” the drawer BitChord uses,
+        // down to the arrangement: the outputs, then volume.
         if (showAudioOutputSheet) {
-            ModalBottomSheet(
-                onDismissRequest = { showAudioOutputSheet = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                containerColor = Color(0xFF16161A),
-                contentColor = Color.White,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                dragHandle = {
-                    Box(
-                        modifier = Modifier
-                            .padding(top = 10.dp, bottom = 6.dp)
-                            .size(width = 32.dp, height = 4.dp)
-                            .background(Color.White.copy(alpha = 0.25f), CircleShape),
-                    )
-                },
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp)
-                        .navigationBarsPadding(),
-                ) {
-                    // Header
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Audio Output",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = (-0.2).sp,
-                            ),
-                            color = Color.White,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = if (activeDevice.isExternal) "Connected" else "Speaker",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = if (activeDevice.isExternal) palette.accent else Color.White.copy(alpha = 0.5f),
-                        )
-                    }
-
-                    val permissionLauncher = rememberLauncherForActivityResult(
-                        contract = ActivityResultContracts.RequestMultiplePermissions(),
-                    ) {
-                        SmartTvCastManager.startDiscovery(context)
-                    }
-
-                    LaunchedEffect(showAudioOutputSheet) {
-                        if (showAudioOutputSheet) {
-                            val perms = mutableListOf<String>()
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                if (context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                                    perms.add(android.Manifest.permission.BLUETOOTH_CONNECT)
-                                }
-                            }
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                if (context.checkSelfPermission(android.Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
-                                    perms.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
-                                }
-                            }
-                            if (perms.isNotEmpty()) {
-                                permissionLauncher.launch(perms.toTypedArray())
-                            }
-                            SmartTvCastManager.startDiscovery(context)
-                        }
-                    }
-
-                    val isCastScanning by SmartTvCastManager.isScanning.collectAsStateWithLifecycle()
-                    val activeTv by SmartTvCastManager.activeCastDevice.collectAsStateWithLifecycle()
-                    val availableOutputs = remember(showAudioOutputSheet, activeDevice, activeTv) {
-                        AudioDeviceHelper.getAvailableAudioOutputs(context)
-                    }
-
-                    val connectedOutputs = remember(availableOutputs) {
-                        availableOutputs.filter { it.isConnected }
-                    }
-                    val discoveredTvs = remember(availableOutputs) {
-                        availableOutputs.filter { it.type == AudioDeviceType.TV_CAST && !it.isConnected }
-                    }
-
-                    val handleOptionClick: (AudioOutputOption) -> Unit = { option ->
-                        if (option.smartTvDevice != null) {
-                            val tv = option.smartTvDevice
-                            scope.launch {
-                                val resolvedUrl = withContext(Dispatchers.IO) {
-                                    runCatching {
-                                        com.velthy.client.data.innertube.StreamResolver.resolve(song.videoId)
-                                    }.getOrNull()
-                                }
-                                if (!resolvedUrl.isNullOrBlank()) {
-                                    SmartTvCastManager.castAudio(
-                                        device = tv,
-                                        streamUrl = resolvedUrl,
-                                        title = song.title,
-                                        artist = song.artist,
-                                        artworkUrl = song.thumbnailUrl ?: "",
-                                    )
-                                }
-                            }
-                        } else {
-                            AudioDeviceHelper.selectAudioOutput(context, option)
-                        }
-                        showAudioOutputSheet = false
-                    }
-
-                    // 1. Connected Output Devices Group
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(Color.White.copy(alpha = 0.08f)),
-                    ) {
-                        connectedOutputs.forEachIndexed { index, option ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { handleOptionClick(option) }
-                                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .background(
-                                            if (option.isSelected) palette.accent else Color.White.copy(alpha = 0.12f),
-                                            CircleShape,
-                                        ),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = option.icon,
-                                        contentDescription = null,
-                                        tint = if (option.isSelected) Color.Black else Color.White,
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                }
-                                Spacer(Modifier.width(14.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        text = option.name,
-                                        style = MaterialTheme.typography.bodyLarge.copy(
-                                            fontWeight = if (option.isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        ),
-                                        color = if (option.isSelected) Color.White else Color.White.copy(alpha = 0.85f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = when (option.type) {
-                                            AudioDeviceType.SPEAKER -> "Internal Device Speaker"
-                                            AudioDeviceType.BLUETOOTH_TWS -> "Wireless Earbuds (Connected)"
-                                            AudioDeviceType.BLUETOOTH_HEADPHONES -> "Bluetooth Headphones (Connected)"
-                                            AudioDeviceType.BLUETOOTH_SPEAKER -> "Bluetooth Speaker (Connected)"
-                                            AudioDeviceType.TV_CAST -> "Smart TV (Casting Live)"
-                                            AudioDeviceType.HEADPHONES -> "Wired Headphones (Plugged In)"
-                                            AudioDeviceType.USB_DAC -> "USB DAC / Hi-Res Audio"
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (option.isSelected) palette.accent else Color.White.copy(alpha = 0.45f),
-                                    )
-                                }
-                                if (option.isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Check,
-                                        contentDescription = "Active",
-                                        tint = palette.accent,
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                }
-                            }
-                            if (index < connectedOutputs.lastIndex) {
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(start = 68.dp),
-                                    thickness = 0.5.dp,
-                                    color = Color.White.copy(alpha = 0.08f),
-                                )
-                            }
-                        }
-                    }
-
-                    // 2. Discovered Smart TVs on Local Wi-Fi Group
-                    Spacer(Modifier.height(14.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 4.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "SMART TVS & WIRELESS AUDIO (ON WI-FI)",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp,
-                            ),
-                            color = Color.White.copy(alpha = 0.4f),
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (isCastScanning) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(12.dp),
-                                color = palette.accent,
-                                strokeWidth = 1.5.dp,
-                            )
-                        }
-                    }
-
-                    if (discoveredTvs.isNotEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(18.dp))
-                                .background(Color.White.copy(alpha = 0.06f)),
-                        ) {
-                            discoveredTvs.forEachIndexed { index, option ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { handleOptionClick(option) }
-                                        .padding(horizontal = 16.dp, vertical = 13.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .background(Color.White.copy(alpha = 0.08f), CircleShape),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(
-                                            imageVector = option.icon,
-                                            contentDescription = null,
-                                            tint = Color.White.copy(alpha = 0.8f),
-                                            modifier = Modifier.size(20.dp),
-                                        )
-                                    }
-                                    Spacer(Modifier.width(14.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(
-                                            text = option.name,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                            color = Color.White.copy(alpha = 0.9f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Text(
-                                            text = "Smart TV · Tap to Cast Audio",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = palette.accent,
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = Icons.Rounded.Tv,
-                                        contentDescription = null,
-                                        tint = palette.accent.copy(alpha = 0.8f),
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                }
-                                if (index < discoveredTvs.lastIndex) {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(start = 68.dp),
-                                        thickness = 0.5.dp,
-                                        color = Color.White.copy(alpha = 0.05f),
-                                    )
-                                }
-                            }
-                        }
-                    } else if (isCastScanning) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color.White.copy(alpha = 0.04f))
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = palette.accent,
-                                strokeWidth = 2.dp,
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                text = "Scanning local Wi-Fi for Samsung, LG, Sony & Cast...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.6f),
-                            )
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color.White.copy(alpha = 0.04f))
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                        ) {
-                            Text(
-                                text = "No Smart TVs found. Ensure TV & phone are on the same Wi-Fi.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.45f),
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(14.dp))
-
-                    // 3. Output Actions Group
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.White.copy(alpha = 0.06f)),
-                    ) {
-                        CompactActionRow(
-                            icon = Icons.Rounded.Tv,
-                            label = "Scan for Smart TVs & Audio",
-                            subtitle = if (isCastScanning) "Searching local Wi-Fi for TVs & Cast..." else "Scan local Wi-Fi for Samsung, LG, Sony & Cast",
-                            onClick = {
-                                SmartTvCastManager.startDiscovery(context)
-                            },
-                        )
-
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = 52.dp),
-                            thickness = 0.5.dp,
-                            color = Color.White.copy(alpha = 0.08f),
-                        )
-
-                        CompactActionRow(
-                            icon = Icons.Rounded.Bluetooth,
-                            label = "Connect Bluetooth Device",
-                            subtitle = "Open Bluetooth device switcher & settings",
-                            onClick = {
-                                showAudioOutputSheet = false
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
-                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                        },
-                                    )
-                                }
-                            },
-                        )
-
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = 52.dp),
-                            thickness = 0.5.dp,
-                            color = Color.White.copy(alpha = 0.08f),
-                        )
-
-                        CompactActionRow(
-                            icon = VelthyIcons.AirPlay,
-                            label = "System Media Output Panel",
-                            subtitle = "Open Android volume & device switcher",
-                            onClick = {
-                                showAudioOutputSheet = false
-                                AudioDeviceHelper.openSystemMediaOutput(context)
-                            },
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
+            AudioOutputSheet(onDismiss = { showAudioOutputSheet = false })
         }
     }
 }
@@ -2318,52 +2540,6 @@ private fun CompactOptionRow(
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White.copy(alpha = 0.85f),
         )
-    }
-}
-
-@Composable
-private fun CompactActionRow(
-    icon: ImageVector,
-    label: String,
-    subtitle: String? = null,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.White.copy(alpha = 0.08f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.85f),
-                modifier = Modifier.size(17.dp),
-            )
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                color = Color.White,
-            )
-            if (subtitle != null) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.5f),
-                )
-            }
-        }
     }
 }
 
@@ -2399,6 +2575,201 @@ private fun rememberLyricClock(positionMs: Long, isPlaying: Boolean): MutableLon
 }
 
 /**
+ * A two-tab pill for swapping a music video for the catalogue audio version.
+ *
+ * One control rather than two buttons because the two states are the *same*
+ * choice seen from either side — which version of this song — and the selected
+ * tab says where you are without a label. The frosted fill matches the other
+ * floating controls over the artwork rather than introducing a new surface.
+ */
+@Composable
+private fun VideoAudioVersionButton(
+    audioVersion: Boolean,
+    loading: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val haptics = rememberHaptics()
+    val shape = RoundedCornerShape(percent = 50)
+    Box(
+        modifier = modifier
+            .height(44.dp)
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.28f))
+            .border(0.5.dp, Color.White.copy(alpha = 0.12f), shape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier.padding(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            VideoAudioTab(
+                icon = Icons.Rounded.Videocam,
+                contentDescription = "Play the video version",
+                selected = !audioVersion,
+                enabled = audioVersion && !loading,
+                onClick = {
+                    haptics.play(Haptic.Tap)
+                    onClick()
+                },
+            )
+            VideoAudioTab(
+                icon = VelthyIcons.MusicNote,
+                contentDescription = "Play the audio version",
+                selected = audioVersion,
+                enabled = !audioVersion && !loading,
+                loading = loading,
+                onClick = {
+                    haptics.play(Haptic.Tap)
+                    onClick()
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun VideoAudioTab(
+    icon: ImageVector,
+    contentDescription: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    loading: Boolean = false,
+) {
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = if (selected) 0.20f else 0f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(17.dp),
+                color = Color.White,
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = Color.White.copy(alpha = if (selected || enabled) 1f else 0.55f),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The line above the credits: where this track is playing *from*.
+ *
+ * Four answers, in the order they matter:
+ *
+ *  - the party, because listening with other people is the fact most worth
+ *    stating and the one a reader would otherwise be surprised by;
+ *  - a station's own name, which explains a queue nobody built by hand;
+ *  - the album or page the song was started out of;
+ *  - nothing at all, in which case no line is drawn — an empty caption would be
+ *    a gap in the layout with no content in it.
+ *
+ * The prefix is fixed text and the rest is a name, so the line reads the same
+ * way every time and the eye can find the half it wants without re-parsing.
+ */
+/**
+ * The line under the controls: which speaker, or which jam.
+ *
+ * A party overrides the output rather than sitting beside it, because the two
+ * are not the same kind of fact. "This phone" answers which speaker in this
+ * room; once four devices are playing the same song, the room is no longer what
+ * the listener is checking. The tap follows the label, so whichever one is on
+ * screen is the thing it opens.
+ *
+ * A party with no host name yet — a snapshot before anyone's joined in earnest —
+ * still says it is listening together rather than falling back to the device,
+ * which would read as though the party had ended.
+ */
+@Composable
+private fun OutputCaption(
+    outputName: String,
+    hostFirstName: String?,
+    inParty: Boolean,
+    onOpenOutput: () -> Unit,
+    onOpenParty: () -> Unit,
+) {
+    val label = if (inParty) {
+        hostFirstName?.let { "$it's Jam" } ?: "Listening together"
+    } else {
+        outputName
+    }
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+        color = Color.White.copy(alpha = 0.55f),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth(0.65f)
+            .clickable { if (inParty) onOpenParty() else onOpenOutput() },
+    )
+}
+
+@Composable
+private fun PlayingFromCaption(
+    song: Song,
+    playedBy: String?,
+    onParty: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onOpenSource: () -> Unit,
+    alpha: Float,
+    modifier: Modifier = Modifier,
+) {
+    val isParty = !playedBy.isNullOrBlank()
+    val isQueue = song.playbackSourceType == PlaybackSourceType.QUEUE
+    // The last fallback is the queue itself, so the line is never blank while a
+    // track is on — "Playing from Queue" is a real answer about where this came
+    // from even when nothing else names a page.
+    val source = song.playbackSource ?: song.albumName ?: "Queue"
+    val label = when {
+        isParty -> "Played by $playedBy"
+        !song.radioName.isNullOrBlank() -> "Playing ${song.radioName} Radio"
+        else -> "Playing from $source"
+    }
+
+    // A party, a queue, and any source this app can navigate back to are
+    // tappable. A source named but not openable — a plain "History", say —
+    // stays plain text rather than offering a tap that would do nothing.
+    val hasSource = song.playbackSource != null || song.albumName != null
+    val onTap: (() -> Unit)? = when {
+        isParty -> onParty
+        isQueue -> onOpenQueue
+        hasSource -> onOpenSource
+        else -> null
+    }
+
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        color = Color.White.copy(alpha = 0.62f),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer { this.alpha = alpha }
+            .then(if (onTap != null) Modifier.clickable(onClick = onTap) else Modifier)
+            .padding(start = PLAYER_GUTTER, end = PLAYER_GUTTER, bottom = 1.dp),
+    )
+}
+
+/**
  * A lyric line with the sung part of it lit, the rest dimmed, and the boundary
  * travelling across the words in time with the vocal.
  *
@@ -2429,8 +2800,19 @@ private fun SweptLyricLine(
     glowAlpha: Float = 0f,
     glowRadius: Dp = GLOW_RADIUS,
     glowRoom: Dp = 0.dp,
+    feather: Boolean = false,
+    rise: Boolean = true,
+    alignEnd: Boolean = false,
+    translationProgress: State<Float>? = null,
 ) {
     var layout by remember(line) { mutableStateOf<TextLayoutResult?>(null) }
+
+    // Filled in and read back a letter at a time inside the draw lambdas, and
+    // shared by all three copies of the line — they draw one after another on
+    // the same thread, so there is only ever one letter in hand. Held here
+    // rather than allocated per frame: a held word is seven letters at the
+    // outside, but this runs on every frame of every line that has one.
+    val growth = remember { CharGrowth() }
 
     // Carried by every copy: identical insets keep them laying out identically,
     // and the inset is what gives the blurred copy's layer somewhere to put the
@@ -2444,6 +2826,40 @@ private fun SweptLyricLine(
     // a pocket of air with the chevron pushed off it.
     val room = if (glowRoom > 0.dp) Modifier.padding(glowRoom) else Modifier
 
+    // Sits outside [room] and outside the sweep, so what it moves is the
+    // finished picture of the word — dim tail, lit head and all — rather than
+    // one copy sliding out from under another. Carried by both copies from the
+    // same arithmetic, which is what keeps them on top of each other.
+    //
+    // Off for the one-line strip above the scrubber ([rise] = false). The lift
+    // belongs to a page of lyrics, where a word rising out of the line it sits
+    // in is the thing being read; on a single line pinned between the credits
+    // and the slider it has nothing to rise away from and reads as the strip
+    // itself twitching.
+    val riseAgainst: (Modifier) -> Modifier = { inner ->
+        if (!rise) {
+            inner
+        } else {
+            Modifier
+                .drawWithContent {
+                    val measured = layout
+                    if (measured == null || line.words.isEmpty()) {
+                        drawContent()
+                    } else {
+                        riseWith(
+                            layout = measured,
+                            line = line,
+                            positionMs = clock.longValue,
+                            inset = glowRoom.toPx(),
+                            peak = WORD_RISE.toPx(),
+                            growth = growth,
+                        )
+                    }
+                }
+                .then(inner)
+        }
+    }
+
     val sweep = Modifier.drawWithContent {
         val position = clock.longValue
         when {
@@ -2454,11 +2870,19 @@ private fun SweptLyricLine(
             position >= line.endMs -> drawContent()
             // Not started: nothing lit, the dim copy is the whole of it.
             position <= line.timeMs -> Unit
-            else -> layout?.let { sweepTo(it, line.revealedChars(position)) }
+            else -> layout?.let { sweepTo(it, line.revealedChars(position), feather) }
         }
     }
 
-    Box(modifier) {
+    // A right-hand duet line right-aligns twice over: the block within the row,
+    // for the case where it is one short line in a wide panel, and the lines
+    // within the block, for the case where it has wrapped. Neither alone is
+    // enough, and the three copies all take both, so they still land on top of
+    // each other.
+    Box(
+        modifier.lyricParticles(layout, translationProgress, glowRoom),
+        contentAlignment = if (alignEnd) Alignment.TopEnd else Alignment.TopStart,
+    ) {
         Text(
             text = line.text,
             style = style,
@@ -2466,7 +2890,7 @@ private fun SweptLyricLine(
             maxLines = maxLines,
             overflow = overflow,
             onTextLayout = { layout = it },
-            modifier = room,
+            modifier = riseAgainst(room),
         )
         if (glowAlpha > 0.01f) {
             Text(
@@ -2476,28 +2900,27 @@ private fun SweptLyricLine(
                 maxLines = maxLines,
                 overflow = overflow,
                 modifier = Modifier
-                    // Read in the layer block rather than in composition: the
-                    // intensity changes every frame, and this way only the
-                    // layer's alpha is recomputed, not the line.
-                    .graphicsLayer { alpha = glowAlpha * line.glowIntensity(clock.longValue) }
+                    .graphicsLayer { alpha = glowAlpha }
                     .blur(glowRadius, BlurredEdgeTreatment.Unbounded)
                     .then(room)
-                    // The band is masked with a DstIn gradient, which needs a
-                    // layer of its own to erase into — against the backdrop it
-                    // would take the artwork with it.
+                    // Each letter is masked to its own brightness with DstIn,
+                    // which needs a layer of its own to erase into — against the
+                    // backdrop it would take the artwork with it.
                     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                     .drawWithContent {
                         // Deliberately not the shared sweep: that lights
-                        // everything sung so far, and this is only the front of
-                        // it. No short-circuit either — the glow layer only
-                        // exists for the line being sung, so it is one line's
-                        // worth of arithmetic, not the whole panel's.
+                        // everything sung so far, and this lights only the words
+                        // being held. Most lines draw nothing here at all, which
+                        // is the whole difference between this and a halo
+                        // travelling under the highlight.
                         val measured = layout ?: return@drawWithContent
-                        val position = clock.longValue
-                        glowAt(
+                        glowGrown(
                             layout = measured,
-                            revealedChars = line.revealedChars(position),
-                            intensity = line.glowIntensity(position),
+                            line = line,
+                            positionMs = clock.longValue,
+                            inset = glowRoom.toPx(),
+                            peak = WORD_RISE.toPx(),
+                            growth = growth,
                         )
                     },
             )
@@ -2508,87 +2931,295 @@ private fun SweptLyricLine(
             color = Color.White,
             maxLines = maxLines,
             overflow = overflow,
-            modifier = room.then(sweep),
+            // The feather erases into this layer, so the layer has to exist —
+            // and only while it is being drawn. Every line carrying one would
+            // put the whole panel through an offscreen buffer to soften an edge
+            // that at most two of them have.
+            modifier = riseAgainst(
+                Modifier
+                    .graphicsLayer {
+                        compositingStrategy = if (feather) {
+                            CompositingStrategy.Offscreen
+                        } else {
+                            CompositingStrategy.Auto
+                        }
+                    }
+                    .then(room)
+                    .then(sweep),
+            ),
         )
     }
 }
 
 /**
- * Draws this text clipped to a band trailing the sweep's leading edge — the
- * word being sung, roughly, rather than the whole of what has been.
+ * Draws this text clipped to the letters of the words being held, each at its
+ * own brightness — the light the singing is actually giving off, rather than a
+ * band of it dragged along behind the highlight.
  *
- * The band widens with [intensity] as well as brightening, so a held note
- * spreads its light over the words either side of it while patter keeps its
- * halo tight to the one syllable. Alpha alone made every word glow the same
- * shape, only more or less of it.
+ * Nothing at all on a line of ordinary syllables: the words that light up are
+ * the ones held long enough to have earned it, so a verse of patter is simply
+ * dark and costs one comparison to establish. That selectiveness is the point.
+ * A glow present on every word is a property of the highlight; a glow that
+ * arrives only when a note is carried is a property of the voice.
  *
- * Only ever one band: the edge is on exactly one visual line, and a wrapped
- * line's previous row has already been left behind by the time the band would
- * have reached back into it.
+ * Each letter is masked to its own bloom rather than drawn at it, because the
+ * caller's layer is what this erases into — see [SweptLyricLine]. The mask
+ * lands before the blur, so what spreads is already the right brightness.
  */
-private fun ContentDrawScope.glowAt(
+private fun ContentDrawScope.glowGrown(
     layout: TextLayoutResult,
-    revealedChars: Float,
-    intensity: Float,
+    line: LyricLine,
+    positionMs: Long,
+    inset: Float,
+    peak: Float,
+    growth: CharGrowth,
 ) {
+    if (!line.isGrowing(positionMs)) return
+    val em = layout.layoutInput.style.fontSize.toPx()
     val length = layout.layoutInput.text.length
-    if (length == 0 || revealedChars <= 0f || intensity <= 0f) return
-
-    val edge = revealedChars.coerceIn(0f, length.toFloat())
-    val visualLine = layout.getLineForOffset(edge.toInt().coerceIn(0, length - 1))
-    val lineStart = layout.getLineStart(visualLine)
-    val lineEnd = layout.getLineEnd(visualLine, visibleEnd = true)
-
-    val right = horizontalAt(layout, edge.coerceIn(lineStart.toFloat(), lineEnd.toFloat()), lineStart, lineEnd)
-    val trail = GLOW_TRAIL.toPx() * (GLOW_TRAIL_FLOOR + (1f - GLOW_TRAIL_FLOOR) * intensity)
-    val left = (right - trail).coerceAtLeast(layout.getLineLeft(visualLine))
-    if (right <= left) return
-
-    // The band, cut out of the line. This is only the vertical and trailing
-    // bounds; how it fades across is the mask below.
-    clipRect(
-        left = left,
-        top = layout.getLineTop(visualLine),
-        right = right,
-        bottom = layout.getLineBottom(visualLine),
-    ) {
-        this@glowAt.drawContent()
+    for (word in line.growingWords) {
+        if (positionMs < word.startMs || positionMs > word.restsAtMs) continue
+        val span = line.wordSpans[word.index]
+        val fall = line.wordFall(word.index, positionMs)
+        for (char in span.first..minOf(span.last, length - 1)) {
+            word.sampleInto(char - span.first, positionMs, growth)
+            if (growth.bloom <= 0.01f) continue
+            val visualLine = layout.getLineForOffset(char)
+            // Row-aware, for the same reason the sweep is; see [xOn].
+            val from = layout.xOn(char, visualLine, inset)
+            val to = layout.xOn(char + 1, visualLine, inset)
+            if (to <= from) continue
+            val dx = growth.shift * em
+            val dy = -growth.rise * peak * fall
+            val rowTop = layout.getLineTop(visualLine) + inset
+            val bottom = layout.getLineBottom(visualLine) + inset
+            val overhang = (to - from) * (growth.scale - 1f) / 2f
+            clipRect(
+                left = from - overhang + dx,
+                top = rowTop - peak * GROW_HEADROOM,
+                right = to + overhang + dx,
+                bottom = bottom,
+            ) {
+                translate(left = dx, top = dy) {
+                    scale(
+                        growth.scale,
+                        growth.scale,
+                        Offset((from + to) / 2f, (rowTop + bottom) / 2f),
+                    ) {
+                        this@glowGrown.drawContent()
+                    }
+                }
+                // Scoped to this letter's own clip, so it takes this letter's
+                // brightness down and leaves its neighbours — which have their
+                // own, a beat behind — where they are.
+                drawRect(
+                    color = Color.White.copy(alpha = growth.bloom),
+                    blendMode = BlendMode.DstIn,
+                )
+            }
+        }
     }
+}
 
-    // Full strength at the leading edge, ebbing away behind it. Without this
-    // the band has a hard back edge, and a hard edge travelling along at a
-    // constant distance behind the sweep is exactly what reads as a fixed-width
-    // block of light being dragged across the words.
-    //
-    // Painted over the whole node rather than inside the clip on purpose:
-    // DstIn keeps what the mask covers and erases the rest, and the brush
-    // clamps past its ends — transparent to the left of the band, opaque to
-    // the right, where the clip has already left nothing to keep.
-    drawRect(
-        brush = Brush.horizontalGradient(
-            0f to Color.Transparent,
-            0.45f to Color.White.copy(alpha = 0.22f),
-            1f to Color.White,
-            startX = left,
-            endX = right,
-        ),
-        blendMode = BlendMode.DstIn,
-    )
+/**
+ * Redraws this row with the word being sung lifted off the line, and the ones
+ * behind it settling back down.
+ *
+ * The line is cut at word boundaries and each piece replayed at its own
+ * height, which is what CSS gets for free by making every syllable its own
+ * box. Cutting between words rather than inside one means no glyph is ever
+ * sliced, and the pieces that are on the floor — which is most of them, most
+ * of the time — are one replay between them rather than one each.
+ *
+ * Costs nothing at all until something is off the floor: a line with no lift
+ * on it draws exactly once, the same as it did before any of this.
+ */
+private fun ContentDrawScope.riseWith(
+    layout: TextLayoutResult,
+    line: LyricLine,
+    positionMs: Long,
+    inset: Float,
+    peak: Float,
+    growth: CharGrowth,
+) {
+    if (!line.isLifted(positionMs)) {
+        drawContent()
+        return
+    }
+    val em = layout.layoutInput.style.fontSize.toPx()
+    for (visualLine in 0 until layout.lineCount) {
+        val lineStart = layout.getLineStart(visualLine)
+        val lineEnd = layout.getLineEnd(visualLine, visibleEnd = true)
+        // The row's own box. Anything standing still is clipped to exactly
+        // this: a band opened upwards would take in the bottom of the row
+        // above and draw it a second time, and two passes of a half-transparent
+        // line do not add up to the same line. That doubled sliver along every
+        // row is what read as the lines overlapping.
+        val top = layout.getLineTop(visualLine) + inset
+        val bottom = layout.getLineBottom(visualLine) + inset
+        var at = lineStart
+        var edge = layout.getLineLeft(visualLine) + inset
+        for (index in line.words.indices) {
+            val span = line.wordSpans[index]
+            val start = maxOf(span.first, lineStart)
+            val end = minOf(span.last + 1, lineEnd)
+            if (start >= end) continue
+            // Only while it is actually moving. Once the last letter has come to
+            // rest the word is back to being an ordinary sung word settling
+            // down, and the two agree exactly at the handover — a letter rests
+            // at precisely the lift [LyricLine.wordLift] would give it — so the
+            // cheaper single slice takes over without a step.
+            val held = line.growingAt(index)?.takeIf { positionMs in it.startMs..it.restsAtMs }
+            val lift = line.wordLift(index, positionMs)
+            // A word with nothing happening to it is left to the flat run,
+            // which is the whole of the line for all but a syllable of it.
+            if (held == null && lift <= 0.01f) continue
+            val from = layout.xOn(start, visualLine, inset)
+            val to = layout.xOn(end, visualLine, inset)
+            // Nothing to cut. Left where it is rather than stepped over, so the
+            // flat run still has it and the row keeps its words.
+            if (to <= from) continue
+            // Everything between the last risen word and this one is flat, and
+            // goes down in a single piece however many words that spans.
+            if (start > at) sliceRisen(edge, top, from, bottom, 0f)
+            if (held != null) {
+                growEach(
+                    layout, held, line, positionMs, visualLine,
+                    start, end, top, bottom, inset, peak, em, growth,
+                )
+            } else {
+                // Only what is off the floor gets room above the row to be off
+                // it in; see [top].
+                sliceRisen(from, top - peak, to, bottom, -lift * peak)
+            }
+            at = end
+            edge = to
+        }
+        if (at < lineEnd) {
+            sliceRisen(edge, top, layout.getLineRight(visualLine) + inset, bottom, 0f)
+        }
+    }
+}
+
+/**
+ * Redraws one held word a letter at a time, each at its own swell and height.
+ *
+ * The word is cut between characters rather than between words, so a letter can
+ * be scaled about its own centre without the ones either side of it coming
+ * along. Each piece is clipped to where its letter is *going* rather than where
+ * it sits: a glyph grown about its middle reaches past the box it was laid out
+ * in, and clipping to that box would shave both sides off it as it swells.
+ *
+ * The overlap that buys — a letter's clip reaching a pixel or so into its
+ * neighbour's — is why this is only ever run on a word that has earned it. Two
+ * copies of a glyph edge a pixel apart is nothing on a letter mid-swell and
+ * would be an obvious double image across a whole line.
+ */
+@Suppress("LongParameterList")
+private fun ContentDrawScope.growEach(
+    layout: TextLayoutResult,
+    word: GrowingWord,
+    line: LyricLine,
+    positionMs: Long,
+    visualLine: Int,
+    start: Int,
+    end: Int,
+    top: Float,
+    bottom: Float,
+    inset: Float,
+    peak: Float,
+    em: Float,
+    growth: CharGrowth,
+) {
+    // The settle is shared with every other word: a letter comes to rest at the
+    // same small lift, and then goes down with the rest of the line.
+    val fall = line.wordFall(word.index, positionMs)
+    val first = line.wordSpans[word.index].first
+    // Room to swell into, above the row rather than inside it. The pivot stays
+    // on the row's own middle: scaling about the middle of the *band* would
+    // walk every letter downwards as it grew.
+    val ceiling = top - peak * GROW_HEADROOM
+    val middle = (top + bottom) / 2f
+    for (char in start until end) {
+        word.sampleInto(char - first, positionMs, growth)
+        val from = layout.xOn(char, visualLine, inset)
+        val to = layout.xOn(char + 1, visualLine, inset)
+        if (to <= from) continue
+        val dx = growth.shift * em
+        val dy = -growth.rise * peak * fall
+        val overhang = (to - from) * (growth.scale - 1f) / 2f
+        clipRect(
+            left = from - overhang + dx,
+            top = ceiling,
+            right = to + overhang + dx,
+            bottom = bottom,
+        ) {
+            translate(left = dx, top = dy) {
+                scale(growth.scale, growth.scale, Offset((from + to) / 2f, middle)) {
+                    this@growEach.drawContent()
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Where an offset sits horizontally *on the row it was cut out of*.
+ *
+ * [TextLayoutResult.getHorizontalPosition] answers for the row the offset
+ * itself belongs to — and the offset one past the last character of a wrapped
+ * row belongs to the next row, so asking where a word that runs up to a wrap
+ * *ends* gives a position at the far left, one row down. A slice cut between
+ * there and the word's start is empty, and the walk then treats the row as
+ * finished: everything from that word to the end of the row is never drawn.
+ *
+ * Whole rows disappeared that way, and Japanese lines disappeared most, because
+ * Apple's word spans there are whole phrases and reach a wrap on their own where
+ * an English word rarely does.
+ *
+ * So both ends of a row are answered with the row's own edges, and anything in
+ * between is held inside them.
+ */
+private fun TextLayoutResult.xOn(offset: Int, visualLine: Int, inset: Float): Float {
+    val left = getLineLeft(visualLine) + inset
+    val right = getLineRight(visualLine) + inset
+    return when {
+        offset <= getLineStart(visualLine) -> left
+        offset >= getLineEnd(visualLine, visibleEnd = true) -> right
+        else -> (getHorizontalPosition(offset, usePrimaryDirection = true) + inset)
+            .coerceIn(left, right)
+    }
+}
+
+/** One piece of a line, clipped to its own width and drawn at its own height. */
+private fun ContentDrawScope.sliceRisen(
+    from: Float,
+    top: Float,
+    to: Float,
+    bottom: Float,
+    dy: Float,
+) {
+    if (to <= from) return
+    clipRect(left = from, top = top, right = to, bottom = bottom) {
+        translate(top = dy) { this@sliceRisen.drawContent() }
+    }
 }
 
 /** Where a fractional character index sits across a visual line, in pixels. */
 private fun horizontalAt(
     layout: TextLayoutResult,
     chars: Float,
-    lineStart: Int,
-    lineEnd: Int,
+    visualLine: Int,
 ): Float {
+    val lineStart = layout.getLineStart(visualLine)
+    val lineEnd = layout.getLineEnd(visualLine, visibleEnd = true)
     val index = chars.toInt().coerceIn(lineStart, lineEnd)
-    val here = layout.getHorizontalPosition(index, usePrimaryDirection = true)
-    val next = layout.getHorizontalPosition(
-        (index + 1).coerceAtMost(lineEnd),
-        usePrimaryDirection = true,
-    )
+    // Row-aware at both ends: on the last character of a wrapped row the next
+    // position belongs to the row below, and read straight it puts the edge
+    // back at the left margin — the highlight jumped backwards a letter before
+    // every wrap.
+    val here = layout.xOn(index, visualLine, 0f)
+    val next = layout.xOn((index + 1).coerceAtMost(lineEnd), visualLine, 0f)
     return here + (next - here) * (chars - index)
 }
 
@@ -2600,8 +3231,18 @@ private fun horizontalAt(
  * left to the dim copy. Within a word the cut sits between two character
  * positions, so the edge advances smoothly rather than jumping a letter at a
  * time.
+ *
+ * The boundary itself is then feathered over [WIPE_FEATHER] rather than left
+ * as the cut, which needs the caller to give this an offscreen layer to erase
+ * into — see [SweptLyricLine]. Only the line actually being sung carries one;
+ * everywhere else the boundary is at one end of the text or the other and
+ * there is nothing to soften.
  */
-private fun ContentDrawScope.sweepTo(layout: TextLayoutResult, revealedChars: Float) {
+private fun ContentDrawScope.sweepTo(
+    layout: TextLayoutResult,
+    revealedChars: Float,
+    feather: Boolean,
+) {
     if (revealedChars <= 0f) return
     if (revealedChars >= layout.layoutInput.text.length) {
         drawContent()
@@ -2613,18 +3254,204 @@ private fun ContentDrawScope.sweepTo(layout: TextLayoutResult, revealedChars: Fl
         // anything after them.
         if (revealedChars <= start) return
         val end = layout.getLineEnd(visualLine, visibleEnd = true)
-        val right = if (revealedChars >= end) {
-            layout.getLineRight(visualLine)
+        val cut = revealedChars < end
+        val right = if (cut) {
+            horizontalAt(layout, revealedChars, visualLine)
         } else {
-            horizontalAt(layout, revealedChars, start, end)
+            layout.getLineRight(visualLine)
         }
+        val top = layout.getLineTop(visualLine)
+        val bottom = layout.getLineBottom(visualLine)
         clipRect(
             left = layout.getLineLeft(visualLine),
-            top = layout.getLineTop(visualLine),
+            top = top,
             right = right,
-            bottom = layout.getLineBottom(visualLine),
+            bottom = bottom,
         ) {
             this@sweepTo.drawContent()
+        }
+        // Only the visual line holding the boundary has an edge to soften; a
+        // line revealed to its end runs into the wrap, which is not an edge.
+        if (!feather || !cut) continue
+        // Scoped to this line's band so the mask cannot reach the lines above
+        // and below it: DstIn erases whatever the source does not cover, and
+        // outside the clip there is no source at all, so they are left alone.
+        // Within it the brush clamps — opaque behind the feather, gone past it.
+        clipRect(top = top, bottom = bottom) {
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    0f to Color.White,
+                    1f to Color.Transparent,
+                    startX = (right - WIPE_FEATHER.toPx())
+                        .coerceAtLeast(layout.getLineLeft(visualLine)),
+                    endX = right,
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+    }
+}
+
+/**
+ * A short text-material transition: the list and its playback clock stay in
+ * place while a field of tiny glyph-like particles resolves into the new text.
+ * Only the dedicated Canvas drawing moves, so changing language never causes a
+ * second scroll, a blank frame, or a new lyrics timeline. The app's Reduce
+ * animation preference collapses the whole response to an immediate swap.
+ */
+@Composable
+private fun LyricsTranslationMotion(
+    trigger: Int,
+    reduceMotion: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable (State<Float>?) -> Unit,
+) {
+    val progress = remember { Animatable(1f) }
+    val foreground = rememberIsForeground()
+    // Reopening the panel or returning from the background must not replay a
+    // previous toggle. A new toggle cancels the previous effect automatically.
+    var consumedTrigger by remember { mutableIntStateOf(trigger) }
+    LaunchedEffect(trigger, reduceMotion, foreground) {
+        val changed = trigger != consumedTrigger
+        consumedTrigger = trigger
+        if (!changed || trigger <= 0 || reduceMotion || !foreground) {
+            progress.snapTo(1f)
+        } else {
+            progress.snapTo(0f)
+            progress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = TRANSLATION_MOTION_MS, easing = LinearEasing),
+            )
+        }
+    }
+
+    Box(modifier = modifier) {
+        // Keep the lyrics subtree completely outside the animation clock. In
+        // particular, do not read progress in composition or apply a clipping
+        // layer here: the panel's active line deliberately scales beyond its
+        // measured bounds and its glow uses unbounded blur.
+        content(progress.asState().takeIf { !reduceMotion && foreground && trigger > 0 })
+    }
+}
+
+/** Glyph positions are cached at layout time; the shared clock is draw-only. */
+private fun Modifier.lyricParticles(
+    layout: TextLayoutResult?,
+    progress: State<Float>?,
+    room: Dp,
+): Modifier {
+    if (layout == null || progress == null) return this
+    return drawWithCache {
+        val text = layout.layoutInput.text.text
+        val candidates = text.indices.filter { text[it].isLetterOrDigit() }
+        val random = Random(text.hashCode())
+        val inset = room.toPx()
+        val particles = candidates.shuffled(random).take(PARTICLES_PER_VOICE).map { index ->
+            val glyph = layout.getBoundingBox(index)
+            TranslationParticle(
+                anchor = glyph.center + Offset(inset, inset),
+                drift = Offset(
+                    (random.nextFloat() - 0.5f) * 12.dp.toPx(),
+                    -(5f + random.nextFloat() * 11f).dp.toPx(),
+                ),
+                radius = (0.65f + random.nextFloat() * 0.65f).dp.toPx(),
+                delay = 0.16f * index / text.length.coerceAtLeast(1),
+            )
+        }
+        onDrawWithContent {
+            drawContent()
+            val value = progress.value
+            if (value > 0f && value < 1f) {
+                particles.forEach { particle ->
+                    val t = ((value - particle.delay) / 0.84f).coerceIn(0f, 1f)
+                    val envelope = sin(PI * t).toFloat()
+                    val ease = 1f - (1f - t) * (1f - t)
+                    val center = particle.anchor + Offset(
+                        particle.drift.x * ease,
+                        particle.drift.y * ease + 3.dp.toPx() * t * t,
+                    )
+                    // Two inexpensive circles give a soft halo without another
+                    // blur layer; opacity rises and falls without a flash.
+                    drawCircle(Color.White, particle.radius * 2.7f, center, alpha = envelope * 0.07f)
+                    drawCircle(Color.White, particle.radius, center, alpha = envelope * 0.58f)
+                }
+            }
+        }
+    }
+}
+
+/** A particle's resting place and where it drifts as the new text resolves. */
+private data class TranslationParticle(
+    val anchor: Offset,
+    val drift: Offset,
+    val radius: Float,
+    val delay: Float,
+)
+
+private const val PARTICLES_PER_VOICE = 18
+private const val TRANSLATION_MOTION_MS = 540
+
+/**
+ * Stands in for the lyrics while the lookup is still out.
+ *
+ * Without it the panel had one empty state doing two jobs: a lookup that had
+ * come back with nothing and a lookup that had not come back yet both said "No
+ * lyrics for this track", so every track was declared to have none for as long
+ * as it took to find out that it did.
+ */
+@Composable
+private fun LyricsSkeleton(modifier: Modifier = Modifier) {
+    val sweep by rememberInfiniteTransition(label = "lyricsSkeleton").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(SKELETON_PERIOD_MS, easing = LinearEasing),
+        ),
+        label = "sweep",
+    )
+    BoxWithConstraints(
+        // No gutter of its own: the list this stands in for bleeds out to the
+        // panel's full width and puts the gutter back as content padding, so
+        // the words land level with the panel's own edge and so does this.
+        modifier.padding(top = 40.dp),
+    ) {
+        // Every bar sweeps against the width of the column rather than its own,
+        // so one band crosses the whole page. Measured per bar, a short row
+        // lights end to end in the time a long one takes to get halfway, and
+        // the block reads as a row of separate things loading separately.
+        val column = maxWidth
+        Column(verticalArrangement = Arrangement.spacedBy(SKELETON_BLOCK_GAP)) {
+            SKELETON_BLOCKS.forEach { rows ->
+                Column(verticalArrangement = Arrangement.spacedBy(SKELETON_LEADING)) {
+                    rows.forEach { fraction ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth(fraction)
+                                .height(SKELETON_BAR)
+                                .clip(RoundedCornerShape(4.dp))
+                                // Read in the draw block, not the body: a
+                                // pageful of these would otherwise recompose on
+                                // every frame, and all any of them needs per
+                                // frame is a fresh gradient.
+                                .drawWithCache {
+                                    val full = column.toPx()
+                                    val band = full * 0.45f
+                                    val startX = -band + sweep * (full + band * 2)
+                                    val brush = Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color.White.copy(alpha = 0.10f),
+                                            Color.White.copy(alpha = 0.26f),
+                                            Color.White.copy(alpha = 0.10f),
+                                        ),
+                                        startX = startX,
+                                        endX = startX + band,
+                                    )
+                                    onDrawBehind { drawRect(brush) }
+                                },
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -2641,13 +3468,29 @@ private fun ContentDrawScope.sweepTo(layout: TextLayoutResult, revealedChars: Fl
 @Composable
 private fun LyricsPanel(
     lines: List<LyricLine>,
+    trackKey: String,
     positionMs: Long,
+    /** Whether a lookup for this track is still in flight. */
+    looking: Boolean,
     isPlaying: Boolean,
     onSeekToLine: (Long) -> Unit,
     onUserScroll: (Boolean) -> Unit = {},
+    /** Where the translation of this track is, for the button in the corner. */
+    translationState: LyricsTranslationUiState = LyricsTranslationUiState.Idle,
+    showingTranslation: Boolean = false,
+    onToggleTranslation: (() -> Unit)? = null,
+    /** Opens the offset drawer, from the control in the panel's corner. */
+    onOpenOffset: (() -> Unit)? = null,
+    translationProgress: State<Float>? = null,
     modifier: Modifier = Modifier,
 ) {
-    val clock = rememberLyricClock(positionMs, isPlaying)
+    // The offset is applied to the clock rather than to the lines: one shift,
+    // read by everything downstream — the active line, the sweep, and the
+    // translated timing alike — so nothing can end up on a different clock from
+    // anything else, and the auto-follow keeps following the same line the
+    // sweep is lighting.
+    val lyricsOffsetMs by AppSettings.lyricsOffsetMs.collectAsStateWithLifecycle()
+    val clock = rememberLyricClock(positionMs + lyricsOffsetMs, isPlaying)
 
     // Which line is playing right now: the last one whose stamp has passed.
     //
@@ -2659,25 +3502,24 @@ private fun LyricsPanel(
     // started. derivedStateOf keeps the cost of the finer clock off
     // composition; it only notifies when the index actually changes, not on
     // every frame that feeds it.
-    val activeLine by remember(lines) {
-        derivedStateOf { lines.indexOfLast { it.timeMs <= clock.longValue } }
-    }
-    // A background vocal routinely holds past the *next* line's own stamp —
-    // that's the whole reason it's carried apart, see [LyricLine.background].
-    // Taken on [activeLine] alone, the row above dropped out of its active
-    // treatment the instant the next line's stamp passed, so its sweep lost
-    // the glow and full brightness mid-bracket while the words were still
-    // being sung. This is the one line behind [activeLine] kept active
-    // alongside it for as long as its own end — background included — hasn't
-    // arrived yet, so the two rows animate together instead of the first
-    // being cut off under the second.
-    val alsoActive by remember(lines) {
+    // Whether the source stamps its lines at all. Unsynced lyrics are a wall of
+    // text to read by hand; nothing lights up, nothing scrolls itself, and the
+    // panel draws section headers and stanza breaks instead of timings.
+    val isSynced = remember(lines) { lines.any { it.timeMs > 0L } }
+    // Only a song that actually names a second voice is laid out as one. A
+    // single-voice song has every line on the left already, so splitting the
+    // panel into lanes for it would just be a narrower panel.
+    val duet = remember(lines) { lines.any { it.alignment == LyricAlignment.End } }
+    // Every unfinished vocal kept visible, including overlaps spanning more
+    // than two rows — a backing vocal routinely holds past the next line's own
+    // stamp, see [LyricLine.background]. The uppermost owns the scroll anchor
+    // until its end.
+    val activeRows by remember(lines, isSynced) {
         derivedStateOf {
-            val previous = activeLine - 1
-            val line = lines.getOrNull(previous)
-            if (line != null && line.hasKnownEnd && clock.longValue < line.endMs) previous else -1
+            if (!isSynced) emptyList() else activeLyricRows(lines, clock.longValue)
         }
     }
+    val activeLine = activeRows.firstOrNull() ?: -1
     val listState = rememberLazyListState()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
     // Tells the player's transport auto-hide whether a finger is genuinely
@@ -2749,8 +3591,8 @@ private fun LyricsPanel(
     // stutter on opening came from. Later moves, which are one line at a time,
     // still animate.
     var placed by remember(lines) { mutableStateOf(false) }
-    LaunchedEffect(activeLine, browsing) {
-        if (!browsing && !listState.isScrollInProgress &&
+    LaunchedEffect(activeLine, browsing, isSynced) {
+        if (isSynced && !browsing && !listState.isScrollInProgress &&
             activeLine >= 0 && activeLine in lines.indices
         ) {
             // A third of the way down the panel, whatever the panel's size — a
@@ -2771,19 +3613,27 @@ private fun LyricsPanel(
     }
 
     if (lines.isEmpty()) {
-        Box(modifier, contentAlignment = Alignment.Center) {
-            Text(
-                text = "No lyrics for this track",
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White.copy(alpha = 0.6f),
-            )
+        // "None" is a finding, and it is only worth reporting once the lookup
+        // has actually come back with it.
+        if (looking) {
+            LyricsSkeleton(modifier)
+        } else {
+            Box(modifier, contentAlignment = Alignment.Center) {
+                Text(
+                    text = "No lyrics for this track",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White.copy(alpha = 0.6f),
+                )
+            }
         }
         return
     }
 
+    Box(modifier) {
     LazyColumn(
         state = listState,
-        modifier = modifier
+        modifier = Modifier
+            .fillMaxSize()
             .bleedHorizontally(PLAYER_GUTTER)
             .nestedScroll(keepScroll)
             .fadingEdges(),
@@ -2800,63 +3650,183 @@ private fun LyricsPanel(
             items = lines,
             key = { index, line -> "${line.timeMs}_$index" },
         ) { index, line ->
+            if (!isSynced && Genius.isSectionHeader(line.text)) {
+                val sectionTitle = line.text.removePrefix("[").removeSuffix("]").trim()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = if (index == 0) 6.dp else 24.dp, bottom = 8.dp)
+                        .padding(horizontal = GLOW_ROOM),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .padding(horizontal = 11.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            text = sectionTitle.uppercase(),
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                letterSpacing = 1.3.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp,
+                            ),
+                            color = Color.White.copy(alpha = 0.9f),
+                        )
+                    }
+                }
+                return@itemsIndexed
+            }
+
+            if (!isSynced && line.isGap) {
+                Spacer(Modifier.height(14.dp))
+                return@itemsIndexed
+            }
+
             // Signed rather than absolute: a line already sung and one still to
             // come are not the same distance from being read, even at the same
             // number of rows away, so the two fade at different rates below.
             val offset = if (activeLine < 0) 0 else index - activeLine
             val distance = abs(offset)
-            val isActive = index == activeLine || index == alsoActive
-            // Lines already sung stay close to legible — they're what the eye
-            // just read and glances back to. Lines still to come fade faster
-            // and further, so the panel reads as an arrival rather than a wall
-            // of equally-weighted text.
+            val isActive = isSynced && index in activeRows
+            val sung = offset < 0
+            // Symmetric either side of the playing line, and shallow: the two
+            // rows around it stay readable so you can follow back over what was
+            // just sung as well as ahead, and everything past that recedes to
+            // the same floor rather than fading to nothing.
+            val step = distance.coerceAtMost(LINE_FALLOFF_ALPHA.lastIndex)
             val blur by animateDpAsState(
                 targetValue = when {
-                    !lyricsBlur || reduceDynamicBlur || browsing || isActive -> 0.dp
-                    else -> (distance * 1.6f).coerceAtMost(7f).dp
+                    !isSynced || !lyricsBlur || reduceDynamicBlur || browsing || isActive -> 0.dp
+                    else -> LINE_FALLOFF_BLUR[step]
                 },
+                animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
                 label = "lyricBlur",
             )
-            // Browsing keeps the same fade as playback rather than flattening
-            // every row to full strength. A finger on the list is not a reason
-            // to turn the panel into a wall of equally-bright lines, and the
-            // sweep below is what keeps the sync legible while it is scrolled.
+            // Reading by hand is not following along: the stack flattens to one
+            // brightness so no row is being pointed at, and the panel stops
+            // claiming to know where the song is while somebody scrolls away
+            // from it.
             val lineAlpha by animateFloatAsState(
                 targetValue = when {
+                    !isSynced -> 0.95f
                     isActive -> 1f
-                    offset < 0 -> (0.55f - distance * 0.05f).coerceAtLeast(0.30f)
-                    else -> (0.45f - distance * 0.09f).coerceAtLeast(0.12f)
+                    browsing -> BROWSING_ALPHA
+                    else -> LINE_FALLOFF_ALPHA[step]
                 },
+                animationSpec = tween(LYRIC_SETTLE_MS, easing = LYRIC_EASING),
                 label = "lyricAlpha",
             )
-            if (line.isGap) {
-                val noteSize by animateDpAsState(
-                    targetValue = if (isActive) 34.dp else 26.dp,
-                    label = "noteSize",
+            if (isSynced && line.isGap) {
+                // A break counts itself out rather than being marked: three dots
+                // lighting in turn across the interlude, so a long one reads as
+                // time running down instead of a symbol parked on screen waiting
+                // for the singing to come back.
+                val until = lines.getOrNull(index + 1)?.timeMs ?: line.endMs
+                // The row itself opens and closes with the break, so the list
+                // carries no dead space through the verses either side of it —
+                // which is also what stops the panel scrolling past a hole to
+                // reach the next line that is actually sung.
+                val swell by animateFloatAsState(
+                    targetValue = if (isActive) 1f else 0f,
+                    animationSpec = tween(
+                        durationMillis = if (isActive) 400 else 350,
+                        easing = LYRIC_EASING,
+                    ),
+                    label = "gapSwell",
                 )
-                Icon(
-                    imageVector = VelthyIcons.MusicNote,
-                    contentDescription = "Instrumental",
-                    tint = Color.White.copy(alpha = lineAlpha),
+                Box(
                     modifier = Modifier
-                        .then(if (blur > 0.dp && !reduceDynamicBlur) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { onSeekToLine(line.timeMs) }
-                        // Matches the inset every sung line carries, so the
-                        // rhythm of the list doesn't break at a break.
-                        .padding(GLOW_ROOM)
-                        .size(noteSize),
-                )
+                        .height((GAP_ROW_HEIGHT + GAP_ROW_SPACING) * swell)
+                        .clipToBounds(),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .then(if (blur > 0.dp && !reduceDynamicBlur) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onSeekToLine(line.timeMs) }
+                            // Matches the inset every sung line carries, so the
+                            // rhythm of the list doesn't break at a break.
+                            .padding(GLOW_ROOM)
+                            .size(
+                                width = GAP_DOT_SIZE * GAP_DOTS + GAP_DOT_GAP * (GAP_DOTS - 1),
+                                height = GAP_DOT_SIZE,
+                            )
+                            .graphicsLayer {
+                                val grow = GAP_REST_SCALE + (1f - GAP_REST_SCALE) * swell
+                                scaleX = grow
+                                scaleY = grow
+                                transformOrigin = TransformOrigin(0f, 0.5f)
+                                alpha = lineAlpha * swell
+                            }
+                            .drawBehind {
+                                // Read here rather than in composition: the fill
+                                // moves every frame, and this way a break costs
+                                // a redraw of three circles, not a recomposition.
+                                val span = (until - line.timeMs).coerceAtLeast(1L)
+                                val through = ((clock.longValue - line.timeMs).toFloat() / span)
+                                    .coerceIn(0f, 1f)
+                                val radius = GAP_DOT_SIZE.toPx() / 2f
+                                val stride = (GAP_DOT_SIZE + GAP_DOT_GAP).toPx()
+                                repeat(GAP_DOTS) { dot ->
+                                    // Each dot owns its share of the break and
+                                    // fills across it, so they light left to
+                                    // right.
+                                    val lit = (through * GAP_DOTS - dot).coerceIn(0f, 1f)
+                                    drawCircle(
+                                        color = Color.White.copy(
+                                            alpha = GAP_DOT_REST + (1f - GAP_DOT_REST) * lit,
+                                        ),
+                                        radius = radius,
+                                        center = Offset(radius + dot * stride, size.height / 2f),
+                                    )
+                                }
+                            },
+                    )
+                }
             } else {
-                val style = MaterialTheme.typography.headlineLarge.copy(
-                    fontSize = 27.sp,
-                    lineHeight = 33.sp,
-                )
-                // The playing line swells a touch. Anchored to its left edge,
-                // so the words don't slide sideways under the highlight as it
-                // grows — scaling about the centre would fight the sweep.
+                // Held so a press can dip the row without recomposing the list:
+                // one interaction source per row, read in the draw phase by the
+                // graphics layer above.
+                val interaction = remember { MutableInteractionSource() }
+                val pressed by interaction.collectIsPressedAsState()
+                // Sized and weighted to be read at a glance from a phone held at
+                // arm's length: extra-bold, and large enough that the sweep's
+                // leading edge is legible while it travels. The line height
+                // leaves room for descenders at this weight so two rows never
+                // touch.
+                val style = if (isSynced) {
+                    MaterialTheme.typography.headlineLarge.copy(
+                        fontSize = 34.sp,
+                        lineHeight = 41.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = if (duet && line.alignment == LyricAlignment.End) {
+                            TextAlign.End
+                        } else {
+                            TextAlign.Start
+                        },
+                    )
+                } else {
+                    MaterialTheme.typography.headlineMedium.copy(
+                        fontSize = 30.sp,
+                        lineHeight = 38.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                    )
+                }
+                // The stack sits fractionally back and the playing line comes
+                // forward to meet you, rather than the playing line swelling past
+                // the others — a smaller move, and one that doesn't push the type
+                // around the line it hands over to. A row under a finger dips,
+                // the way a button does. Anchored to the left edge, so the words
+                // don't slide sideways under the highlight; scaling about the
+                // centre would fight the sweep.
+                val alignEnd = duet && line.alignment == LyricAlignment.End
                 val scale by animateFloatAsState(
-                    targetValue = if (isActive) 1.04f else 1f,
+                    targetValue = when {
+                        pressed -> PRESSED_LYRIC_SCALE
+                        isActive -> 1f
+                        else -> INACTIVE_LYRIC_SCALE
+                    },
                     label = "lyricScale",
                 )
                 // Apple's bloom on the line being sung. Fades in and out with
@@ -2869,24 +3839,45 @@ private fun LyricsPanel(
                 )
                 val shape = Modifier
                     .fillMaxWidth()
+                    // The lane the other voice sings in, kept clear. Applied
+                    // before the layer below so the row scales about the edge
+                    // it is actually written from.
+                    .padding(
+                        start = if (alignEnd) DUET_LANE else 0.dp,
+                        end = if (duet && !alignEnd) DUET_LANE else 0.dp,
+                    )
                     .graphicsLayer {
                         scaleX = scale
                         scaleY = scale
-                        transformOrigin = TransformOrigin(0f, 0.5f)
+                        transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, 0.5f)
                         alpha = lineAlpha
                     }
                     .then(if (blur > 0.dp && !reduceDynamicBlur) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
                     .clip(RoundedCornerShape(10.dp))
-                    .clickable { onSeekToLine(line.timeMs) }
+                    .clickable(enabled = isSynced, interactionSource = interaction, indication = null) {
+                        onSeekToLine(line.timeMs)
+                    }
+                // Lead and answering vocal are one row: they are one line of
+                // the song, they scale and dim together, and tapping either
+                // seeks to the same place.
                 Column(modifier = shape) {
                     PanelVoice(
                         line = line,
                         clock = clock,
                         style = style,
                         isActive = isActive,
+                        sung = sung,
+                        synced = isSynced,
                         browsing = browsing,
                         glowAlpha = glow,
                         room = GLOW_ROOM,
+                        alignEnd = alignEnd,
+                        // Only the rows actually in front of the reader get the
+                        // particle pass. Sixty rows' worth of glyph boxes is a
+                        // layout walk per frame for text nobody is looking at.
+                        translationProgress = translationProgress.takeIf {
+                            if (isSynced) abs(index - activeLine) <= 1 else index < 4
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     line.background?.let { backing ->
@@ -2898,9 +3889,16 @@ private fun LyricsPanel(
                                 lineHeight = BACKING_LINE_HEIGHT,
                             ),
                             isActive = isActive,
+                            sung = sung,
+                            synced = isSynced,
                             browsing = browsing,
+                            // No bloom on the second voice. The glow marks
+                            // what is being sung *at you*; putting it on both
+                            // makes the row read as two equal lines, which is
+                            // the thing this split exists to stop.
                             glowAlpha = 0f,
                             room = 0.dp,
+                            alignEnd = alignEnd,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(start = GLOW_ROOM, end = GLOW_ROOM, bottom = GLOW_ROOM)
@@ -2911,6 +3909,125 @@ private fun LyricsPanel(
             }
         }
     }
+
+        // Top-end rather than in the flow of the list: these are controls over
+        // the whole panel, not rows in it, and putting them here keeps them put
+        // while the words scroll underneath.
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = PLAYER_GUTTER - GLOW_ROOM + 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (onOpenOffset != null) {
+                PanelCircleButton(
+                    icon = Icons.Rounded.Tune,
+                    contentDescription = "Lyrics offset",
+                    highlighted = lyricsOffsetMs != 0,
+                    onClick = onOpenOffset,
+                )
+            }
+            if (onToggleTranslation != null) {
+                TranslationToggleButton(
+                    state = translationState,
+                    showingTranslation = showingTranslation,
+                    onClick = onToggleTranslation,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A small circular control in the lyrics panel's corner — the offset button's
+ * own composable because it lights when the lyrics are shifted, which is a fact
+ * the translate button beside it has no equivalent of.
+ */
+@Composable
+private fun PanelCircleButton(
+    icon: ImageVector,
+    contentDescription: String,
+    highlighted: Boolean,
+    onClick: () -> Unit,
+) {
+    val discAlpha by animateFloatAsState(
+        targetValue = if (highlighted) 0.34f else 0.18f,
+        label = "panelDisc",
+    )
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = discAlpha))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = Color.White.copy(alpha = if (highlighted) 1f else 0.78f),
+            modifier = Modifier.size(19.dp),
+        )
+    }
+}
+
+/**
+ * The translate button in the lyrics panel's corner.
+ *
+ * Four states rather than the usual two: idle, a request in flight — which
+ * takes the icon's place rather than sitting beside it — a translation on
+ * screen, and a track whose lyrics are already in the language asked for, which
+ * dims to say the button has nothing left to do.
+ */
+@Composable
+private fun TranslationToggleButton(
+    state: LyricsTranslationUiState,
+    showingTranslation: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val active = showingTranslation || state is LyricsTranslationUiState.Loading
+    val tint = when {
+        state is LyricsTranslationUiState.SameLanguage -> Color.White.copy(alpha = 0.42f)
+        active -> Color.White
+        else -> Color.White.copy(alpha = 0.78f)
+    }
+    val discAlpha by animateFloatAsState(
+        targetValue = if (active) 0.34f else 0.18f,
+        label = "translateDisc",
+    )
+    Box(
+        modifier = modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = discAlpha))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (state is LyricsTranslationUiState.Loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = tint,
+                strokeWidth = 1.7.dp,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Translate,
+                contentDescription = if (showingTranslation) "Show original lyrics" else "Translate lyrics",
+                tint = tint,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+    }
 }
 
 @Composable
@@ -2919,14 +4036,30 @@ private fun PanelVoice(
     clock: MutableLongState,
     style: TextStyle,
     isActive: Boolean,
+    /** Whether the panel has already left this line behind. */
+    sung: Boolean,
+    /** Whether the source stamps its lines at all. */
+    synced: Boolean,
     browsing: Boolean,
     glowAlpha: Float,
     room: Dp,
+    /** Whether this line is one of the right-hand voice's; see [LyricAlignment]. */
+    alignEnd: Boolean,
+    translationProgress: State<Float>? = null,
     modifier: Modifier = Modifier,
 ) {
     if (line.isWordSynced && !browsing) {
+        // Every word-synced line goes through the sweep, not just the playing
+        // one — a line that has already been sung is fully revealed and one
+        // still to come is not, which falls out of the same arithmetic.
+        //
+        // Running it only on the active line meant swapping this composable
+        // for a plain Text the instant a line handed over, and the two
+        // disagreed about the brightness of the words: the tail of the line
+        // popped up to meet the rest of it in a single frame. Animating the
+        // tail instead lets a finished line close up as it dims away.
         val tail by animateFloatAsState(
-            targetValue = if (isActive) UNSUNG_ALPHA else 1f,
+            targetValue = if (sung) 1f else UNSUNG_ALPHA,
             label = "lyricTail",
         )
         SweptLyricLine(
@@ -2937,16 +4070,17 @@ private fun PanelVoice(
             modifier = modifier,
             glowAlpha = glowAlpha,
             glowRoom = room,
+            feather = isActive,
+            alignEnd = alignEnd,
+            translationProgress = translationProgress,
         )
     } else if (line.isWordSynced) {
-        // Browsing: keep the sweep, so a line already sung stays fully lit and
-        // one still to come stays dim — the same reading of the song the panel
-        // has while it plays — but skip the bloom, which is a playback
-        // flourish rather than a browsing aid. Falling through to the plain
-        // [Text] below instead is what used to light every row up at once the
-        // moment the list was scrolled.
+        // Browsing: keep the sweep so sung lines stay fully lit and unsung
+        // ones stay dim, but skip the bloom — it is a playback flourish, not
+        // a browsing aid. Non-active lines get the same dim tail as when we
+        // are not browsing; the active line stays at full brightness.
         val tail by animateFloatAsState(
-            targetValue = if (isActive) UNSUNG_ALPHA else 1f,
+            targetValue = if (sung) 1f else UNSUNG_ALPHA,
             label = "lyricTail",
         )
         SweptLyricLine(
@@ -2957,13 +4091,30 @@ private fun PanelVoice(
             modifier = modifier,
             glowAlpha = 0f,
             glowRoom = room,
+            alignEnd = alignEnd,
+            translationProgress = translationProgress,
         )
     } else {
+        // No word timings, so there is no sweep to light the words as they are
+        // sung: the line lights whole, the moment it starts.
+        //
+        // It still has to hold itself back until then. The parent's falloff
+        // alone left a line not yet sung reading brighter here than the same
+        // line does on a word-synced source, where the unsung words sit at
+        // [UNSUNG_ALPHA] underneath it — the two have to agree about what "not
+        // yet" looks like, or changing provider changes the panel rather than
+        // the words. Lyrics with no timing at all are all "now", and stay lit.
+        val lit by animateFloatAsState(
+            targetValue = if (!synced || sung || isActive) 1f else UNSUNG_ALPHA,
+            label = "lyricLit",
+        )
+        var layout by remember(line.text) { mutableStateOf<TextLayoutResult?>(null) }
         Text(
             text = line.text,
             style = style,
-            color = Color.White,
-            modifier = modifier.padding(room),
+            color = Color.White.copy(alpha = lit),
+            onTextLayout = { layout = it },
+            modifier = modifier.lyricParticles(layout, translationProgress, room).padding(room),
         )
     }
 }
@@ -3001,6 +4152,41 @@ private fun CurrentLyricLine(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val isSynced = remember(lines) { lines.any { it.timeMs > 0L } }
+    if (!isSynced) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 4.dp),
+        ) {
+            Icon(
+                imageVector = VelthyIcons.MusicNote,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Open lyrics",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                imageVector = VelthyIcons.ChevronRight,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        return
+    }
+
     val clock = rememberLyricClock(positionMs, isPlaying)
 
     val index by remember(lines) {
@@ -3015,33 +4201,24 @@ private fun CurrentLyricLine(
     val intro = instrumental && firstSung >= 0 && index < firstSung
     // The intro gets one of the slang lines; mid-song breaks stay plain.
     val introLine = remember(trackKey) { INTRO_LINES.random() }
+    // The strip is one line and switches the moment the next one is due, so
+    // the answering vocal — where there is one — has nowhere to go: showing it
+    // would mean either cutting it short when the next line arrives or holding
+    // the strip back. [LyricsPanel] has the room to draw it properly.
     val text = when {
         intro -> introLine
         instrumental -> INSTRUMENTAL_MARK
-        else -> current!!.text
+        else -> current.text
     }
+
+    val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp)
-            .graphicsLayer {
-                if (instrumental) {
-                    // Nothing is being sung; hold it steady rather than fading.
-                    alpha = 0.5f
-                    return@graphicsLayer
-                }
-                val start = lines.getOrNull(index)?.timeMs ?: 0L
-                val end = lines.getOrNull(index + 1)?.timeMs
-                    ?: durationMs.takeIf { it > start }
-                    ?: (start + 4_000L)
-                val fade = ((end - start) * LYRIC_FADE_FRACTION)
-                    .coerceIn(LYRIC_FADE_MIN_MS, LYRIC_FADE_MAX_MS)
-                val remaining = (end - clock.longValue).toFloat()
-                alpha = 0.78f * (remaining / fade).coerceIn(0f, 1f)
-            },
+            .padding(vertical = 4.dp),
     ) {
         if (instrumental) {
             Icon(
@@ -3052,26 +4229,64 @@ private fun CurrentLyricLine(
             )
             Spacer(Modifier.width(6.dp))
         }
-        val swept = current?.takeIf { !instrumental && it.isWordSynced }
-        if (swept != null) {
-            SweptLyricLine(
-                line = swept,
-                clock = clock,
-                style = MaterialTheme.typography.titleMedium,
-                dimAlpha = UNSUNG_ALPHA_STRIP,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-        } else {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
+        // A line change slides in from below and out above while it fades, so
+        // the strip reads as a handover rather than a cut. The playback clock
+        // is untouched: only the text swaps.
+        AnimatedContent(
+            targetState = Triple(index, current, text),
+            transitionSpec = {
+                val duration = if (reduceAnimation) 0 else 340
+                if (reduceAnimation) {
+                    (fadeIn(snap()) togetherWith fadeOut(snap())).using(
+                        SizeTransform(clip = false, sizeAnimationSpec = { _, _ -> snap() }),
+                    )
+                } else {
+                    (
+                        fadeIn(animationSpec = tween(duration, easing = FastOutSlowInEasing)) +
+                            slideInVertically(
+                                animationSpec = tween(duration, easing = FastOutSlowInEasing),
+                            ) { height -> (height * 0.35f).toInt() }
+                        ).togetherWith(
+                        fadeOut(animationSpec = tween(duration, easing = FastOutSlowInEasing)) +
+                            slideOutVertically(
+                                animationSpec = tween(duration, easing = FastOutSlowInEasing),
+                            ) { height -> -(height * 0.35f).toInt() },
+                    ).using(
+                        SizeTransform(
+                            clip = false,
+                            sizeAnimationSpec = { _, _ ->
+                                tween(duration, easing = FastOutSlowInEasing)
+                            },
+                        ),
+                    )
+                }
+            },
+            label = "currentLyricTransition",
+            modifier = Modifier.weight(1f, fill = false),
+        ) { (_, lineItem, lineText) ->
+            val itemInstrumental = lineItem == null || lineItem.isGap
+            val swept = lineItem?.takeIf { !itemInstrumental && it.isWordSynced }
+            if (swept != null) {
+                SweptLyricLine(
+                    line = swept,
+                    clock = clock,
+                    style = MaterialTheme.typography.titleMedium,
+                    dimAlpha = UNSUNG_ALPHA_STRIP,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // No rise on a single line: it has nothing to rise away
+                    // from and would read as the strip itself twitching.
+                    rise = false,
+                )
+            } else {
+                Text(
+                    text = lineText,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (itemInstrumental) Color.White.copy(alpha = 0.5f) else Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Spacer(Modifier.width(6.dp))
         // Disclosure hint: this strip opens the full lyrics screen.
@@ -3206,21 +4421,243 @@ private fun TransportGlyph(
     }
 }
 
+/**
+ * A row of controls joined into one capsule.
+ *
+ * The join is a hairline rather than a gap, which is what makes several
+ * controls read as a single object — the shape the player uses for a set of
+ * choices that all answer the same question: where the sound is going.
+ */
+@Composable
+private fun Pill(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .height(BOTTOM_ACTION_SIZE)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.12f)),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+private fun PillDivider() {
+    Box(
+        Modifier
+            .width(1.dp)
+            .height(20.dp)
+            .background(Color.White.copy(alpha = 0.20f)),
+    )
+}
+
+/**
+ * The two ends of "where is this playing": the output capsule.
+ *
+ * Both halves answer the same question and so belong to one control rather than
+ * two glyphs that happen to sit side by side — headphones for which speaker the
+ * sound leaves by, the person for which *people* it reaches.
+ *
+ * The halves are the same width in every state, party or no party, so the
+ * capsule never resizes under the finger.
+ */
+@Composable
+private fun OutputPartyPill(
+    onSleep: () -> Unit,
+    onOutput: () -> Unit,
+    onParty: () -> Unit,
+    inParty: Boolean = false,
+    /** The sleep timer's remaining time, or null when none is running. */
+    sleepBadge: String? = null,
+) {
+    // Exactly [BOTTOM_ACTION_SIZE] tall, the same as a [BottomGlyph]'s own
+    // square, so the three items of the row share one top edge and one height.
+    // The capsule is wider than a glyph by design — it is three controls — and
+    // that width is what [pillWidth] accounts for in the row's inset.
+    //
+    // Three segments rather than three separate glyphs because all three answer
+    // the same question — *what is happening around this song that is not the
+    // song* — and one capsule says so without a gap inviting the eye to read
+    // them as unrelated.
+    Box(
+        modifier = Modifier.height(BOTTOM_ACTION_SIZE),
+        contentAlignment = Alignment.Center,
+    ) {
+        Pill {
+            PillSegment(
+                icon = VelthyIcons.Moon,
+                contentDescription = "Sleep timer",
+                onClick = onSleep,
+                highlighted = sleepBadge != null,
+                badgeText = sleepBadge,
+            )
+            PillDivider()
+            PillSegment(
+                icon = Icons.Rounded.Headphones,
+                iconSize = PILL_HEADPHONES_SIZE,
+                contentDescription = "Audio output",
+                onClick = onOutput,
+            )
+            PillDivider()
+            PillSegment(
+                icon = Icons.Rounded.Person,
+                iconSize = PILL_PARTY_SIZE,
+                contentDescription = if (inParty) "Listening together — open party" else "Listen together",
+                onClick = onParty,
+                highlighted = inParty,
+            )
+        }
+    }
+}
+
+/**
+ * One control inside a [Pill] — [BottomGlyph]'s twin, squared off.
+ *
+ * Same behaviour down to the tap window, and deliberately not the same
+ * composable: a glyph's highlight is a circle sized to itself, and a segment's
+ * has to fill its share of the capsule edge to edge or the join stops reading
+ * as one.
+ */
+@Composable
+private fun PillSegment(
+    contentDescription: String,
+    onClick: () -> Unit,
+    icon: ImageVector? = null,
+    iconSize: Dp = 24.dp,
+    label: String? = null,
+    highlighted: Boolean = false,
+    /** A short count drawn in the corner — the sleep timer's remaining minutes. */
+    badgeText: String? = null,
+) {
+    val haptics = rememberHaptics()
+    Box(
+        modifier = Modifier
+            .width(PILL_SEGMENT_WIDTH)
+            .height(BOTTOM_ACTION_SIZE)
+            .background(if (highlighted) Color.White.copy(alpha = 0.14f) else Color.Transparent)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {
+                haptics.play(Haptic.Tap)
+                onClick()
+            }
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        val tint = Color.White.copy(alpha = if (highlighted) 1f else 0.75f)
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(iconSize),
+            )
+        } else if (label != null) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = tint,
+                maxLines = 1,
+            )
+        }
+        // Inside the segment's own bounds, for the same reason the glyph's badge
+        // is: an offset that hangs past the edge lands on the segment next door,
+        // and in a capsule the neighbours are joined with no gap at all.
+        if (badgeText != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .background(Color.White, RoundedCornerShape(8.dp))
+                    .widthIn(min = 18.dp)
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = badgeText,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 8.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 10.sp,
+                    ),
+                    color = Color.Black,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The queue's own three settings, in the slot the output capsule occupies while
+ * the artwork is showing: shuffle, repeat, and AutoPlay.
+ *
+ * Same three segments as [OutputPartyPill] so the capsule never changes width
+ * between the two states — which is what keeps the lyrics and queue glyphs
+ * either side of it from shifting when the panel opens.
+ */
+@Composable
+private fun QueueModesPill(
+    shuffleEnabled: Boolean,
+    repeatMode: Int,
+    autoplayEnabled: Boolean,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit,
+    onAutoplay: () -> Unit,
+) {
+    Box(
+        modifier = Modifier.height(BOTTOM_ACTION_SIZE),
+        contentAlignment = Alignment.Center,
+    ) {
+        Pill {
+            PillSegment(
+                icon = VelthyIcons.Shuffle,
+                contentDescription = if (shuffleEnabled) "Shuffle on" else "Shuffle off",
+                onClick = onShuffle,
+                highlighted = shuffleEnabled,
+            )
+            PillDivider()
+            PillSegment(
+                icon = if (repeatMode == Player.REPEAT_MODE_ONE) VelthyIcons.RepeatOne else VelthyIcons.Repeat,
+                contentDescription = when (repeatMode) {
+                    Player.REPEAT_MODE_ONE -> "Repeat one"
+                    Player.REPEAT_MODE_ALL -> "Repeat all"
+                    else -> "Repeat off"
+                },
+                onClick = onRepeat,
+                highlighted = repeatMode != Player.REPEAT_MODE_OFF,
+            )
+            PillDivider()
+            PillSegment(
+                icon = VelthyIcons.Infinity,
+                contentDescription = if (autoplayEnabled) "Autoplay on" else "Autoplay off",
+                onClick = onAutoplay,
+                highlighted = autoplayEnabled,
+            )
+        }
+    }
+}
+
 @Composable
 private fun BottomGlyph(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
     highlighted: Boolean = false,
+    /** A short count drawn in the corner - the sleep timer's remaining minutes. */
     badgeText: String? = null,
-    label: String? = null,
 ) {
+    // The whole control is one [BOTTOM_ACTION_SIZE] square — the same square a
+    // capsule segment is — so the row's gaps land where its maths says they do
+    // and every item's *visual* centre is its own centre. A wider column with a
+    // narrower circle inside it (which this used to be) put a band of empty
+    // space on either side of every glyph, and those bands are what made the
+    // spacing read as uneven once the capsule was added beside them.
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.width(68.dp),
+        modifier = Modifier.width(BOTTOM_ACTION_SIZE),
     ) {
         Box(
-            modifier = Modifier.size(44.dp),
+            modifier = Modifier.size(BOTTOM_ACTION_SIZE),
             contentAlignment = Alignment.Center,
         ) {
             // Background & click ripple clipped to circle
@@ -3246,12 +4683,15 @@ private fun BottomGlyph(
                 )
             }
 
-            // Unclipped badge positioned on outer container
+            // Held *inside* the square rather than allowed to hang off it: a
+            // badge offset past the edge lands on the next control along, which
+            // is the overlap this row used to have as soon as the sleep timer
+            // was counting. Pinned to the top-end corner with a hair of inset,
+            // it stays within its own hit area at every size.
             if (badgeText != null) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 6.dp, y = (-3).dp)
                         .background(Color.White, RoundedCornerShape(8.dp))
                         .widthIn(min = 18.dp)
                         .padding(horizontal = 4.dp, vertical = 1.dp),
@@ -3268,27 +4708,6 @@ private fun BottomGlyph(
                         maxLines = 1,
                     )
                 }
-            }
-        }
-
-        // Subtitle row: always takes fixed height so all 4 buttons stay exactly level
-        Box(
-            modifier = Modifier
-                .height(14.dp)
-                .padding(top = 2.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (label != null) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Medium,
-                    ),
-                    color = Color.White.copy(alpha = 0.65f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
         }
     }
@@ -3431,12 +4850,8 @@ private fun Modifier.fadingEdges(): Modifier = this
 private fun InlineQueue(
     queue: List<Song>,
     currentIndex: Int,
+    /** Only for the AutoPlay heading — whether the section is drawn at all. */
     autoplayEnabled: Boolean,
-    shuffleEnabled: Boolean,
-    onToggleShuffle: () -> Unit,
-    repeatMode: Int,
-    onCycleRepeat: () -> Unit,
-    onToggleAutoplay: () -> Unit,
     onJumpTo: (Int) -> Unit,
     onRemove: (Int) -> Unit,
     onMove: (Int, Int) -> Unit,
@@ -3486,93 +4901,20 @@ private fun InlineQueue(
     )
 
     Column(modifier.fillMaxWidth()) {
-        // Capsule Pill Buttons: Shuffle · Repeat · AutoPlay · Clear (Compact)
+        // Shuffle, repeat and AutoPlay used to live here as a row of pills.
+        // They now share the player's capsule, which swaps to them the moment
+        // the queue opens â€” see QueueModesPill. Keeping both would have been
+        // two controls for one setting, side by side.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Shuffle Pill
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (shuffleEnabled) Color.White.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
-                    .clickable(onClick = onToggleShuffle)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = VelthyIcons.Shuffle,
-                        contentDescription = "Shuffle",
-                        tint = if (shuffleEnabled) Color.White else Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(13.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = "Shuffle",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
-                        color = if (shuffleEnabled) Color.White else Color.White.copy(alpha = 0.7f),
-                    )
-                }
-            }
-
-            // Repeat Pill
-            val isRepeatOn = repeatMode != Player.REPEAT_MODE_OFF
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (isRepeatOn) Color.White.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
-                    .clickable(onClick = onCycleRepeat)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (repeatMode == Player.REPEAT_MODE_ONE) VelthyIcons.RepeatOne else VelthyIcons.Repeat,
-                        contentDescription = "Repeat",
-                        tint = if (isRepeatOn) Color.White else Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(13.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = if (repeatMode == Player.REPEAT_MODE_ONE) "One" else "Repeat",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
-                        color = if (isRepeatOn) Color.White else Color.White.copy(alpha = 0.7f),
-                    )
-                }
-            }
-
-            // AutoPlay Pill
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (autoplayEnabled) Color.White.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.10f))
-                    .clickable(onClick = onToggleAutoplay)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = VelthyIcons.Infinity,
-                        contentDescription = "AutoPlay",
-                        tint = if (autoplayEnabled) Color.White else Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(13.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = "AutoPlay",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
-                        color = if (autoplayEnabled) Color.White else Color.White.copy(alpha = 0.7f),
-                    )
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // Clear Pill
+            // Clear keeps its place here rather than moving up: it acts on the
+            // *list* (it empties what is below it), while the capsule's three
+            // govern how the list *plays*. Different subjects, different homes.
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))

@@ -86,6 +86,7 @@ import com.velthy.client.data.model.HEADER_ART_PX
 import com.velthy.client.data.model.ROW_ART_PX
 import com.velthy.client.data.model.ShelfItem
 import com.velthy.client.data.model.Song
+import com.velthy.client.data.model.SubscriptionState
 import com.velthy.client.data.model.UiState
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.data.settings.AppSettings
@@ -201,6 +202,13 @@ fun DetailScreen(
      * wouldn't just be refused.
      */
     onToggleLibrary: (() -> Unit)? = null,
+    /**
+     * Subscribes to an artist page's channel, or unsubscribes.
+     * [DetailPage.subscription] says which way round, and is null on a page
+     * whose header carried no subscribe button — a signed-out response among
+     * them — so the button is only drawn when there is a state to act on.
+     */
+    onToggleSubscription: (() -> Unit)? = null,
 ) {
     val songs = (page.songs as? UiState.Success)?.data.orEmpty()
     val isArtist = page.type == BrowseType.ARTIST
@@ -377,6 +385,8 @@ fun DetailScreen(
                         // [AboutSection]'s own top inset, which makes up the
                         // rest of that shorter gap.
                         bottomSpace = if (page.description.isNullOrBlank()) 22.dp else 11.dp,
+                        subscription = page.subscription,
+                        onToggleSubscription = onToggleSubscription,
                     )
                 }
             }
@@ -1027,13 +1037,16 @@ private val MERGE_BAND = 320.dp
  */
 private val MERGE_BLUR = 100.dp
 
-/** Shuffle • Play • Download — the Apple Music action row. */
+/** Subscribe • Shuffle • Play — the Apple Music action row. */
 @Composable
 private fun ActionRow(
     palette: ArtworkPalette,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     bottomSpace: Dp = 22.dp,
+    /** The artist header's subscribe state, or null where it isn't offered. */
+    subscription: SubscriptionState? = null,
+    onToggleSubscription: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -1042,6 +1055,18 @@ private fun ActionRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Subscribing sits where saving does on a release — first circle, left
+        // of Shuffle — and says the same thing with the same pair of icons.
+        if (subscription != null) {
+            CircleIconButton(
+                icon = if (subscription.subscribed) VelthyIcons.Check else VelthyIcons.Plus,
+                contentDescription = if (subscription.subscribed) "Unsubscribe" else "Subscribe",
+                palette = palette,
+                onClick = { onToggleSubscription?.invoke() },
+                haptic = if (subscription.subscribed) Haptic.ToggleOff else Haptic.ToggleOn,
+            )
+        }
+
         // Circular Shuffle button
         CircleIconButton(
             icon = VelthyIcons.Shuffle,

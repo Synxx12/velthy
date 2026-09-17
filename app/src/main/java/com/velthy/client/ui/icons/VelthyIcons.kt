@@ -311,6 +311,39 @@ object VelthyIcons {
         }.build()
     }
 
+    /**
+     * Three ruled lines each led by a dot — the running order, as a list rather
+     * than as a music note.
+     *
+     * Drawn to pair with [LyricsQuote]: both are open shapes at the same weight,
+     * so the two buttons either side of the player's capsule read as one family.
+     * A note-and-lines glyph (the Material default) is denser than the bubble it
+     * sits opposite, and the two together looked like they came from different
+     * sets.
+     */
+    val Queue: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "mq_queue",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(stroke = stroke, strokeLineWidth = STROKE, strokeLineCap = StrokeCap.Round) {
+                for (y in listOf(6f, 12f, 18f)) {
+                    moveTo(8f, y)
+                    lineTo(21f, y)
+                }
+            }
+            path(fill = stroke) {
+                for (y in listOf(6f, 12f, 18f)) {
+                    moveTo(4.35f, y)
+                    arcToRelative(1.25f, 1.25f, 0f, true, true, -2.5f, 0f)
+                    arcToRelative(1.25f, 1.25f, 0f, true, true, 2.5f, 0f)
+                    close()
+                }
+            }
+        }.build()
+    }
+
     /** Plain chevron — a disclosure hint, not a directional arrow. */
     val ChevronRight: ImageVector by lazy {
         ImageVector.Builder(

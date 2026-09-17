@@ -1,0 +1,153 @@
+{
+    "_comment": "Velthy Party — NestJS. Import: Nests -> Import Egg. The install script runs `npm ci` and `npm run build`, then startup runs the compiled output through startup.mjs. One command only, and one file: startup.mjs starts the server and, when TUNNEL_TOKEN is set, brings cloudflared up as its own child so both live and die together. One instance only: a party lives in the memory of the process holding its WebSockets.",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-01-01T00:00:00+00:00",
+    "name": "Velthy Party (NestJS)",
+    "author": "velthy@localhost",
+    "description": "Velthy Listen Together — party server (NestJS). A party is a six-character code, up to five signed-in devices, and one playback state every device re-derives its playhead from. HTTP + WebSocket on one port. Run exactly one instance.",
+    "features": null,
+    "docker_images": {
+        "ghcr.io/ptero-eggs/yolks:nodejs_22": "ghcr.io/ptero-eggs/yolks:nodejs_22",
+        "ghcr.io/parkervcp/yolks:nodejs_22": "ghcr.io/parkervcp/yolks:nodejs_22"
+    },
+    "file_denylist": [],
+    "startup": "npm run start:prod",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n    \"done\": \"listening on\"\r\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Build the Nest app once, at install time, so the startup command only has to\n# run the compiled output.\nset -e\n\ncd /mnt/server\n\necho \"--------------------------------------------------\"\necho \" Velthy Party (NestJS) — installing\"\necho \"--------------------------------------------------\"\n\necho \"Node: $(node --version 2>/dev/null || echo 'missing')\"\necho \"npm:  $(npm --version 2>/dev/null || echo 'missing')\"\n\necho \"Installing dependencies (including dev, needed to build)...\"\nif [ -f package-lock.json ]; then\n    npm ci\nelse\n    npm install\nfi\n\necho \"Compiling TypeScript...\"\nnpm run build\n\nif [ ! -f dist/bootstrap.js ]; then\n    echo \"ERROR: dist/bootstrap.js was not produced. Check the build output above.\"\n    exit 1\nfi\n\necho \"Pruning dev dependencies from the runtime tree...\"\nnpm prune --omit=dev\n\necho \"--------------------------------------------------\"\necho \" Install complete.\"\necho \" Startup runs: node startup.mjs (uses dist/)\"\necho \" Port: ${SERVER_PORT}\"\necho \"   http  http://<host>:${SERVER_PORT}/api/time\"\necho \"   ws    ws://<host>:${SERVER_PORT}/ws/parties/{code}?token=...\"\necho \"--------------------------------------------------\"\n",
+            "container": "ghcr.io/ptero-eggs/installers:node",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Server port",
+            "description": "Port the process listens on. Must match one of the ports the host allocates (this deployment: 33183 / 37720 / 25620) and the tunnel's Public Hostname service in the Cloudflare dashboard. The server reads PORT then SERVER_PORT, falling back to 8080.",
+            "env_variable": "SERVER_PORT",
+            "default_value": "33183",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:20",
+            "field_type": "text"
+        },
+        {
+            "name": "Node environment",
+            "description": "Leave as production. Development adds verbose logging.",
+            "env_variable": "NODE_ENV",
+            "default_value": "production",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:production,development",
+            "field_type": "text"
+        },
+        {
+            "name": "Max members",
+            "description": "Devices allowed in one party. Counted in devices, not people: one account on a phone and a tablet is two.",
+            "env_variable": "JAM_MAX_MEMBERS",
+            "default_value": "5",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:2|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "State heartbeat (ms)",
+            "description": "How often the server re-states playback state to everyone, unprompted.",
+            "env_variable": "JAM_STATE_HEARTBEAT_MS",
+            "default_value": "5000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:1000|max:60000",
+            "field_type": "text"
+        },
+        {
+            "name": "Play lead (ms)",
+            "description": "How far ahead a resume is scheduled, giving every device one common instant to aim at.",
+            "env_variable": "JAM_PLAY_LEAD_MS",
+            "default_value": "350",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:0|max:5000",
+            "field_type": "text"
+        },
+        {
+            "name": "Disconnect grace (ms)",
+            "description": "How long a dropped socket keeps its slot. Phones lose WebSockets in tunnels and on screen-off.",
+            "env_variable": "JAM_DISCONNECT_GRACE_MS",
+            "default_value": "45000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:5000|max:600000",
+            "field_type": "text"
+        },
+        {
+            "name": "Empty party TTL (ms)",
+            "description": "How long a party with nobody in it is held before its code and memory are reclaimed.",
+            "env_variable": "JAM_EMPTY_PARTY_TTL_MS",
+            "default_value": "120000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:10000|max:3600000",
+            "field_type": "text"
+        },
+        {
+            "name": "Party max age (ms)",
+            "description": "Hard ceiling on any one party's life, regardless of activity.",
+            "env_variable": "JAM_PARTY_MAX_AGE_MS",
+            "default_value": "43200000",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:60000",
+            "field_type": "text"
+        },
+        {
+            "name": "Control rate per second",
+            "description": "Token-bucket ceiling on control frames one member may send.",
+            "env_variable": "JAM_CONTROL_RATE_PER_SECOND",
+            "default_value": "25",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:1|max:200",
+            "field_type": "text"
+        },
+        {
+            "name": "Max queue length",
+            "description": "Bounds the queue one member can hand the server to hold and rebroadcast.",
+            "env_variable": "JAM_MAX_QUEUE_LENGTH",
+            "default_value": "500",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:1|max:5000",
+            "field_type": "text"
+        },
+        {
+            "name": "Allowed origins",
+            "description": "Comma-separated browser origins allowed to open a socket, or * for any. Empty allows any, which is correct for the Android app (no Origin header).",
+            "env_variable": "JAM_ALLOWED_ORIGINS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:500",
+            "field_type": "text"
+        },
+        {
+            "name": "Cloudflare Tunnel token",
+            "description": "Optional. Paste the tunnel token from Cloudflare Zero Trust (Networks -> Tunnels -> Cloudflared) to expose this server over HTTPS/WSS with no port forwarding. When set, startup.mjs starts cloudflared itself as a child process, so ONE command runs both. Leave empty to serve locally without a tunnel. The token is a credential: keep it secret, and set the public hostname in the dashboard to point at localhost:<port> (the same port as SERVER_PORT).",
+            "env_variable": "TUNNEL_TOKEN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:2000",
+            "field_type": "text"
+        }
+    ]
+}

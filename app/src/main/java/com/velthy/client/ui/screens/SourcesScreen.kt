@@ -53,6 +53,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.settings.AudioQuality
+import com.velthy.client.data.sources.AddonSource
 import com.velthy.client.data.sources.SourceConfig
 import com.velthy.client.data.sources.SourceHealth
 import com.velthy.client.data.sources.SourceKind
@@ -109,6 +110,22 @@ fun SourcesScreen(
             health[config.id] = withContext(Dispatchers.IO) {
                 runCatching { source.health() }
                     .getOrElse { SourceHealth.Unreachable(it.message ?: "Failed") }
+            }
+            // An addon names itself, so the row takes that name rather than a
+            // hostname — and rather than a field asking the user to make one up.
+            //
+            // Written here, off the probe that has just fetched the manifest
+            // anyway, because this is the one place that both talks to every
+            // configured source and is allowed to change what is stored. It
+            // settles after one pass: the next probe finds the label already
+            // equal and writes nothing, so there is no loop between this and
+            // the [configs] it is reading. A rename on the addon's side is
+            // picked up the next time this screen is opened.
+            if (source is AddonSource) {
+                val named = withContext(Dispatchers.IO) { runCatching { source.manifestName() }.getOrNull() }
+                if (named != null && named != config.label) {
+                    SourceRegistry.update(config.copy(label = named))
+                }
             }
         }
     }
@@ -195,11 +212,12 @@ fun SourcesScreen(
             }
 
             RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.Add,
-                title = "Add custom module",
-                subtitle = SourceKind.CUSTOM_MODULE.detail,
-                onClick = { onEditSource(SourceConfig(kind = SourceKind.CUSTOM_MODULE)) },
+            // One row for everything with an address: pasting an addon's root,
+            // its manifest.json, or a module index all open the same editor,
+            // which works out what is at the URL rather than asking the user to
+            // choose a protocol first.
+            AddSourceRow(
+                onClick = { onEditSource(SourceConfig(kind = SourceKind.ADDON)) },
             )
         }
 
@@ -455,6 +473,51 @@ private fun ReorderableAddons(
  */
 private const val SWAP_THRESHOLD = 0.6f
 
+/**
+ * The one row on this screen that adds something rather than describing
+ * something.
+ *
+ * Deliberately at the bottom of the same group as the sources rather than off
+ * in a section of its own: what it adds goes to the *top* of that list, and a
+ * row sitting under the numbered ones is the clearest way to say "and you can
+ * put another one in here".
+ */
+@Composable
+private fun AddSourceRow(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = 60.dp)
+            .padding(horizontal = ROW_INSET, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Aligned with the numbers above it rather than with their icons, so
+        // the plus reads as belonging to the same column the list is indexed by.
+        Spacer(Modifier.width(24.dp))
+        Icon(
+            imageVector = Icons.Rounded.Add,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(ICON_SIZE),
+        )
+        Spacer(Modifier.width(ICON_GAP))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "Add source",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "Connect an addon server or a custom module index by its address",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SourceRow(
     position: Int,
@@ -491,6 +554,7 @@ private fun SourceRow(
         Spacer(Modifier.width(6.dp))
         Icon(
             imageVector = when (config.kind) {
+                SourceKind.ADDON -> Icons.Rounded.Extension
                 SourceKind.CUSTOM_MODULE -> Icons.Rounded.Extension
                 SourceKind.JIOSAAVN -> Icons.Rounded.GraphicEq
                 SourceKind.MODULE -> Icons.Rounded.Extension

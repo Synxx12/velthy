@@ -298,6 +298,24 @@ object AppSettings {
     val hapticFeedback = MutableStateFlow(true)
 
     /**
+     * Whether a new release raises a system notification.
+     *
+     * On by default, because the point of the update system is that people hear
+     * about fixes without opening Settings — but it is a switch, because a
+     * notification about software is exactly the kind of thing someone may not
+     * want, and a setting is cheaper than a permission they revoke wholesale.
+     */
+    val updateNotifications = MutableStateFlow(true)
+
+    /**
+     * The last release version a notification was posted for.
+     *
+     * Empty when nothing has been announced. Only ever compared for equality,
+     * so a downgrade or a reinstall re-announces the pending release once.
+     */
+    val updateNotifiedVersion = MutableStateFlow("")
+
+    /**
      * Plays a looping video behind the cover art on the player when one is
      * published for the track — Spotify's Canvas, Apple's motion artwork.
      *
@@ -384,8 +402,43 @@ object AppSettings {
     /** Blurs unfocused lyric lines, keeping the active line sharp. */
     val lyricsBlur = MutableStateFlow(true)
 
+    /**
+     * How far the synced lyrics are shifted against the playback clock, in
+     * milliseconds. Positive means the words are shown later than the track's
+     * own timestamps, which is the direction that fixes lyrics stamped early.
+     */
+    val lyricsOffsetMs = MutableStateFlow(0)
+
     /** The databases [syncedLyrics] may ask. Empty is the same as off. */
     val lyricsSources = MutableStateFlow(LyricsSource.entries.toSet())
+
+    /**
+     * The order [lyricsSources] are asked in — see
+     * [LyricsRepository][com.velthy.client.data.lyrics.LyricsRepository].
+     * Source names not in the list fall in after the named ones, so this can
+     * be a partial order and still be meaningful. Defaults to
+     * [LyricsSource.entries] rather than a subset — enabling and ordering are
+     * separate decisions.
+     */
+    val lyricsSourceOrder = MutableStateFlow<List<LyricsSource>>(LyricsSource.entries)
+
+    /**
+     * Off, the first source to answer wins; on, a line-synced answer is held
+     * as a fallback while the rest of [lyricsSourceOrder] is still checked for
+     * a word-by-word one. Costs extra round trips on tracks where the top
+     * source only has whole lines.
+     */
+    val prioritizeSyllableSync = MutableStateFlow(false)
+
+    /** User-issued credential required by api.paxsenix.org. */
+    val paxSenixApiKey = MutableStateFlow("")
+
+    /**
+     * The language the translate button renders lyrics into, as a Google
+     * Translate language code. Blank means the app's own language, so a fresh
+     * install translates into what the reader already reads.
+     */
+    val translationLanguage = MutableStateFlow("")
 
     /** Disk budget for cached audio. [AudioCache][com.velthy.client.playback.AudioCache] evicts past it. */
     val accountMoreContent = MutableStateFlow(false)
@@ -557,6 +610,8 @@ object AppSettings {
             LibrarySort.valueOf(prefs.getString(KEY_LIBRARY_SORT, null) ?: "")
         }.getOrDefault(LibrarySort.DEFAULT)
         hapticFeedback.value = prefs.getBoolean(KEY_HAPTIC_FEEDBACK, true)
+        updateNotifications.value = prefs.getBoolean(KEY_UPDATE_NOTIFICATIONS, true)
+        updateNotifiedVersion.value = prefs.getString(KEY_UPDATE_NOTIFIED_VERSION, "").orEmpty()
         spotifySpdcToken.value = secretsPrefs.getString(SPOTIFY_TOKEN_KEY, null)
         animatedCanvas.value = prefs.getBoolean(KEY_ANIMATED_CANVAS, true)
         fullBleedArtwork.value = prefs.getBoolean(KEY_FULL_BLEED_ARTWORK, true)
@@ -569,7 +624,17 @@ object AppSettings {
         )
         syncedLyrics.value = prefs.getBoolean(KEY_SYNCED_LYRICS, true)
         lyricsBlur.value = prefs.getBoolean(KEY_LYRICS_BLUR, true)
+        lyricsOffsetMs.value = prefs.getInt(KEY_LYRICS_OFFSET_MS, 0)
+            .coerceIn(MIN_LYRICS_OFFSET_MS, MAX_LYRICS_OFFSET_MS)
         lyricsSources.value = readLyricsSources()
+        lyricsSourceOrder.value = readLyricsSourceOrder()
+        prioritizeSyllableSync.value = prefs.getBoolean(KEY_PRIORITIZE_SYLLABLE_SYNC, false)
+        // In the credentials store, not ordinary prefs: Auto Backup excludes
+        // that whole file, and an API key is exactly the sort of thing the
+        // exclusion exists for.
+        paxSenixApiKey.value = secretsPrefs.getString(KEY_PAXSENIX_API_KEY, "").orEmpty()
+        com.velthy.client.data.lyrics.PaxSenix.setApiKey(paxSenixApiKey.value)
+        translationLanguage.value = prefs.getString(KEY_TRANSLATION_LANGUAGE, "").orEmpty()
         accountMoreContent.value = prefs.getBoolean(KEY_ACCOUNT_MORE_CONTENT, false)
         accountAutoSync.value = prefs.getBoolean(KEY_ACCOUNT_AUTO_SYNC, true)
         accountForceSyncOnSwitch.value = prefs.getBoolean(KEY_ACCOUNT_FORCE_SYNC_ON_SWITCH, true)
@@ -915,6 +980,23 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_HAPTIC_FEEDBACK, value).apply()
     }
 
+    fun setUpdateNotifications(value: Boolean) {
+        updateNotifications.value = value
+        prefs.edit().putBoolean(KEY_UPDATE_NOTIFICATIONS, value).apply()
+    }
+
+    /**
+     * Records that [version] has been announced.
+     *
+     * Not part of [exportPrefs]/[importPrefs]' device-local exemption: this is
+     * in [DEVICE_LOCAL] below, so a backup restore re-announces the pending
+     * update rather than silencing it on a phone that never saw it.
+     */
+    fun setUpdateNotifiedVersion(version: String) {
+        updateNotifiedVersion.value = version
+        prefs.edit().putString(KEY_UPDATE_NOTIFIED_VERSION, version).apply()
+    }
+
     fun setSyncedLyrics(value: Boolean) {
         syncedLyrics.value = value
         prefs.edit().putBoolean(KEY_SYNCED_LYRICS, value).apply()
@@ -922,7 +1004,67 @@ object AppSettings {
 
     fun setLyricsSources(value: Set<LyricsSource>) {
         lyricsSources.value = value
-        prefs.edit().putString(KEY_LYRICS_SOURCES, value.joinToString(",") { it.name }).apply()
+        prefs.edit()
+            .putString(KEY_LYRICS_SOURCES, value.joinToString(",") { it.name })
+            // Everything that was on the list this choice was made from, so a
+            // later build can tell a source the user turned off from one they
+            // have never been shown. See [readLyricsSources].
+            .putString(KEY_LYRICS_SOURCES_SEEN, LyricsSource.entries.joinToString(",") { it.name })
+            .apply()
+    }
+
+    fun setLyricsSourceOrder(value: List<LyricsSource>) {
+        lyricsSourceOrder.value = value
+        prefs.edit().putString(KEY_LYRICS_SOURCE_ORDER, value.joinToString(",") { it.name }).apply()
+    }
+
+    /**
+     * A named source dropped from the stored order — an upgrade reordered
+     * since it was saved — falls out on read; one added since is appended, in
+     * [LyricsSource]'s own declared order, so a fresh install and an upgraded
+     * one agree on where a new source lands until the user says otherwise.
+     */
+    private fun readLyricsSourceOrder(): List<LyricsSource> {
+        val stored = prefs.getString(KEY_LYRICS_SOURCE_ORDER, null)
+            ?: return LyricsSource.entries
+        val saved = stored.split(",")
+            .mapNotNull { name -> LyricsSource.entries.firstOrNull { it.name == name } }
+        return saved + LyricsSource.entries.filter { it !in saved }
+    }
+
+    fun setPrioritizeSyllableSync(value: Boolean) {
+        prioritizeSyllableSync.value = value
+        prefs.edit().putBoolean(KEY_PRIORITIZE_SYLLABLE_SYNC, value).apply()
+    }
+
+    fun setPaxSenixApiKey(value: String) {
+        val normalized = com.velthy.client.data.lyrics.normalizePaxSenixApiKey(value)
+        paxSenixApiKey.value = normalized
+        secretsPrefs.edit().putString(KEY_PAXSENIX_API_KEY, normalized).apply()
+        com.velthy.client.data.lyrics.PaxSenix.setApiKey(normalized)
+    }
+
+    /**
+     * Puts the source list, its order and [prioritizeSyllableSync] back the
+     * way a fresh install has them. The PaxSenix key is left alone: it is a
+     * credential the user entered, not a preference this list owns.
+     */
+    fun resetLyricsSourceSettings() {
+        setLyricsSources(LyricsSource.entries.toSet())
+        setLyricsSourceOrder(LyricsSource.entries)
+        setPrioritizeSyllableSync(false)
+    }
+
+    fun setTranslationLanguage(value: String) {
+        translationLanguage.value = value
+        prefs.edit().putString(KEY_TRANSLATION_LANGUAGE, value).apply()
+    }
+
+    fun setLyricsOffsetMs(value: Int) {
+        val normalized = value.coerceIn(MIN_LYRICS_OFFSET_MS, MAX_LYRICS_OFFSET_MS)
+        if (lyricsOffsetMs.value == normalized) return
+        lyricsOffsetMs.value = normalized
+        prefs.edit().putInt(KEY_LYRICS_OFFSET_MS, normalized).apply()
     }
 
     /**
@@ -931,14 +1073,42 @@ object AppSettings {
      * quietly, and the default when nothing has been saved is "all of them",
      * which a missing key and an empty set would otherwise be unable to tell
      * apart.
+     *
+     * A source *added* by an upgrade is enabled rather than left out. Absence
+     * from a saved list is a decision only about the sources that list was
+     * chosen from; a new one was never on it, so its absence says nothing, and
+     * treating it as "off" would ship a source nobody could discover without
+     * first going and looking for it. [KEY_LYRICS_SOURCES_SEEN] is what makes
+     * the two cases distinguishable — before it existed, [LEGACY_SOURCES]
+     * stands in as the list of everything there was to have an opinion about.
      */
     private fun readLyricsSources(): Set<LyricsSource> {
         val stored = prefs.getString(KEY_LYRICS_SOURCES, null)
             ?: return LyricsSource.entries.toSet()
-        return stored.split(",")
-            .mapNotNull { name -> LyricsSource.entries.firstOrNull { it.name == name } }
-            .toSet()
+        val chosen = stored.split(",").toSources()
+        val seen = prefs.getString(KEY_LYRICS_SOURCES_SEEN, null)
+            ?.split(",")?.toSources()
+            ?: LEGACY_SOURCES
+        return chosen + LyricsSource.entries.filter { it !in seen }
     }
+
+    private fun List<String>.toSources(): Set<LyricsSource> =
+        mapNotNull { name -> LyricsSource.entries.firstOrNull { it.name == name } }.toSet()
+
+    /**
+     * The sources that existed before [KEY_LYRICS_SOURCES_SEEN] was written.
+     * Fixed forever: it describes what an old build could have saved, so it
+     * does not grow when [LyricsSource] does.
+     */
+    private val LEGACY_SOURCES = setOf(
+        LyricsSource.LYRICS_PLUS,
+        LyricsSource.PAXSENIX,
+        LyricsSource.BETTER_LYRICS,
+        LyricsSource.SIMP_MUSIC,
+        LyricsSource.KUGOU,
+        LyricsSource.LRCLIB,
+        LyricsSource.MUSIXMATCH,
+    )
 
     fun setConvertVideoToAudio(value: Boolean) {
         convertVideoToAudio.value = value
@@ -1199,6 +1369,8 @@ object AppSettings {
     private const val KEY_CONVERT_VIDEO_TO_AUDIO = "convert_video_to_audio"
     private const val KEY_REDUCE_BLUR = "reduce_dynamic_blur"
     private const val KEY_HAPTIC_FEEDBACK = "haptic_feedback"
+    private const val KEY_UPDATE_NOTIFICATIONS = "update_notifications"
+    private const val KEY_UPDATE_NOTIFIED_VERSION = "update_notified_version"
     private const val KEY_ANIMATED_CANVAS = "animated_canvas"
     private const val KEY_FULL_BLEED_ARTWORK = "full_bleed_artwork"
     private const val KEY_LEGACY_MESH_GRADIENT = "legacy_mesh_gradient"
@@ -1214,6 +1386,16 @@ object AppSettings {
     private const val KEY_SYNCED_LYRICS = "synced_lyrics"
     private const val KEY_LYRICS_BLUR = "lyrics_blur"
     private const val KEY_LYRICS_SOURCES = "lyrics_sources"
+    private const val KEY_LYRICS_SOURCES_SEEN = "lyrics_sources_seen"
+    private const val KEY_LYRICS_SOURCE_ORDER = "lyrics_source_order"
+    private const val KEY_PRIORITIZE_SYLLABLE_SYNC = "prioritize_syllable_sync"
+    private const val KEY_PAXSENIX_API_KEY = "paxsenix_api_key"
+    private const val KEY_TRANSLATION_LANGUAGE = "translation_language"
+    private const val KEY_LYRICS_OFFSET_MS = "lyrics_offset_ms"
+
+    /** How far the lyrics may be shifted either way, in milliseconds. */
+    const val MIN_LYRICS_OFFSET_MS = -5_000
+    const val MAX_LYRICS_OFFSET_MS = 5_000
 
     private const val KEY_ACCOUNT_MORE_CONTENT = "account_more_content"
     private const val KEY_ACCOUNT_AUTO_SYNC = "account_auto_sync"
@@ -1294,6 +1476,7 @@ object AppSettings {
         "downloaded_tracks_metadata",
         "downloaded_collections",
         KEY_LAST_VERSION_CODE,
+        KEY_UPDATE_NOTIFIED_VERSION,
     )
 
     private const val KEY_REPLAY_GENRES = "replay_genres"

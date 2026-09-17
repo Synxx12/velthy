@@ -1,4 +1,4 @@
-# Interactive Dev Runner for Velthy (Single-Key Responsive)
+﻿# Interactive Dev Runner for Velthy (Single-Key Responsive)
 param(
     [string]$TargetDevice = ""
 )
@@ -27,13 +27,16 @@ function Get-ConnectedDevices {
             }
         }
     }
-    return $devices
+    # The comma stops PowerShell unwrapping a one-element array into the bare
+    # object itself, which would leave the Count property as null (or a
+    # string's length) at every caller that relies on it.
+    return ,$devices
 }
 
 $Global:SelectedDevice = $TargetDevice
 
 function Select-TargetDevice ([bool]$Interactive = $false) {
-    $devices = Get-ConnectedDevices
+    $devices = @(Get-ConnectedDevices)
     
     if ($devices.Count -eq 0) {
         Write-Host "`n[!] Tidak ada perangkat/emulator ADB yang aktif." -ForegroundColor Red
@@ -151,23 +154,61 @@ function Take-DeviceScreenshot {
     $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
     $fileName = "velthy_${timestamp}.png"
     $localPath = Join-Path $screenshotDir $fileName
-    $remotePath = "/data/local/tmp/velthy_shot_${timestamp}.png"
 
     Write-Host "`n[+] Mengambil screenshot layar dari $device..." -ForegroundColor Cyan
-    adb -s "$device" shell screencap -p "$remotePath"
-    if ($LASTEXITCODE -eq 0) {
-        adb -s "$device" pull "$remotePath" "$localPath" | Out-Null
-        adb -s "$device" shell rm -f "$remotePath" 2>$null
 
-        if (Test-Path $localPath) {
-            Write-Host "[OK] 📸 Screenshot tersimpan: $localPath" -ForegroundColor Green
-            # Buka otomatis di image viewer bawaan OS
-            Start-Process "$localPath"
-        } else {
-            Write-Host "[X] Gagal mengunduh screenshot ke PC." -ForegroundColor Red
+    # `adb exec-out` streams the PNG straight back to the PC in one step. The
+    # old `screencap` to /data/local/tmp followed by `adb pull` was two round
+    # trips over a wireless link, and the second one raced the first: a clip
+    # that had not finished landing made the pull fail for no real reason.
+    #
+    # RedirectStandardOutput on Start-Process is the one redirection that
+    # hands the bytes over untouched: PowerShell's own redirection goes
+    # through the pipeline and mangles a binary stream. Retried once because
+    # a wireless link can still drop mid-stream.
+    $attempts = 2
+    $saved = $false
+    for ($i = 1; $i -le $attempts -and -not $saved; $i++) {
+        # Remove any partial file from a previous attempt so a stale PNG can
+        # never be mistaken for this one.
+        if (Test-Path $localPath) { Remove-Item $localPath -Force -ErrorAction SilentlyContinue }
+
+        try {
+            $spArgs = @{
+                FilePath               = "adb"
+                ArgumentList           = @("-s", $device, "exec-out", "screencap", "-p")
+                RedirectStandardOutput = $localPath
+                NoNewWindow            = $true
+                Wait                   = $true
+                ErrorAction            = "Stop"
+            }
+            Start-Process @spArgs | Out-Null
+        } catch {
+            $msg = $_.Exception.Message
+            Write-Host "[!] Attempt failed: $msg" -ForegroundColor Yellow
         }
+
+        # A valid PNG starts with the 8-byte signature and is more than a
+        # header; anything else is a truncated or empty file.
+        if ((Test-Path $localPath) -and (Get-Item $localPath).Length -gt 8) {
+            $bytes = [System.IO.File]::ReadAllBytes($localPath)[0..7]
+            $isPng = ($bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47)
+            if ($isPng) { $saved = $true }
+        }
+
+        if (-not $saved -and $i -lt $attempts) {
+            Write-Host "[!] Percobaan gagal, mencoba lagi..." -ForegroundColor Yellow
+            Start-Sleep -Milliseconds 700
+        }
+    }
+
+    if ($saved) {
+        Write-Host "[OK] 📸 Screenshot tersimpan: $localPath" -ForegroundColor Green
+        # Buka otomatis di image viewer bawaan OS
+        Start-Process "$localPath"
     } else {
-        Write-Host "[X] Gagal mengeksekusi screencap di perangkat." -ForegroundColor Red
+        Write-Host "[X] Gagal mengunduh screenshot ke PC (koneksi ADB mungkin tidak stabil)." -ForegroundColor Red
+        Write-Host "    Cek koneksi device dengan: adb -s $device get-state" -ForegroundColor DarkGray
     }
 }
 
@@ -184,7 +225,7 @@ function Restart-AppOnly {
 }
 
 # 1. Pilih target device di awal jika ada lebih dari 1 perangkat
-$devices = Get-ConnectedDevices
+$devices = @(Get-ConnectedDevices)
 if ($devices.Count -gt 1) {
     Select-TargetDevice -Interactive $true | Out-Null
 } else {
@@ -203,6 +244,15 @@ try {
         Write-Host " [x] Clear Cache     [l] Logcat         [d] Ganti Dev   [q] Keluar" -ForegroundColor Cyan
         Write-Host " (Tekan hurufnya langsung | Ctrl+C / [q] untuk keluar)" -ForegroundColor DarkGray
         Write-Host "----------------------------------------------------------------" -ForegroundColor DarkGray
+
+        # Drop anything still sitting in the console input buffer before we
+        # wait for the next key. ReadKey consumes one keystroke per loop, so a
+        # key pressed while a build was running (or a stray press earlier) would
+        # otherwise fire the wrong action the moment the menu came back, so a
+        # leftover s triggering a screenshot right after an r build cannot.
+        while ([System.Console]::KeyAvailable) {
+            [System.Console]::ReadKey($true) | Out-Null
+        }
 
         try {
             $keyInfo = [System.Console]::ReadKey($true)
@@ -251,7 +301,7 @@ try {
         } elseif ($keyChar -eq "r" -or $keyCode -eq [System.ConsoleKey]::Enter -or $keyCode -eq [System.ConsoleKey]::Spacebar) {
             Run-BuildAndLaunch
         } elseif ($keyChar -match "^[1-9]$") {
-            $devs = Get-ConnectedDevices
+            $devs = @(Get-ConnectedDevices)
             $idx = [int]$keyChar - 1
             if ($idx -ge 0 -and $idx -lt $devs.Count) {
                 $Global:SelectedDevice = $devs[$idx].Id

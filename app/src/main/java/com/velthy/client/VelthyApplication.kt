@@ -11,13 +11,20 @@ import coil3.disk.directory
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import com.velthy.client.auth.AuthStore
+import com.velthy.client.data.canvas.CanvasCache
+import com.velthy.client.data.canvas.SpotifyToken
+import com.velthy.client.data.listentogether.ListenTogether
 import com.velthy.client.playback.AudioCache
 import com.velthy.client.playback.LastPlayed
 import com.velthy.client.data.innertube.Innertube
+import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.scrobbling.LastFM
 import com.velthy.client.data.settings.AppSettings
 import com.velthy.client.data.settings.SearchHistory
 import com.velthy.client.download.Downloads
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 open class VelthyApplication : Application(), SingletonImageLoader.Factory {
 
@@ -41,8 +48,43 @@ open class VelthyApplication : Application(), SingletonImageLoader.Factory {
         // One cache directory can only be opened once per process, and
         // PlaybackService shares this one — so it's opened here, not there.
         AudioCache.init(this)
+        // Canvas clips are looped video behind the cover art, and without a
+        // disk cache every loop of a five-second clip would be a fresh download
+        // — see [CanvasCache]. Opened once here for the same single-open-per-
+        // process reason as AudioCache.
+        CanvasCache.init(this)
+        // The Spotify Canvas source mints a bearer token from the listener's
+        // session cookie in an offscreen WebView, and has no Context of its
+        // own to reach for — so it is handed the app context here. Without it
+        // the source is a free no-op rather than a crash, but with it set up
+        // the original Canvas becomes reachable.
+        SpotifyToken.init(this)
+        // Listen Together needs prefs to hand a previous process's party slot
+        // back on launch, and a device id that survives a sign-out.
+        ListenTogether.init(this)
+        // Registers the daily background release check. KEEP policy, so this is
+        // a no-op once the schedule exists — see [UpdateCheckWorker.schedule].
+        com.velthy.client.data.UpdateCheckWorker.schedule(this)
         // Initialize LastFM with saved settings if available
         initLastfm()
+        warmStreamResolution()
+    }
+
+    /**
+     * Pays the one-time costs of the first stream resolve up front.
+     *
+     * The visitor id and NewPipe's extractor init are both charged to whoever
+     * resolves first, which is the first track a listener plays — the exact
+     * report of "the first song always loads, the ones after it are instant".
+     * Both are network and CPU work that can happen while the listener is still
+     * looking at the home screen, so they happen here rather than on the
+     * critical path of the tap. See [StreamResolver.warmUp].
+     *
+     * On a background thread and silent on failure: this buys latency when it
+     * works and is invisible when it does not.
+     */
+    private fun warmStreamResolution() {
+        CoroutineScope(Dispatchers.IO).launch { StreamResolver.warmUp() }
     }
 
     /**

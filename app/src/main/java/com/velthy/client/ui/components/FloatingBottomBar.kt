@@ -142,14 +142,11 @@ fun FloatingBottomBar(
     hazeState: HazeState,
     modifier: Modifier = Modifier,
 ) {
-    val container = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
-    val fallbackContainer = MaterialTheme.colorScheme.surface
-    val canBlur = rememberCanBlur()
+    val container = MaterialTheme.colorScheme.surface
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     // Backdrop-sampled glass, only where it was asked for and can actually be
     // rendered. Falls back to the frosted haze everywhere else.
-    val glassEnabled = LocalLiquidGlassEnabled.current
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    val glassActive = glassEnabled && isGlassSupported() && !reduceDynamicBlur
+    val useGlass = LocalLiquidGlassEnabled.current && isGlassSupported()
     val haptics = rememberHaptics()
     val density = LocalDensity.current
 
@@ -277,15 +274,15 @@ fun FloatingBottomBar(
                     .clip(capsuleShape)
                     .then(
                         when {
-                            glassActive -> Modifier.liquidGlass(capsuleShape)
-                            !canBlur -> Modifier.background(fallbackContainer)
+                            reduceDynamicBlur -> Modifier.background(container)
+                            useGlass -> Modifier.liquidGlass(capsuleShape)
                             else -> Modifier.optimizedHazeEffect(
                                 state = hazeState,
-                                style = HazeMaterials.thin(container),
+                                style = HazeMaterials.regular(container),
                             )
                         },
                     )
-                    .border(0.5.dp, Color.White.copy(alpha = 0.14f), capsuleShape)
+                    .border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, capsuleShape)
                     .onSizeChanged { leftIslandSize = it },
             )
 
@@ -297,15 +294,15 @@ fun FloatingBottomBar(
                         .clip(circleShape)
                         .then(
                             when {
-                                glassActive -> Modifier.liquidGlass(circleShape)
-                                !canBlur -> Modifier.background(fallbackContainer)
+                                reduceDynamicBlur -> Modifier.background(container)
+                                useGlass -> Modifier.liquidGlass(circleShape)
                                 else -> Modifier.optimizedHazeEffect(
                                     state = hazeState,
-                                    style = HazeMaterials.thin(container),
+                                    style = HazeMaterials.regular(container),
                                 )
                             },
                         )
-                        .border(0.5.dp, Color.White.copy(alpha = 0.14f), circleShape),
+                        .border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, circleShape),
                 )
             }
         }

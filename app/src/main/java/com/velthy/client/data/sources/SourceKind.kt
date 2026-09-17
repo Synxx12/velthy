@@ -59,6 +59,32 @@ enum class SourceKind(
     val rank: Int,
 ) {
     /**
+     * An addon server the user hosts or was given a link to.
+     *
+     * A plain-HTTP catalogue, not a module: `/manifest.json` says what it can
+     * do, `/search?q=` answers with rows, and `/stream/{id}` hands back a URL.
+     * No JavaScript is involved, which is the whole point — a module needs a
+     * QuickJS sandbox and an index to walk, and an addon needs one address.
+     * See [AddonSource] for the protocol and [AddonClient] for the calls.
+     *
+     * Ranked at [USER_ADDED] alongside [CUSTOM_MODULE], because both are things
+     * the user added and both are theirs to order by dragging. The two share a
+     * rank deliberately: a stable sort then leaves whichever they put first on
+     * top, which is the only arrangement that makes a drag mean anything.
+     */
+    ADDON(
+        label = "Addon",
+        detail = "An addon server you host or were given a link to. A plain-HTTP catalogue " +
+            "that can serve lossless and Hi-Res without any plugin or module.",
+        labels = listOf("FLAC", "Lossless", "Hi-Res"),
+        needsServer = true,
+        canServeLossless = true,
+        // Literal, not [USER_ADDED]: an enum entry is constructed before
+        // its own companion exists.
+        rank = 0,
+    ),
+
+    /**
      * A module index the user pointed at themselves, tried ahead of the one
      * baked into the build.
      *

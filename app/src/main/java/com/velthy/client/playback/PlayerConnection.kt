@@ -21,6 +21,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.velthy.client.data.model.NOTIFICATION_ART_PX
+import com.velthy.client.data.model.PlaybackSourceType
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.artworkAt
 import com.velthy.client.data.sources.SourceRegistry
@@ -153,6 +154,11 @@ fun MediaItem.toSong() = Song(
     durationText = mediaMetadata.extras?.getString(EXTRA_DURATION),
     albumName = mediaMetadata.albumTitle?.toString()?.takeIf { it.isNotBlank() },
     fromAutoplay = this.fromAutoplay,
+    radioName = mediaMetadata.extras?.getString(EXTRA_RADIO_NAME),
+    playbackSource = mediaMetadata.extras?.getString(EXTRA_PLAYBACK_SOURCE),
+    playbackSourceType = mediaMetadata.extras?.getString(EXTRA_PLAYBACK_SOURCE_TYPE)
+        ?.let { runCatching { PlaybackSourceType.valueOf(it) }.getOrNull() },
+    playbackSourceId = mediaMetadata.extras?.getString(EXTRA_PLAYBACK_SOURCE_ID),
     localUri = mediaMetadata.extras?.getString(EXTRA_LOCAL_URI),
     localPath = mediaMetadata.extras?.getString(EXTRA_LOCAL_PATH),
 )
@@ -167,6 +173,23 @@ val MediaItem.fromAutoplay: Boolean
  * the player, and the UI only ever sees it back through a MediaController.
  */
 private const val EXTRA_FROM_AUTOPLAY = "velthy.fromAutoplay"
+
+/**
+ * Where a track was started from, carried on the item so it survives the trip
+ * through the session.
+ *
+ * The queue belongs to the player, and the UI only ever sees it back through a
+ * MediaController — which does not hand back a MediaItem's own object, only
+ * what Media3 chose to put in the bundle. A field left off that bundle is a
+ * field the Now Playing caption can never see, which is exactly what happened
+ * to all four of these: the caption read them, nothing wrote them, and it fell
+ * back to the album name or "Queue" for every track.
+ */
+private const val EXTRA_RADIO_NAME = "velthy.radioName"
+private const val EXTRA_PLAYBACK_SOURCE = "velthy.playbackSource"
+private const val EXTRA_PLAYBACK_SOURCE_TYPE = "velthy.playbackSourceType"
+private const val EXTRA_PLAYBACK_SOURCE_ID = "velthy.playbackSourceId"
+
 private const val EXTRA_LOCAL_URI = "velthy.localUri"
 private const val EXTRA_LOCAL_PATH = "velthy.localPath"
 private const val EXTRA_DURATION = "velthy.durationText"
@@ -281,10 +304,21 @@ fun Song.toMediaItem(): MediaItem {
             .setIsPlayable(true)
             .setIsBrowsable(false)
             .apply {
-                if (fromAutoplay || offlineUri != null || durationText != null) {
+                // Set for every track rather than only the ones that obviously
+                // need it: a plain YouTube track with no origin still has a
+                // duration to carry, and the same `apply` that writes it is
+                // what keeps this from being a second condition to maintain.
+                if (fromAutoplay || offlineUri != null || durationText != null ||
+                    radioName != null || playbackSource != null ||
+                    playbackSourceType != null || playbackSourceId != null
+                ) {
                     setExtras(
                         bundleOf(
                             EXTRA_FROM_AUTOPLAY to fromAutoplay,
+                            EXTRA_RADIO_NAME to radioName,
+                            EXTRA_PLAYBACK_SOURCE to playbackSource,
+                            EXTRA_PLAYBACK_SOURCE_TYPE to playbackSourceType?.name,
+                            EXTRA_PLAYBACK_SOURCE_ID to playbackSourceId,
                             EXTRA_LOCAL_URI to offlineUri,
                             EXTRA_LOCAL_PATH to localPath,
                             EXTRA_DURATION to durationText,

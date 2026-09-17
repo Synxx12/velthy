@@ -1,4 +1,4 @@
-package com.velthy.client
+﻿package com.velthy.client
 
 import android.Manifest
 import android.content.Intent
@@ -97,6 +97,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -122,6 +123,7 @@ import com.velthy.client.auth.YtMusicLoginScreen
 import com.velthy.client.data.LocalMediaRepository
 import com.velthy.client.data.model.BrowseType
 import com.velthy.client.data.model.LikeStatus
+import com.velthy.client.data.model.PlaybackSourceType
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.model.UiState
 import com.velthy.client.data.model.UserPlaylist
@@ -142,8 +144,10 @@ import com.velthy.client.ui.screens.LibraryScreen
 import com.velthy.client.ui.screens.LocalMusicScreen
 import com.velthy.client.ui.screens.LocalTopBarSegmentedControl
 import com.velthy.client.ui.screens.SearchScreen
+import com.velthy.client.ui.screens.ListenTogetherScreen
 import com.velthy.client.ui.screens.SettingsScreen
 import com.velthy.client.ui.screens.SourcesScreen
+import com.velthy.client.ui.screens.SpotifyCanvasAuthScreen
 import com.velthy.client.data.sources.SourceConfig
 import com.velthy.client.data.sources.SourceHealth
 import com.velthy.client.data.sources.SourceRegistry
@@ -163,7 +167,6 @@ import com.velthy.client.ui.components.SongActionsSheet
 import com.velthy.client.playback.rememberMediaController
 import com.velthy.client.playback.rememberPlayerState
 import com.velthy.client.ui.MainViewModel
-import com.velthy.client.ui.components.BottomFadeBlur
 import com.velthy.client.ui.components.AccountChannelDialog
 import com.velthy.client.ui.components.AccountProfileSelector
 import com.velthy.client.ui.components.LocalAppBackdrop
@@ -183,7 +186,9 @@ import com.velthy.client.ui.components.SourceEditorAlert
 import com.velthy.client.ui.components.MiniPlayer
 import com.velthy.client.ui.components.MusicRecognitionSheet
 import com.velthy.client.ui.components.TopFadeBlur
+import com.velthy.client.data.listentogether.ListenTogether
 import com.velthy.client.ui.components.LyricsSourcesDialog
+import com.velthy.client.ui.components.TranslationLanguageDialog
 import com.velthy.client.ui.components.UpdateAvailableDialog
 import com.velthy.client.ui.replay.ReplayScreen
 import com.velthy.client.ui.replay.ReplayShareSheet
@@ -394,6 +399,24 @@ private val MINI_LIFT_MAX = 30.dp
  */
 private val BOTTOM_CHROME_DROP = 22.dp
 
+/**
+ * The outcome of identifying and probing a source address in the editor: what
+ * to say, whether it reads as a success, and — when the format was worked out —
+ * the config that would be stored.
+ *
+ * A top-level type rather than a local one because Compose treats a class
+ * declared inside a composable as a declaration to be reassigned each
+ * recomposition, and this is only ever a return value.
+ */
+private data class SourceProbe(
+    val message: String,
+    val good: Boolean,
+    /** The identified config, or null when nothing usable was found. */
+    val resolved: SourceConfig?,
+    /** True when the address already names a stored source. */
+    val duplicate: Boolean = false,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VelthyApp(
@@ -552,6 +575,13 @@ private fun VelthyApp(
     // [showSettings] so backing out of it lands on Settings again rather than
     // all the way home.
     var showSources by remember { mutableStateOf(false) }
+    // The Spotify Canvas cookie screen, pushed from Settings. Also a separate
+    // state so backing out lands on Settings.
+    var showSpotifyCanvasAuth by remember { mutableStateOf(false) }
+    // The lyrics translation language picker, raised from Settings.
+    var showTranslationLanguage by remember { mutableStateOf(false) }
+    // Listen Together, raised from the player's output capsule.
+    var showListenTogether by remember { mutableStateOf(false) }
     var editingSource by remember { mutableStateOf<SourceConfig?>(null) }
     // The avatar's own switcher, rather than dropping straight into Settings.
     var showAccountSelector by remember { mutableStateOf(false) }
@@ -649,6 +679,27 @@ private fun VelthyApp(
     val filter by viewModel.filter.collectAsStateWithLifecycle()
     val signedIn by viewModel.signedIn.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
+    // Tells the party layer who this device is jamming as. Only the app layer
+    // knows the account, so the identity is handed over rather than reached for
+    // — see [ListenTogether.setIdentity]. Signed out means null, which is what
+    // makes create/join refuse rather than put a blank name on four screens.
+    LaunchedEffect(signedIn, account) {
+        ListenTogether.setIdentity(
+            account?.takeIf { signedIn }?.let {
+                ListenTogether.Identity(
+                    // A hash of the account, not the address itself: the party
+                    // server only needs it stable and comparable, and has no use
+                    // for a real account identifier.
+                    userId = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest("${it.name}:${it.email}".toByteArray())
+                        .joinToString("") { b -> "%02x".format(b) }
+                        .take(32),
+                    name = it.name.ifBlank { it.email.substringBefore('@') },
+                    avatarUrl = it.thumbnailUrl?.takeIf { url -> url.startsWith("http") },
+                )
+            },
+        )
+    }
     val lyrics by viewModel.lyrics.collectAsStateWithLifecycle()
     val lyricsSource by viewModel.lyricsSource.collectAsStateWithLifecycle()
     val lyricsChecked by viewModel.lyricsChecked.collectAsStateWithLifecycle()
@@ -716,7 +767,13 @@ private fun VelthyApp(
             showNotifications = false
         }
     }
-    LaunchedEffect(showSettings) { if (!showSettings) { showAccountScrobbling = false; showSources = false } }
+    LaunchedEffect(showSettings) {
+        if (!showSettings) {
+            showAccountScrobbling = false
+            showSources = false
+            showSpotifyCanvasAuth = false
+        }
+    }
     // One visit's worth of browser state, cleared when the sheet closes so the
     // next open starts as a plain sign-in again.
     LaunchedEffect(showLogin) {
@@ -887,6 +944,13 @@ private fun VelthyApp(
             showReplay = false
             showDiscord = false
             showNotifications = false
+            // Every pushed page a tab tap should leave behind. Without these the
+            // content target still matched the page that was open and the bar
+            // looked dead — only the top-left back arrow could get out.
+            showListenTogether = false
+            showSources = false
+            showSpotifyCanvasAuth = false
+            moodGenre = null
             selectedTab = index
         }
     }
@@ -902,13 +966,40 @@ private fun VelthyApp(
     suspend fun List<Song>.resolvedForQueue(): List<Song> =
         YtMusicRepository.resolveAudioAll(this)
 
-    val play: (List<Song>, Int) -> Unit = { songs, index ->
+    /**
+     * Starts a queue and stamps every track in it with where it came from.
+     *
+     * [play] and [playRadio] are the two entry points the whole UI funnels
+     * through; this is the one place the origin is attached, so a new call site
+     * cannot forget it. The stamp rides on each [Song] rather than on the
+     * current item because Media3 hands the queue back one item at a time and
+     * has no notion of "the queue's origin" — see [toMediaItem].
+     */
+    val playFrom: (List<Song>, Int, QueueSource) -> Unit = { songs, index, source ->
         if (songs.isNotEmpty() && index in songs.indices) {
             scope.launch {
                 try {
                     showNowPlaying = true
-                    val starting = YtMusicRepository.resolveAudio(songs[index])
-                    val queued = songs.toMutableList().also { it[index] = starting }
+                    val starting = YtMusicRepository.resolveAudio(songs[index]).copy(
+                        playbackSource = source.title,
+                        playbackSourceType = source.type,
+                        playbackSourceId = source.id,
+                    )
+                    val queued = songs.toMutableList().also { list ->
+                        list[index] = starting
+                        // Every other row gets the same origin, so a track the
+                        // queue moves on to still says where the queue came
+                        // from. A row that already names its own origin (an
+                        // AutoPlay entry, say) keeps it.
+                        list.forEachIndexed { i, song ->
+                            if (i == index || song.playbackSource != null) return@forEachIndexed
+                            list[i] = song.copy(
+                                playbackSource = source.title,
+                                playbackSourceType = source.type,
+                                playbackSourceId = source.id,
+                            )
+                        }
+                    }
                     controller?.playSongs(queued, index)
                     // Starting playback only waits on the track about to play; the
                     // rest of a long album/playlist resolves in the background and
@@ -948,18 +1039,43 @@ private fun VelthyApp(
     }
 
     /**
+     * The queue-starting entry point whose rows already name their own origin.
+     *
+     * Kept for call sites that have nothing better to say than "this list" —
+     * and as the origin's own fallback: a row that arrived with no
+     * `playbackSource` gets its album, or "Queue", which is what the caption
+     * showed before any of this existed.
+     */
+    val play: (List<Song>, Int) -> Unit = { songs, index ->
+        val first = songs.getOrNull(index)
+        playFrom(
+            songs,
+            index,
+            QueueSource(
+                title = first?.playbackSource ?: first?.albumName ?: "Queue",
+                type = first?.playbackSourceType ?: PlaybackSourceType.QUEUE,
+                id = first?.playbackSourceId,
+            ),
+        )
+    }
+
+    /**
      * A song picked on its own — off a home card or a search hit — starts a
      * station rather than queueing the list it was shown in. Searching
      * "Perfect" and tapping the top hit otherwise queues twenty covers and
      * remixes of the same song. Album, artist and playlist pages keep [play],
      * where the surrounding list *is* the thing the user asked for.
      */
-    val playRadio: (Song) -> Unit = { song ->
+    val playRadioFrom: (Song, QueueSource) -> Unit = { song, source ->
         // Claim the AutoPlay seed up front: a one-track queue is already at its
         // end, so that effect would otherwise fetch the same radio in parallel.
         autoplaySeed = song.videoId
         scope.launch {
-            val resolved = YtMusicRepository.resolveAudio(song)
+            val resolved = YtMusicRepository.resolveAudio(song).copy(
+                playbackSource = source.title,
+                playbackSourceType = source.type,
+                playbackSourceId = source.id,
+            )
             autoplaySeed = resolved.videoId
             controller?.playSongs(listOf(resolved), 0)
             showNowPlaying = true
@@ -970,16 +1086,39 @@ private fun VelthyApp(
                 if (extra.isNotEmpty()) {
                     // The station's own mix, which the queue files under
                     // AutoPlay just like the tracks it appends later — only the
-                    // seed was actually asked for.
+                    // seed was actually asked for. Each still carries the
+                    // origin, so the caption does not fall back to a bare album
+                    // name once the queue moves past the seed.
                     controller?.addMediaItems(
                         extra.resolvedForQueue().map {
-                            it.copy(fromAutoplay = true).toMediaItem()
+                            it.copy(
+                                fromAutoplay = true,
+                                playbackSource = source.title,
+                                playbackSourceType = source.type,
+                                playbackSourceId = source.id,
+                            ).toMediaItem()
                         },
                     )
                 }
             }
         }
     }
+    /**
+     * [playRadioFrom] for the call sites that have no origin of their own to
+     * name — a song row dropped into a station from somewhere the app does not
+     * track as a page. Falls back the same way [play] does.
+     */
+    val playRadio: (Song) -> Unit = { song ->
+        playRadioFrom(
+            song,
+            QueueSource(
+                title = song.playbackSource ?: song.albumName ?: "Queue",
+                type = song.playbackSourceType ?: PlaybackSourceType.QUEUE,
+                id = song.playbackSourceId,
+            ),
+        )
+    }
+
     val addToQueue: (Song) -> Unit = { song ->
         scope.launch {
             val resolved = YtMusicRepository.resolveAudio(song)
@@ -1007,6 +1146,59 @@ private fun VelthyApp(
     val onSongSwipe: (Song) -> Unit = { song ->
         haptics.play(Haptic.Tick)
         if (AppSettings.swipeToPlayNext.value) playNext(song) else addToQueue(song)
+    }
+
+    // ---- Video ⇄ audio version -------------------------------------------
+    //
+    // Which track is the catalogue audio version of the video upload on screen.
+    // Held by id rather than as a boolean because it has to survive a track
+    // change: the flag belongs to *that* song, and a resumed skip back to it
+    // should find the button still where the listener left it. A match is also
+    // remembered per video, so the search that found it is not run again on the
+    // next visit.
+    var audioVersionOf by rememberSaveable { mutableStateOf<String?>(null) }
+    var audioVersionSwitching by remember { mutableStateOf(false) }
+    val audioVersionCache = remember { mutableStateMapOf<String, Song>() }
+    val onToggleAudioVersion: () -> Unit = toggle@{
+        val current = player.song ?: return@toggle
+        if (audioVersionSwitching) return@toggle
+        val showingAudio = audioVersionOf == current.videoId
+
+        if (showingAudio) {
+            // Back to the upload. Keyed by the *audio* id, which is the one on
+            // screen: the upload it was swapped from is what is remembered.
+            val original = audioVersionCache[current.videoId] ?: return@toggle
+            audioVersionOf = null
+            play(listOf(original), 0)
+            return@toggle
+        }
+
+        audioVersionSwitching = true
+        scope.launch {
+            // A music video's id is not an audio id, so the catalogue version
+            // has to be *found* rather than derived — asked by title and artist
+            // and taken from the first row that names the same recording. The
+            // failure path is deliberately silent to the user: no match simply
+            // leaves the button where it was, which is where the video already
+            // is, and an error toast over a button that did nothing is worse
+            // than the button quietly staying put.
+            val match = runCatching {
+                YtMusicRepository.search(
+                    "${current.title} ${current.artist}",
+                    com.velthy.client.data.model.SearchFilter.SONGS,
+                ).getOrNull()
+                    ?.filterIsInstance<com.velthy.client.data.model.SearchResult.Track>()
+                    ?.map { it.song }
+                    ?.firstOrNull { it.videoId != current.videoId && !it.isVideo }
+            }.getOrNull()
+
+            audioVersionSwitching = false
+            if (match != null) {
+                audioVersionCache[match.videoId] = current
+                audioVersionOf = match.videoId
+                play(listOf(match), 0)
+            }
+        }
     }
 
     val linkRequest by MusicLink.pending.collectAsStateWithLifecycle()
@@ -1160,7 +1352,7 @@ private fun VelthyApp(
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
         // which is what actually closes/minimizes the app.
-        BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord && !showReplay && !showHistory && !showSources) {
+        BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord && !showReplay && !showHistory && !showSources && !showSpotifyCanvasAuth) {
             showSettings = false
             if (detail == null) selectedTab = TAB_HOME
         }
@@ -1168,6 +1360,9 @@ private fun VelthyApp(
         // is open: one back closes the Sources page and lands on Settings
         // again, and only the next one leaves Settings.
         BackHandler(enabled = showSources) { showSources = false }
+        BackHandler(enabled = showSpotifyCanvasAuth) { showSpotifyCanvasAuth = false }
+        BackHandler(enabled = showTranslationLanguage) { showTranslationLanguage = false }
+        BackHandler(enabled = showListenTogether) { showListenTogether = false }
         BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && libraryShowAll == null && selectedTab != TAB_HOME) {
             selectedTab = TAB_HOME
         }
@@ -1196,6 +1391,8 @@ private fun VelthyApp(
                 moodGenre != null -> "mood_genre"
                 showAccountScrobbling -> "account_scrobbling"
                 showSources -> "sources"
+                showSpotifyCanvasAuth -> "spotify_canvas"
+                showListenTogether -> "listen_together"
                 showSettings -> "settings"
                 showNotifications -> "notifications"
                 showReplay -> "replay"
@@ -1220,7 +1417,9 @@ private fun VelthyApp(
                 HistoryScreen(
                     state = historyState,
                     listState = historyListState,
-                    onSongClick = play,
+                    onSongClick = { songs, index ->
+                        playFrom(songs, index, QueueSource("History", PlaybackSourceType.HISTORY))
+                    },
                     onSongLongPress = { songActions = it },
                     onSongSwipe = onSongSwipe,
                     onRetry = viewModel::loadHistory,
@@ -1277,7 +1476,7 @@ private fun VelthyApp(
                         listState = moodGenreListState,
                         onItemClick = { item ->
                             when {
-                                item.videoId != null -> playRadio(
+                                item.videoId != null -> playRadioFrom(
                                     Song(
                                         videoId = item.videoId,
                                         title = item.title,
@@ -1285,6 +1484,7 @@ private fun VelthyApp(
                                         thumbnailUrl = item.thumbnailUrl,
                                         albumName = item.albumName,
                                     ),
+                                    QueueSource(target.title, PlaybackSourceType.EXPLORE, target.browseId),
                                 )
                                 item.browseId != null -> {
                                     // Leave the mood page so the pushed detail can
@@ -1311,7 +1511,9 @@ private fun VelthyApp(
                     holder = account?.name.orEmpty(),
                     onPeriodChange = setReplayPeriod,
                     onOpenStory = { replayStory = it },
-                    onPlaySong = playRadio,
+                    onPlaySong = { song ->
+                        playRadioFrom(song, QueueSource("Replay", PlaybackSourceType.REPLAY))
+                    },
                     onOpenArtist = { id, name ->
                         showReplay = false
                         viewModel.openDetail(id.orEmpty(), name, "Artist", null, BrowseType.ARTIST)
@@ -1370,6 +1572,14 @@ private fun VelthyApp(
                     contentPadding = listPadding,
                     onEditSource = { editingSource = it },
                 )
+            } else if (key == "spotify_canvas") {
+                SpotifyCanvasAuthScreen(onNavigateUp = { showSpotifyCanvasAuth = false })
+            } else if (key == "listen_together") {
+                ListenTogetherScreen(
+                    signedIn = signedIn,
+                    onSignIn = { showLogin = true },
+                    contentPadding = listPadding,
+                )
             } else if (key == "settings") {
                 SettingsScreen(
                     signedIn = signedIn,
@@ -1382,6 +1592,8 @@ private fun VelthyApp(
                     onAccountScrobbling = { showAccountScrobbling = true },
                     onLyricsSources = { showLyricsSources = true },
                     onOpenSources = { showSources = true },
+                    onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
+                    onTranslationLanguage = { showTranslationLanguage = true },
                     onOpenReplay = {
                         showSettings = false
                         showReplay = true
@@ -1424,6 +1636,10 @@ private fun VelthyApp(
                         song
                     }
                 }
+                // An album, playlist or artist page *is* the thing the queue
+                // came from, so its own title is the origin — "Playing from
+                // <page>", and tapping it returns here.
+                val pageSource = QueueSource(page.title, PlaybackSourceType.BROWSE, page.browseId)
                 DetailScreen(
                     page = page,
                     listState = detailListState,
@@ -1433,16 +1649,16 @@ private fun VelthyApp(
                     // rows are the album, which is exactly what [withAlbum] is
                     // for; every track queued from here gets it, not just the
                     // one tapped.
-                    onSongClick = { songs, index -> play(songs.map(withAlbum), index) },
+                    onSongClick = { songs, index -> playFrom(songs.map(withAlbum), index, pageSource) },
                     onSongLongPress = { songActions = withAlbum(it) },
                     onSongSwipe = onSongSwipe,
                     onShuffle = { songs ->
                         QueueShuffle.enableForNextQueue()
-                        play(songs.map(withAlbum), songs.indices.random())
+                        playFrom(songs.map(withAlbum), songs.indices.random(), pageSource)
                     },
                     onSectionItemClick = { item ->
                         when {
-                            item.videoId != null -> playRadio(
+                            item.videoId != null -> playRadioFrom(
                                 Song(
                                     videoId = item.videoId,
                                     title = item.title,
@@ -1450,6 +1666,9 @@ private fun VelthyApp(
                                     thumbnailUrl = item.thumbnailUrl,
                                     albumName = item.albumName,
                                 ),
+                                // A row in a "You might also like" shelf still
+                                // belongs to the page it was found on.
+                                pageSource,
                             )
                             item.browseId != null -> viewModel.openDetail(
                                 browseId = item.browseId,
@@ -1494,6 +1713,9 @@ private fun VelthyApp(
                     onToggleLibrary = if (signedIn) {
                         { viewModel.toggleLibrary(page.browseId) }
                     } else null,
+                    onToggleSubscription = if (signedIn) {
+                        { viewModel.toggleSubscription(page.browseId) }
+                    } else null,
                     contentPadding = listPadding,
                 )
             } else when (selectedTab) {
@@ -1504,7 +1726,7 @@ private fun VelthyApp(
                     onSignIn = { showLogin = true },
                     onItemClick = { item ->
                         when {
-                            item.videoId != null -> playRadio(
+                            item.videoId != null -> playRadioFrom(
                                 Song(
                                     videoId = item.videoId,
                                     title = item.title,
@@ -1512,6 +1734,7 @@ private fun VelthyApp(
                                     thumbnailUrl = item.thumbnailUrl,
                                     albumName = item.albumName,
                                 ),
+                                QueueSource("Home", PlaybackSourceType.HOME),
                             )
                             item.browseId != null -> viewModel.openDetail(
                                 browseId = item.browseId,
@@ -1556,14 +1779,14 @@ private fun VelthyApp(
                     onSongClick = { songs, index ->
                         songs.getOrNull(index)?.let {
                             viewModel.recordSearch()
-                            playRadio(it)
+                            playRadioFrom(it, QueueSource("Search", PlaybackSourceType.SEARCH))
                         }
                     },
                     onSongLongPress = { songActions = it },
                     onSongSwipe = onSongSwipe,
                     onTopResultPlay = { song ->
                         viewModel.recordSearch()
-                        playRadio(song)
+                        playRadioFrom(song, QueueSource("Search", PlaybackSourceType.SEARCH))
                     },
                     onTopResultPlaylist = { song ->
                         viewModel.recordSearch()
@@ -1586,7 +1809,9 @@ private fun VelthyApp(
                     // The songs under the completions: tapping one starts a
                     // station from it, the same as a search hit does.
                     previewSongs = previewSongs,
-                    onPreviewSongPlay = playRadio,
+                    onPreviewSongPlay = { song ->
+                        playRadioFrom(song, QueueSource("Search", PlaybackSourceType.SEARCH))
+                    },
                     onHistoryClick = viewModel::searchFor,
                     onHistoryRemove = viewModel::removeSearch,
                     onHistoryClear = viewModel::clearSearchHistory,
@@ -1664,6 +1889,8 @@ private fun VelthyApp(
                 moodGenre != null -> moodGenre?.title ?: "Explore"
                 showAccountScrobbling -> "Account & scrobbling"
                 showSources -> "Sources"
+                showSpotifyCanvasAuth -> "Spotify Canvas"
+                showListenTogether -> "Listen Together"
                 showSettings -> "Settings"
                 showNotifications -> "Notifications"
                 localDrillDownLabel != null -> localDrillDownLabel ?: ""
@@ -1675,7 +1902,7 @@ private fun VelthyApp(
                 showHistory -> historyListState.firstVisibleItemIndex > 0 || historyListState.firstVisibleItemScrollOffset > 0
                 libraryShowAll != null -> libraryShowAllGridState.firstVisibleItemIndex > 0 || libraryShowAllGridState.firstVisibleItemScrollOffset > 0
                 moodGenre != null -> moodGenreListState.firstVisibleItemIndex > 0 || moodGenreListState.firstVisibleItemScrollOffset > 0
-                showSettings || showAccountScrobbling || showDiscord || showNotifications || showSources -> true
+                showSettings || showAccountScrobbling || showDiscord || showNotifications || showSources || showSpotifyCanvasAuth || showListenTogether -> true
                 detail != null -> detailScrolled
                 else -> scrolled
             },
@@ -1707,6 +1934,8 @@ private fun VelthyApp(
                 moodGenre != null -> ({ moodGenre = null })
                 showAccountScrobbling -> ({ showAccountScrobbling = false })
                 showSources -> ({ showSources = false })
+                showSpotifyCanvasAuth -> ({ showSpotifyCanvasAuth = false })
+                showListenTogether -> ({ showListenTogether = false })
                 showSettings -> ({ showSettings = false })
                 showNotifications -> ({ showNotifications = false })
                 localDrillDownLabel != null -> ({ localDrillDownLabel = null })
@@ -1829,22 +2058,12 @@ private fun VelthyApp(
             },
         )
 
-        // Drawn before the bars so their own glass reads on top of it; both
-        // sample the same source content, so nothing is blurred twice.
-        BottomFadeBlur(
-            hazeState = hazeState,
-            withMiniPlayer = player.song != null,
-            // Not the wash: by the foot of the screen the page has finished
-            // easing out of it and into this, so this is what is actually
-            // under the tab bar.
-            pageColor = if (isDetailVisible) detailPalette.background else MaterialTheme.colorScheme.background,
-            // Revealed with the bars rather than left standing on its own: the
-            // frosted floor is the bottom of the player as far as the page is
-            // concerned, so it has to arrive with the furniture it carries.
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .graphicsLayer { alpha = bottomChromeReveal(morph.value) },
-        )
+        // No frosted floor under the bars. The tab pill and the mini player
+        // carry their own glass, and that is the whole of the treatment: a
+        // separate blurred strip behind them blurred the same content a second
+        // time and read as a band laid over the page rather than as the bars'
+        // own material. Content scrolling under the bars now meets the bars
+        // themselves, which is where the frosted edge belongs.
 
         Column(
             modifier = Modifier
@@ -2146,9 +2365,56 @@ private fun VelthyApp(
                         showNowPlaying = false
                         viewModel.openDetail(id, song.artist, "Artist", null, BrowseType.ARTIST)
                     },
+                    // Tapping the origin caption. Mirror of the queue-source
+                    // switch in BitChord: an album/playlist/artist page is
+                    // reopened, a tab is selected, a history or replay page is
+                    // shown — and a bare queue has nowhere to go, handled inside
+                    // [NowPlayingScreen] by opening its queue.
+                    onOpenPlaybackSource = openSource@{
+                        val type = song.playbackSourceType ?: PlaybackSourceType.QUEUE
+                        val id = song.playbackSourceId
+                        showNowPlaying = false
+                        viewModel.closeDetail()
+                        showSettings = false
+                        showAccountScrobbling = false
+                        showHistory = false
+                        showReplay = false
+                        libraryShowAll = null
+                        when (type) {
+                            PlaybackSourceType.BROWSE -> {
+                                val browseId = id ?: return@openSource
+                                viewModel.openDetail(
+                                    browseId,
+                                    song.playbackSource ?: song.albumName ?: "",
+                                    song.artist,
+                                    song.thumbnailUrl,
+                                )
+                            }
+                            PlaybackSourceType.HOME -> selectedTab = TAB_HOME
+                            PlaybackSourceType.SEARCH -> selectedTab = TAB_SEARCH
+                            PlaybackSourceType.EXPLORE -> selectedTab = TAB_EXPLORE
+                            PlaybackSourceType.HISTORY -> {
+                                showHistory = true
+                                viewModel.loadHistory()
+                            }
+                            PlaybackSourceType.REPLAY -> showReplay = true
+                            PlaybackSourceType.SHARED_LINK -> Unit
+                            PlaybackSourceType.QUEUE -> Unit
+                        }
+                    },
                     lyrics = lyrics,
                     lyricsSource = lyricsSource,
                     lyricsUnavailable = lyricsChecked && lyrics.isNullOrEmpty(),
+                    onOpenParty = {
+                        showNowPlaying = false
+                        showListenTogether = true
+                    },
+                    // Offered on a track that came in as a video, or on the
+                    // audio version it was swapped to — the only two cases where
+                    // there is a second version to reach for.
+                    onToggleAudioVersion = if (signedIn) onToggleAudioVersion else null,
+                    isAudioVersion = audioVersionOf != null && audioVersionOf == player.song?.videoId,
+                    audioVersionSwitching = audioVersionSwitching,
                     morph = morph,
                     onArtTargetChanged = { coverTarget = it },
                     modifier = Modifier
@@ -2355,19 +2621,23 @@ private fun VelthyApp(
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             ) {
                 val songs = target.songs
+                // The sheet is only ever opened from a page, so the page is the
+                // origin — playing its whole queue from here says the same thing
+                // the page's own Play button does.
+                val sheetSource = QueueSource(target.title, PlaybackSourceType.BROWSE, target.browseId)
                 BrowseActionsSheet(
                     target = target,
                     onPlay = if (songs.isNotEmpty()) {
                         {
                             browseActions = null
-                            play(songs, 0)
+                            playFrom(songs, 0, sheetSource)
                         }
                     } else null,
                     onShuffle = if (songs.isNotEmpty()) {
                         {
                             browseActions = null
                             QueueShuffle.enableForNextQueue()
-                            play(songs, songs.indices.random())
+                            playFrom(songs, songs.indices.random(), sheetSource)
                         }
                     } else null,
                     onPlayNext = {
@@ -2413,7 +2683,12 @@ private fun VelthyApp(
         if (showRecognitionSheet) {
             MusicRecognitionSheet(
                 onDismiss = { showRecognitionSheet = false },
-                onPlaySong = { play(listOf(it), 0) },
+                onPlaySong = { song ->
+                    playRadioFrom(
+                        song,
+                        QueueSource(song.title, PlaybackSourceType.SHARED_LINK, song.videoId),
+                    )
+                },
                 onAddToQueue = { addToQueue(it) },
                 onSearchSong = viewModel::searchFor,
             )
@@ -2552,6 +2827,7 @@ private fun VelthyApp(
             updateNotice?.let { update ->
                 UpdateAvailableDialog(
                     version = update.version,
+                    severity = update.severity,
                     hazeState = hazeState,
                     onDismiss = { showUpdateDialog = false },
                     onUpdate = {
@@ -2622,51 +2898,134 @@ private fun VelthyApp(
             )
         }
 
-        // The source editor, raised from the Sources screen — for a new module
+        if (showTranslationLanguage) {
+            TranslationLanguageDialog(
+                hazeState = hazeState,
+                onDismiss = { showTranslationLanguage = false },
+            )
+        }
+
+        // The source editor, raised from the Sources screen — for a new source
         // when handed a config the registry does not have yet, and for an
         // existing one otherwise. Hosted here so its scrim covers the tab bar
         // and the mini player.
+        //
+        // One editor for everything with an address: what is at the URL is
+        // *detected* rather than chosen up front, so pasting an addon's root,
+        // an addon's manifest.json, or a module index all end here and the
+        // right source is built from what the server actually returned. Both
+        // Save and Test run the same identification — a Save that skipped it
+        // could store a config whose kind was guessed.
         editingSource?.let { target ->
             val isNew = SourceRegistry.config(target.id) == null
             var url by remember(target.id) { mutableStateOf(target.baseUrl) }
             var sourceTesting by remember(target.id) { mutableStateOf(false) }
-            var sourceStatus by remember(target.id) { mutableStateOf<SourceHealth?>(null) }
+            var sourceStatus by remember(target.id) { mutableStateOf<String?>(null) }
+            var sourceStatusGood by remember(target.id) { mutableStateOf(false) }
             val editorScope = rememberCoroutineScope()
-            val candidate = target.copy(baseUrl = url.trim())
+
+            /**
+             * Identifies what is at [rawUrl], then probes it and says so.
+             *
+             * Both Test and Save run this — the only difference is whether a
+             * success is then stored. Testing and saving asking the *same*
+             * question is the point: a Save that skipped identification could
+             * store a config whose kind was guessed, and the guess is exactly
+             * what this editor no longer makes.
+             */
+            suspend fun identifyAndProbe(rawUrl: String): SourceProbe {
+                val identified = withContext(Dispatchers.IO) {
+                    runCatching { SourceRegistry.identify(rawUrl.trim(), target.takeUnless { isNew }) }
+                        .getOrElse { Result.failure(it) }
+                }
+                val found = identified.getOrNull()
+                    ?: return SourceProbe(
+                        identified.exceptionOrNull()?.message ?: "Not something this app can use.",
+                        good = false,
+                        resolved = null,
+                    )
+
+                // Already here? Checked against the *identified* base rather
+                // than the typed text, so an addon's root and its manifest.json
+                // are recognised as the one source they are. Reported on Test
+                // as well as Save: finding out by pressing Test beats ending up
+                // with the same catalogue searched twice on every track.
+                SourceRegistry.duplicateOf(found.baseUrl, exceptId = target.id.takeUnless { isNew })
+                    ?.let { existing ->
+                        return SourceProbe(
+                            "Already added — ${existing.displayName}",
+                            good = false,
+                            resolved = found,
+                            duplicate = true,
+                        )
+                    }
+
+                // Identified, and now asked whether it actually works. The two
+                // are different questions: a manifest can be perfectly well
+                // formed and its server still be refusing every search.
+                val health = withContext(Dispatchers.IO) {
+                    runCatching { SourceRegistry.probeCandidate(found) }
+                        .getOrElse { SourceHealth.Unreachable(it.message ?: "Failed") }
+                }
+                return when (health) {
+                    is SourceHealth.Ok -> SourceProbe(
+                        listOfNotNull("Connected", found.kind.label, health.detail).joinToString(" · "),
+                        good = true,
+                        resolved = found,
+                    )
+                    is SourceHealth.Rejected -> SourceProbe(health.reason, good = false, resolved = found)
+                    is SourceHealth.Unreachable -> SourceProbe(health.reason, good = false, resolved = found)
+                }
+            }
+
             SourceEditorAlert(
                 hazeState = hazeState,
-                title = if (isNew) "Add ${target.kind.label.lowercase()}" else target.displayName,
-                description = target.kind.detail,
+                title = if (isNew) "Add source" else target.displayName,
+                description = "Paste the address of an addon server or a custom module index.",
                 urlValue = url,
+                // A result describes the address it was run against, so the
+                // moment that address is edited it stops being true and is
+                // cleared. Left up, it would report "Connected" over a URL
+                // nobody has tried.
                 onUrlChange = { url = it; sourceStatus = null },
-                urlPlaceholder = "https://example.com/modules/index.json",
-                status = sourceStatus?.let { health ->
-                    when (health) {
-                        is SourceHealth.Ok ->
-                            listOfNotNull("Connected", health.detail).joinToString(" — ")
-                        is SourceHealth.Rejected -> health.reason
-                        is SourceHealth.Unreachable -> health.reason
-                    }
-                },
-                statusIsGood = sourceStatus?.isOk == true,
+                urlPlaceholder = "https://my-addon.example.com",
+                status = sourceStatus,
+                statusIsGood = sourceStatusGood,
                 testing = sourceTesting,
-                canSubmit = candidate.isComplete,
+                canSubmit = url.isNotBlank(),
                 onTest = {
                     sourceTesting = true
                     sourceStatus = null
-                    // Probed through a throwaway instance rather than the stored
-                    // one: the point of Test is to check what has been *typed*.
                     editorScope.launch {
-                        sourceStatus = withContext(Dispatchers.IO) {
-                            runCatching { SourceRegistry.probeCandidate(candidate) }
-                                .getOrElse { SourceHealth.Unreachable(it.message ?: "Failed") }
-                        }
+                        val probe = identifyAndProbe(url)
+                        sourceStatus = probe.message
+                        sourceStatusGood = probe.good
                         sourceTesting = false
                     }
                 },
                 onSave = {
-                    if (isNew) SourceRegistry.add(candidate) else SourceRegistry.update(candidate)
-                    editingSource = null
+                    sourceTesting = true
+                    sourceStatus = null
+                    editorScope.launch {
+                        val probe = identifyAndProbe(url)
+                        sourceStatus = probe.message
+                        sourceStatusGood = probe.good
+                        // Saved once the format is known — even when the probe
+                        // came back unhappy: a server that happens to be asleep
+                        // is still worth storing, while a URL nothing can be
+                        // made of is not. A duplicate is refused, because
+                        // storing it would search the same catalogue twice on
+                        // every track.
+                        if (probe.resolved != null && !probe.duplicate) {
+                            if (isNew) {
+                                SourceRegistry.add(probe.resolved)
+                            } else {
+                                SourceRegistry.update(probe.resolved)
+                            }
+                            editingSource = null
+                        }
+                        sourceTesting = false
+                    }
                 },
                 onRemove = if (isNew) {
                     null
@@ -2854,6 +3213,23 @@ private fun tween(durationMillis: Int) =
 
 /** How many tracks a station pulls in at a time. */
 private const val RADIO_BATCH = 20
+
+/**
+ * One stable playback context for the lifetime of a queue: what the Now
+ * Playing caption should name, and where tapping it should return.
+ *
+ * Held per queue rather than per track because the origin is a property of the
+ * *journey* the listener took, not of the song — the same track opened from
+ * search and from an album are two different answers to "playing from where?".
+ * Every entry point that starts a queue builds one of these; every track in
+ * that queue then carries it, so tracks further down still say where they came
+ * from even though the listener never tapped them.
+ */
+private data class QueueSource(
+    val title: String,
+    val type: PlaybackSourceType,
+    val id: String? = null,
+)
 
 /**
  * How far a detail page scrolls before its title moves up into the bar.

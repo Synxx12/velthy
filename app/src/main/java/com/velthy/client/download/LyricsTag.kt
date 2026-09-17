@@ -42,6 +42,7 @@ internal object LyricsTag {
                     durationMs = durationMs,
                     album = track.albumName,
                     sources = sources,
+                    order = com.velthy.client.data.settings.AppSettings.lyricsSourceOrder.value,
                 )
             }
         } catch (e: CancellationException) {

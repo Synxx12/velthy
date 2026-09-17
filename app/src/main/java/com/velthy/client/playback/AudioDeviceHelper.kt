@@ -91,6 +91,25 @@ data class AudioOutputOption(
         AudioDeviceType.USB_DAC -> VelthyIcons.UsbDac
         AudioDeviceType.SPEAKER -> Icons.AutoMirrored.Rounded.VolumeUp
     }
+
+    /**
+     * What kind of output this is, in words.
+     *
+     * A device's own name is often not enough to place it — "Headphones" says
+     * nothing about whether they are plugged in or paired, and a Bluetooth
+     * speaker reports the same name a wired dock would. The type is the half a
+     * listener is actually asking about when they open the picker, so the
+     * active row says it.
+     */
+    val typeLabel: String get() = when (type) {
+        AudioDeviceType.BLUETOOTH_TWS -> "Wireless Earbuds (TWS)"
+        AudioDeviceType.BLUETOOTH_HEADPHONES -> "Bluetooth Headphones"
+        AudioDeviceType.BLUETOOTH_SPEAKER -> "Bluetooth Speaker"
+        AudioDeviceType.TV_CAST -> "Smart TV / Cast Display"
+        AudioDeviceType.HEADPHONES -> "Wired Headphones"
+        AudioDeviceType.USB_DAC -> "USB DAC / Hi-Res Audio"
+        AudioDeviceType.SPEAKER -> "Phone Speaker"
+    }
 }
 
 object AudioDeviceHelper {

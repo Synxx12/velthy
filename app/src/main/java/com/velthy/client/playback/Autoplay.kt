@@ -48,5 +48,19 @@ suspend fun loadAutoplayTracks(
     } catch (failure: Throwable) {
         return Result.failure(failure)
     }
-    return Result.success(resolved.map { it.copy(fromAutoplay = true) })
+    return Result.success(
+        resolved.map {
+            it.copy(
+                fromAutoplay = true,
+                // AutoPlay tracks inherit the seed's origin, so a mixed station
+                // still says what it was started from rather than falling back
+                // to each track's own album. A station started from an album
+                // says the album; one started from a search hit says Search.
+                radioName = seedSong.radioName,
+                playbackSource = seedSong.playbackSource,
+                playbackSourceType = seedSong.playbackSourceType,
+                playbackSourceId = seedSong.playbackSourceId,
+            )
+        },
+    )
 }

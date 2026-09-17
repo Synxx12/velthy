@@ -50,6 +50,18 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.velthy.client.data.Http
 import com.velthy.client.data.canvas.CanvasArtwork
+import com.velthy.client.data.canvas.CanvasCache
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+
+/**
+ * The longest edge a captured frame is scaled to on the way out.
+ *
+ * A re-tint only ever averages the frame down to a handful of colours, so a
+ * 96px copy carries everything it needs — see [CanvasArtworkPlayer]'s
+ * `frameCapturePx`. Small enough that the readback is cheap enough to repeat.
+ */
+private const val FRAME_CAPTURE_PX = 96
 
 /**
  * The looping video that plays over a track's cover art, sized to fill and
@@ -75,6 +87,29 @@ fun CanvasArtworkPlayer(
     onRenderedChanged: (Boolean) -> Unit = {},
     /** A single frame off the playing clip, for callers that want to re-tint around it. */
     onFrameCaptured: (Bitmap) -> Unit = {},
+    /**
+     * Keep calling [onFrameCaptured] every so many milliseconds instead of
+     * only once — for a caller re-tinting its backdrop off a playing clip,
+     * which is worth following as it plays rather than settling on whatever
+     * colours its opening frame happened to have. A clip is a clip, and one
+     * that pans or cuts changes colour under its own still sleeve the same way
+     * regardless of which source published it. Null when a caller has nothing
+     * worth re-tinting off a moving colour at all — re-reading a texture off
+     * the GPU costs a frame stall, so this stays opt-in rather than always-on.
+     */
+    refreshFrameEveryMs: Long? = null,
+    /**
+     * The longest edge of the bitmap [onFrameCaptured] is handed.
+     *
+     * This is the whole cost of following a clip. A full readback hands back a
+     * copy at the view's own size — full-bleed, most of a phone screen, several
+     * megabytes off the GPU and allocated afresh on every call. The one caller
+     * there is averages the frame down to a handful of colours, so a small copy
+     * is all it wants; asking for that makes the readback scale during the
+     * blit, which is what turns a refresh from something worth doing every few
+     * seconds into something affordable several times a second.
+     */
+    frameCapturePx: Int = FRAME_CAPTURE_PX,
     /**
      * How much of whatever is behind the clip it is currently hiding: 0 while
      * nothing is drawn, ramping to 1 as the first frame fades in, and back down
@@ -109,9 +144,15 @@ fun CanvasArtworkPlayer(
     val player = remember {
         ExoPlayer.Builder(context)
             // Shares the app's one OkHttp client, as everything that fetches
-            // over the network here does.
+            // over the network here does — and wraps it in the canvas disk
+            // cache. A clip is looped for as long as the track plays, and
+            // ExoPlayer frees a sample's buffer as soon as it is consumed, so
+            // without this every loop would be another download of the same
+            // few seconds of video rather than one.
             .setMediaSourceFactory(
-                DefaultMediaSourceFactory(OkHttpDataSource.Factory(Http.client)),
+                DefaultMediaSourceFactory(
+                    CanvasCache.dataSourceFactory(OkHttpDataSource.Factory(Http.client)),
+                ),
             )
             .build()
             .apply {
@@ -189,7 +230,22 @@ fun CanvasArtworkPlayer(
         // can still catch the previous, empty buffer.
         withFrameMillis { }
         val view = textureView ?: return@LaunchedEffect
-        runCatching { view.getBitmap() }.getOrNull()?.let(onFrameCaptured)
+        view.captureAt(frameCapturePx)?.let(onFrameCaptured)
+    }
+
+    // The opt-in follow-up to the capture above, for a caller that asked for
+    // one — see [refreshFrameEveryMs]. A separate effect rather than a loop
+    // folded into the one above: that one is keyed on [rendered] so it fires
+    // again on every fade-in, and this one only needs to start once a fade-in
+    // has actually happened and then keep going for as long as it holds.
+    LaunchedEffect(rendered, refreshFrameEveryMs, frameCapturePx) {
+        val interval = refreshFrameEveryMs ?: return@LaunchedEffect
+        if (!rendered) return@LaunchedEffect
+        while (isActive) {
+            delay(interval)
+            val view = textureView ?: continue
+            view.captureAt(frameCapturePx)?.let(onFrameCaptured)
+        }
     }
 
     val alpha by animateFloatAsState(
@@ -245,6 +301,26 @@ fun CanvasArtworkPlayer(
         },
         modifier = modifier.onSizeChanged { bounds = it },
     )
+}
+
+/**
+ * A frame off the playing clip, scaled down so its longest edge is [maxEdge].
+ *
+ * [getBitmap] with no arguments hands back a copy at the view's own size —
+ * full-bleed, most of a phone screen, several megabytes read back off the GPU
+ * on every call. Nobody wants that resolution: the one caller averages the
+ * frame down to a handful of colours. Scaling during the blit is what makes
+ * this affordable to repeat, and it works by handing the wanted size to
+ * [getBitmap] rather than allocating a full-size copy first.
+ */
+private fun TextureView.captureAt(maxEdge: Int): Bitmap? {
+    val width = width
+    val height = height
+    if (width <= 0 || height <= 0) return null
+    val scale = maxEdge.toFloat() / maxOf(width, height)
+    val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+    return runCatching { getBitmap(targetWidth, targetHeight) }.getOrNull()
 }
 
 /**

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -140,18 +141,30 @@ fun NotificationsSheet(
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.primary,
                                     )
+                                    if (update.severity != com.velthy.client.data.UpdateSeverity.NORMAL) {
+                                        com.velthy.client.ui.components.UpdateSeverityBadge(
+                                            severity = update.severity,
+                                            modifier = Modifier.padding(top = 6.dp),
+                                        )
+                                    }
                                 }
                             }
 
                             if (update.releaseNotes.isNotBlank()) {
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    text = update.releaseNotes,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 4,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                                Spacer(Modifier.height(10.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 140.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color.Black.copy(alpha = 0.20f))
+                                        .padding(10.dp),
+                                ) {
+                                    com.velthy.client.ui.components.MarkdownReleaseNotes(
+                                        content = update.releaseNotes,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                             }
 
                             Spacer(Modifier.height(14.dp))

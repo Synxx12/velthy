@@ -39,6 +39,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.Base64
 
 /**
  * Minimal Innertube (youtubei) client.
@@ -331,6 +332,18 @@ object Innertube {
         put("videoId", videoId)
         put("playlistId", "RDAMVM$videoId")
         put("isAudioOnly", true)
+    }
+
+    /**
+     * Timed caption transcript used as a last-resort lyrics source.
+     *
+     * The endpoint takes a tiny protobuf rather than plain fields: field 1
+     * (a length-delimited string) holding the video id, which is the `0x0A`
+     * tag plus a one-byte length prepended to the id's own bytes.
+     */
+    suspend fun transcript(videoId: String): JsonObject = postMusic("get_transcript") {
+        val bytes = byteArrayOf(10, videoId.toByteArray().size.toByte()) + videoId.toByteArray()
+        put("params", Base64.getEncoder().encodeToString(bytes))
     }
 
     suspend fun search(query: String, params: String? = null): JsonObject =

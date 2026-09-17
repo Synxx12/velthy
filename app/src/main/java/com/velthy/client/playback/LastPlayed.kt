@@ -2,6 +2,7 @@
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.velthy.client.data.model.PlaybackSourceType
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.settings.migrateLegacyPrefs
 import kotlinx.serialization.Serializable
@@ -47,6 +48,10 @@ object LastPlayed {
                     it.localUri,
                     it.localPath,
                     it.durationText,
+                    radio = it.radioName,
+                    source = it.playbackSource,
+                    sourceType = it.playbackSourceType?.name,
+                    sourceId = it.playbackSourceId,
                 )
             },
             index = (index - start).coerceIn(0, window.lastIndex),
@@ -75,6 +80,11 @@ object LastPlayed {
                     fromAutoplay = it.auto,
                     localUri = it.local,
                     localPath = it.path,
+                    radioName = it.radio,
+                    playbackSource = it.source,
+                    playbackSourceType = it.sourceType
+                        ?.let { name -> runCatching { PlaybackSourceType.valueOf(name) }.getOrNull() },
+                    playbackSourceId = it.sourceId,
                 )
             },
             index = stored.index.coerceIn(0, stored.tracks.lastIndex),
@@ -114,6 +124,10 @@ object LastPlayed {
          * ago the app was opened.
          */
         val duration: String? = null,
+        val radio: String? = null,
+        val source: String? = null,
+        val sourceType: String? = null,
+        val sourceId: String? = null,
     )
 
     @Serializable

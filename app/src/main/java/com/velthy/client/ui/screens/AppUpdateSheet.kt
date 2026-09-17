@@ -232,6 +232,9 @@ private fun UpdateAvailableContent(
                     color = Color.White.copy(alpha = 0.5f),
                 )
             }
+            if (updateInfo.severity != com.velthy.client.data.UpdateSeverity.NORMAL) {
+                com.velthy.client.ui.components.UpdateSeverityBadge(severity = updateInfo.severity)
+            }
             if (updateInfo.fileSize > 0) {
                 Box(
                     modifier = Modifier
@@ -262,19 +265,15 @@ private fun UpdateAvailableContent(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 160.dp)
+                    .heightIn(max = 260.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color.Black.copy(alpha = 0.25f))
                     .padding(12.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
-                Text(
-                    text = updateInfo.releaseNotes,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontSize = 12.5.sp,
-                        lineHeight = 18.sp,
-                    ),
-                    color = Color.White.copy(alpha = 0.85f),
+                com.velthy.client.ui.components.MarkdownReleaseNotes(
+                    content = updateInfo.releaseNotes,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }

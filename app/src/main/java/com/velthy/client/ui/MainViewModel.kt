@@ -221,6 +221,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     durationMs = durationMs,
                     album = album,
                     sources = sources,
+                    order = com.velthy.client.data.settings.AppSettings.lyricsSourceOrder.value,
+                    prioritizeSyllableSync = com.velthy.client.data.settings.AppSettings
+                        .prioritizeSyllableSync.value,
                 )
             }.getOrNull()
 
@@ -572,6 +575,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Subscribes to the artist page [browseId]'s channel, or unsubscribes.
+     *
+     * The release equivalent is [toggleLibrary], and this behaves the same way:
+     * optimistic, rolled back on refusal, and a no-op on a page whose header
+     * never offered a subscribe button — a signed-out response among them.
+     */
+    fun toggleSubscription(browseId: String) {
+        if (!requireSignIn()) return
+        val current = _detailStack.value
+            .firstOrNull { it.browseId == browseId }?.subscription ?: return
+        val target = !current.subscribed
+        setSubscribedOnPage(browseId, target)
+        viewModelScope.launch {
+            if (YtMusicRepository.setSubscribed(current.channelId, target).isSuccess) {
+                // The Library tab's Subscriptions shelf is now out of date.
+                libraryStale = true
+            } else {
+                setSubscribedOnPage(browseId, current.subscribed)
+            }
+        }
+    }
+
+    /** As [setSavedOnPage], for the artist header's subscribe button. */
+    private fun setSubscribedOnPage(browseId: String, subscribed: Boolean) {
+        _detailStack.value = _detailStack.value.map { page ->
+            val subscription = page.subscription
+            if (page.browseId != browseId || subscription == null) {
+                page
+            } else {
+                page.copy(subscription = subscription.copy(subscribed = subscribed))
+            }
+        }
+    }
+
+    /**
      * Creates a playlist, seeded with [song] when the flow started from a
      * track's menu — one request, so it can't half-succeed into an empty
      * playlist the user has to add to again.
@@ -777,7 +815,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        viewModelScope.launch { AppUpdateChecker.check() }
+        // Checks on launch and, if something is newer, raises the notification —
+        // the background worker only runs on unmetered networks, so this is what
+        // covers someone on mobile data who never opens the app on Wi-Fi.
+        viewModelScope.launch { AppUpdateChecker.checkAndNotify(getApplication()) }
     }
 
     /**

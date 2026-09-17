@@ -3,6 +3,8 @@
     <string name="playback_channel_name">Now playing</string>
     <string name="download_channel_name">Downloads</string>
     <string name="download_channel_description">Songs being saved to your Music folder</string>
+    <string name="update_channel_critical_name">Critical updates</string>
+    <string name="update_channel_critical_description">Interrupts for updates that fix a serious problem.</string>
     <string name="download_notification_title">Downloading</string>
     <string name="download_notification_starting">Starting</string>
     <string name="download_notification_queued">%1$s · %2$d more queued</string>

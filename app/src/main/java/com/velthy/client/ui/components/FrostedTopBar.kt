@@ -50,19 +50,60 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.BuildConfig
 import com.velthy.client.R
-import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeEffect
-import dev.chrisbanes.haze.materials.HazeMaterials
+import com.velthy.client.data.settings.AppSettings
 
 /**
- * Telegram-style frosted glass top bar.
+ * The bar's own height, above whatever inset it is sitting under.
  *
- * The content behind must be tagged with `Modifier.hazeSource(hazeState)`;
- * this bar then samples and blurs whatever scrolls beneath it in real time
- * (RenderEffect on API 31+, translucent scrim fallback below).
+ * The single source of truth for it: the bar lays itself out to this, and
+ * everything that has to clear the bar — page content padding, [TopFadeBlur]'s
+ * ramp, fixed headers that sit directly beneath it — measures from here rather
+ * than from a copy of the number.
+ */
+val TopBarContentHeight = 52.dp
+
+/**
+ * The breathing room between the bar's bottom edge and the first thing under
+ * it, so content rests below the glass instead of against it.
+ */
+val TopBarContentGap = 12.dp
+
+/**
+ * How far down the window the bar actually ends: the status bar inset it is
+ * pinned under, plus its own height.
+ *
+ * This has to be read at composition rather than baked in as a constant — the
+ * inset is a property of the device and of the window, not of the app. A phone
+ * with a cutout, one without, and a freeform window with no status bar at all
+ * are all different numbers, and a fixed guess is wrong on all but one of them:
+ * too tight and content is clipped under the bar, too loose and every page
+ * opens on a band of empty space.
+ */
+@Composable
+fun topBarHeight(): Dp =
+    WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + TopBarContentHeight
+
+/**
+ * Where page content should start: clear of the bar, plus [TopBarContentGap].
+ */
+@Composable
+fun topBarContentPadding(): Dp = topBarHeight() + TopBarContentGap
+
+/**
+ * The top bar's content — title, back affordance, actions — over no backdrop
+ * of its own.
+ *
+ * The glass behind it is [TopFadeBlur]'s, drawn underneath: a blur that starts
+ * full at the status bar and ramps to nothing below, so the bar has no bottom
+ * edge to draw a line across the page with. A uniform pane would put that line
+ * back, which is the one thing every surface here is built to avoid.
+ *
+ * The exception is Reduce dynamic blur, where there is no fade to sit on and
+ * the bar fills itself solid instead — title over raw scrolling content is
+ * unreadable, so something has to carry it.
  *
  * Apple Music behaviour: the big in-list header owns the title at rest;
- * once the list scrolls, the small centered title + hairline divider fade in.
+ * once the list scrolls, the small centered title fades in.
  */
 @Composable
 fun FrostedTopBar(
@@ -77,15 +118,18 @@ fun FrostedTopBar(
     searchBar: (@Composable () -> Unit)? = null,
     actions: @Composable () -> Unit = {},
 ) {
-    val canBlur = rememberCanBlur()
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val titleAlpha by animateFloatAsState(
         targetValue = if (scrolled) 1f else 0f,
         animationSpec = tween(220),
         label = "topBarTitleAlpha",
     )
+    // Only the solid bar wants a hairline under it. A faded one has no edge for
+    // the line to mark, and drawing it there would be inventing the very seam
+    // the fade exists to remove.
     val dividerColor by animateColorAsState(
         targetValue = MaterialTheme.colorScheme.outline.copy(
-            alpha = if (scrolled && !canBlur) 0.6f else 0f,
+            alpha = if (scrolled && reduceDynamicBlur) 0.6f else 0f,
         ),
         animationSpec = tween(220),
         label = "topBarDivider",
@@ -98,7 +142,7 @@ fun FrostedTopBar(
                 detectTapGestures { /* Absorb any taps in top bar empty space so they never trigger items underneath */ }
             }
             .then(
-                if (!canBlur) Modifier.background(MaterialTheme.colorScheme.surface)
+                if (reduceDynamicBlur) Modifier.background(MaterialTheme.colorScheme.surface)
                 else Modifier,
             ),
     ) {

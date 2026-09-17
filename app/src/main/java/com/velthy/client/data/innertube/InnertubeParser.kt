@@ -389,7 +389,15 @@ object InnertubeParser {
         // name them differently, so each is fished out by key with a fallback
         // rather than by one path that would rot.
         val subscribe = header?.let { collectRenderers(it, "subscribeButtonRenderer").firstOrNull() }
+        // The count is named differently depending on which shape the page was
+        // served in: the older button says `subscriberCountText`, the newer one
+        // hides it in the subscribe label, and the other button carries a long
+        // or short form. All are tried rather than one path that would rot, so
+        // both chips fill from a real artist page instead of only some of them.
         val subscriberCount = subscribe.o("subscriberCountText").runs()
+            .ifBlank { subscribe.o("subscriberCountWithSubscribeText").runs() }
+            .ifBlank { subscribe.o("longSubscriberCountText").runs() }
+            .ifBlank { subscribe.o("shortSubscriberCountText").runs() }
             .ifBlank { header.o("musicImmersiveHeaderRenderer").o("subscriberCountText").runs() }
             .ifBlank { header.o("musicImmersiveHeaderRenderer").o("subtitle").runs() }
             .ifBlank { header.o("musicVisualHeaderRenderer").o("subtitle").runs() }
@@ -404,9 +412,22 @@ object InnertubeParser {
             .takeIf { it.isNotBlank() }
         // Only when the button actually names a channel: an artist page whose
         // header carries no subscribe button has nothing to subscribe *to*, and
-        // a state without an id could not be written anyway.
-        val subscription = subscribe.s("channelId")?.takeIf { it.isNotBlank() }?.let { channelId ->
-            SubscriptionState(channelId = channelId, subscribed = subscribe.s("subscribed") == "true")
+        // a state without an id could not be written anyway. The id is usually
+        // on the button's `channelId`, but some shapes only carry it in the
+        // subscribe endpoint's own channel list.
+        val subscribedFlag = subscribe.s("subscribed")
+        val subscriptionChannelId = subscribe.s("channelId")
+            ?.takeIf { it.isNotBlank() }
+            ?: subscribe.a("serviceEndpoints")
+                ?.firstNotNullOfOrNull {
+                    it.o("subscribeEndpoint").a("channelIds")?.firstOrNull()
+                        ?.let { id -> (id as? JsonPrimitive)?.contentOrNull }
+                }
+                ?.takeIf { it.isNotBlank() }
+        val subscription = if (subscribedFlag != null && subscriptionChannelId != null) {
+            SubscriptionState(channelId = subscriptionChannelId, subscribed = subscribedFlag == "true")
+        } else {
+            null
         }
         // "Top songs" rows are billed by the page they sit on: the subtitle
         // beside them counts plays where a search row names the artist.

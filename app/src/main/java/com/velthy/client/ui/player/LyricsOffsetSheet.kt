@@ -1,0 +1,287 @@
+package com.velthy.client.ui.player
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.ui.components.rememberCanBlur
+import com.velthy.client.ui.haptics.Haptic
+import com.velthy.client.ui.haptics.rememberHaptics
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
+import dev.chrisbanes.haze.materials.HazeMaterials
+import java.util.Locale
+import kotlin.math.roundToInt
+
+private val DrawerShape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+private val ControlShape = RoundedCornerShape(16.dp)
+private val ScrimColor = Color.Black.copy(alpha = 0.5f)
+private val DrawerMaxWidth = 640.dp
+private const val StepMs = 100
+private const val DismissDragFraction = 0.25f
+
+/**
+ * A player drawer for shifting all synced lyrics against the playback clock.
+ *
+ * The whole page moves at once because that is what the fix is: a lyric file
+ * is stamped once by whoever wrote it, and if it is off it is off by a constant
+ * for the whole song. Nudging line by line would be an editor, not a control.
+ *
+ * Same drawer shape as the rest of the player: slides up from the bottom,
+ * drags down to dismiss, and the scrim fades with it rather than blinking out.
+ */
+@OptIn(ExperimentalHazeMaterialsApi::class)
+@Composable
+internal fun LyricsOffsetSheet(
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    hazeState: HazeState = remember { HazeState() },
+) {
+    val offsetMs by AppSettings.lyricsOffsetMs.collectAsStateWithLifecycle()
+    val haptics = rememberHaptics()
+    val canBlur = rememberCanBlur()
+    var drag by remember { mutableFloatStateOf(0f) }
+    var height by remember { mutableIntStateOf(0) }
+    val drawerOffset by animateFloatAsState(
+        targetValue = drag,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "lyricsOffsetDrawerOffset",
+    )
+    val scrimAlpha = if (height > 0) {
+        (1f - drawerOffset / height).coerceIn(0f, 1f)
+    } else {
+        1f
+    }
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(ScrimColor.copy(alpha = ScrimColor.alpha * scrimAlpha))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onDismiss,
+            ),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        AnimatedVisibility(
+            visible = shown,
+            enter = slideInVertically(tween(260, easing = FastOutSlowInEasing)) { it },
+            exit = slideOutVertically(tween(180)) { it },
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = DrawerMaxWidth)
+                    .fillMaxWidth()
+                    .onSizeChanged { height = it.height }
+                    .offset { IntOffset(0, drawerOffset.roundToInt()) }
+                    .clip(DrawerShape)
+                    .then(
+                        if (!canBlur) {
+                            Modifier.background(Color(0xFF121212))
+                        } else {
+                            Modifier
+                                .hazeEffect(state = hazeState, style = HazeMaterials.regular(Color(0xFF141414)))
+                                .background(Color(0xFF121212).copy(alpha = 0.9f))
+                        },
+                    )
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = {},
+                    )
+                    .pointerInput(height) {
+                        detectVerticalDragGestures(
+                            onDragEnd = {
+                                if (height > 0 && drag > height * DismissDragFraction) {
+                                    onDismiss()
+                                } else {
+                                    drag = 0f
+                                }
+                            },
+                            onDragCancel = { drag = 0f },
+                        ) { _, delta -> drag = (drag + delta).coerceAtLeast(0f) }
+                    }
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 10.dp, bottom = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    Modifier
+                        .padding(bottom = 12.dp)
+                        .size(width = 36.dp, height = 4.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.25f)),
+                )
+                Text(
+                    text = "Lyrics offset",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    color = Color.White,
+                    modifier = Modifier.fillMaxWidth().padding(start = 4.dp),
+                )
+                Text(
+                    text = "Shifts every synced line against the track, for lyrics that are " +
+                        "stamped a little early or late.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 4.dp, top = 3.dp, bottom = 14.dp),
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(ControlShape)
+                        .background(Color.White.copy(alpha = 0.05f))
+                        .padding(horizontal = 12.dp, vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = formatOffset(offsetMs),
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = Color.White,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OffsetButton(
+                            label = "−",
+                            contentDescription = "Decrease lyrics offset",
+                            enabled = offsetMs > AppSettings.MIN_LYRICS_OFFSET_MS,
+                        ) {
+                            haptics.play(Haptic.Select)
+                            AppSettings.setLyricsOffsetMs(offsetMs - StepMs)
+                        }
+                        ThinSlider(
+                            value = offsetToFraction(offsetMs),
+                            onValueChange = { AppSettings.setLyricsOffsetMs(fractionToOffset(it)) },
+                            idleHeight = 6.dp,
+                            activeHeight = 10.dp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OffsetButton(
+                            label = "+",
+                            contentDescription = "Increase lyrics offset",
+                            enabled = offsetMs < AppSettings.MAX_LYRICS_OFFSET_MS,
+                        ) {
+                            haptics.play(Haptic.Select)
+                            AppSettings.setLyricsOffsetMs(offsetMs + StepMs)
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Reset",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White.copy(alpha = if (offsetMs == 0) 0.35f else 0.8f),
+                    modifier = Modifier
+                        .padding(top = 12.dp)
+                        .clip(CircleShape)
+                        .clickable(enabled = offsetMs != 0) {
+                            haptics.play(Haptic.Tap)
+                            AppSettings.setLyricsOffsetMs(0)
+                        }
+                        .padding(horizontal = 18.dp, vertical = 9.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OffsetButton(
+    label: String,
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.semantics { this.contentDescription = contentDescription },
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleLarge,
+            color = Color.White.copy(alpha = if (enabled) 0.85f else 0.25f),
+        )
+    }
+}
+
+private fun offsetToFraction(offsetMs: Int): Float =
+    (offsetMs - AppSettings.MIN_LYRICS_OFFSET_MS).toFloat() /
+        (AppSettings.MAX_LYRICS_OFFSET_MS - AppSettings.MIN_LYRICS_OFFSET_MS)
+
+private fun fractionToOffset(fraction: Float): Int {
+    val raw = AppSettings.MIN_LYRICS_OFFSET_MS +
+        fraction.coerceIn(0f, 1f) *
+        (AppSettings.MAX_LYRICS_OFFSET_MS - AppSettings.MIN_LYRICS_OFFSET_MS)
+    return (raw / StepMs).roundToInt() * StepMs
+}
+
+private fun formatOffset(offsetMs: Int): String = String.format(
+    Locale.getDefault(),
+    "%+.1f s",
+    offsetMs / 1_000f,
+)

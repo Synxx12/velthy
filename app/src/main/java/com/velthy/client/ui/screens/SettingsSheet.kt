@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.MotionPhotosOff
 import androidx.compose.material.icons.rounded.MusicOff
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.PlaylistPlay
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SurroundSound
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Vibration
@@ -80,6 +82,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import com.velthy.client.data.AppUpdateChecker
+import com.velthy.client.data.lyrics.translationLanguageName
 import com.velthy.client.ui.icons.VelthyIcons
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -180,12 +183,26 @@ fun SettingsScreen(
      * screen.
      */
     onOpenSources: () -> Unit = {},
+    /**
+     * Opens the Spotify Canvas setup screen — where the listener pastes their
+     * `sp_dc` cookie so the original Canvas source becomes reachable. Offered
+     * as a parameter rather than hosted here so the page can cover the tab bar
+     * and the mini player like every other pushed screen.
+     */
+    onSpotifyCanvasAuth: () -> Unit = {},
+    /**
+     * Opens the language picker for the player's translate button. A pushed
+     * dialog rather than a row here, because the list is a hundred-odd
+     * languages long.
+     */
+    onTranslationLanguage: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var showUpdateSheet by remember { mutableStateOf(false) }
+    val updateNotifications by AppSettings.updateNotifications.collectAsStateWithLifecycle()
     var showPerformanceWarning by remember { mutableStateOf(false) }
     var showPerformanceConfirmation by remember { mutableStateOf(false) }
     // Asked of the system's own battery screen rather than guessed at: whatever
@@ -239,6 +256,7 @@ fun SettingsScreen(
     val animatedCanvas by AppSettings.animatedCanvas.collectAsStateWithLifecycle()
     val syncedLyrics by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
     val lyricsBlur by AppSettings.lyricsBlur.collectAsStateWithLifecycle()
+    val translationLanguage by AppSettings.translationLanguage.collectAsStateWithLifecycle()
     val lyricsSources by AppSettings.lyricsSources.collectAsStateWithLifecycle()
     val speed by AppSettings.playbackSpeed.collectAsStateWithLifecycle()
     val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
@@ -764,6 +782,16 @@ fun SettingsScreen(
                     checked = canvasOverCellular,
                     onCheckedChange = AppSettings::setCanvasOverCellular,
                 )
+                RowDivider()
+                // Only offered while animated covers are on: this is the door
+                // to the original Spotify Canvas, and there is nothing to open
+                // it for when the whole feature is switched off.
+                SettingsRow(
+                    icon = Icons.Rounded.SmartDisplay,
+                    title = "Set up Spotify Canvas",
+                    subtitle = "Connect a Spotify session to reach the original motion covers",
+                    onClick = onSpotifyCanvasAuth,
+                )
             }
             RowDivider()
             SettingsRow(
@@ -813,6 +841,21 @@ fun SettingsScreen(
                         .ifEmpty { "None — no lyrics will be fetched" },
                     trailing = { Chevron() },
                     onClick = onLyricsSources,
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Translate,
+                    title = "Translation language",
+                    subtitle = if (translationLanguage.isBlank()) {
+                        "App language"
+                    } else {
+                        translationLanguageName(
+                            translationLanguage,
+                            java.util.Locale.getDefault(),
+                        )
+                    },
+                    trailing = { Chevron() },
+                    onClick = onTranslationLanguage,
                 )
             }
         }
@@ -1208,7 +1251,10 @@ fun SettingsScreen(
                         checkingUpdate = true
                         updateStatusText = "Checking latest version..."
                         scope.launch {
-                            val update = AppUpdateChecker.check(force = true)
+                            // checkAndNotify, not check: a manual check is also a
+                            // request to be told, and it updates the same
+                            // once-per-version record the background worker uses.
+                            val update = AppUpdateChecker.checkAndNotify(context)
                             checkingUpdate = false
                             updateModalInfo = update
                             showUpdateSheet = true
@@ -1220,6 +1266,24 @@ fun SettingsScreen(
                         }
                     }
                 },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.NotificationsActive,
+                title = "Notify me about new versions",
+                subtitle = "Posts a notification when a new release is available, " +
+                    "including in the background",
+                trailing = {
+                    Switch(
+                        checked = updateNotifications,
+                        onCheckedChange = AppSettings::setUpdateNotifications,
+                        colors = SwitchDefaults.colors(
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+                        ),
+                    )
+                },
+                onClick = { AppSettings.setUpdateNotifications(!updateNotifications) },
             )
             RowDivider()
             SettingsRow(

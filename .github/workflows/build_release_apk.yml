@@ -122,6 +122,7 @@ jobs:
           MODULE_INDEX_URL: ${{ secrets.MODULE_INDEX_URL }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          PARTY_SERVER_URL: ${{ secrets.PARTY_SERVER_URL }}
         run: |
           MOD_URL="${MODULE_INDEX_URL:-https://monochrome.rickyaddons.dpdns.org/8spine-source.json}"
           echo "MODULE_INDEX_URL=${MOD_URL}" > local.properties
@@ -130,6 +131,14 @@ jobs:
           fi
           if [ -n "${LASTFM_SECRET}" ]; then
             echo "LASTFM_SECRET=${LASTFM_SECRET}" >> local.properties
+          fi
+          # Listen Together's server. Baked in at build time so a released app
+          # can join a party with nothing to configure; empty is fine and the
+          # app then asks for an address on the party screen. A secret is the
+          # override; the checked-in default in app/build.gradle.kts is this
+          # project's own hostname.
+          if [ -n "${PARTY_SERVER_URL}" ]; then
+            echo "PARTY_SERVER_URL=${PARTY_SERVER_URL}" >> local.properties
           fi
           echo "MODULE_INDEX_URL=${MOD_URL}" >> $GITHUB_ENV
           echo "✅ Properties configured securely"
@@ -140,6 +149,7 @@ jobs:
           MODULE_INDEX_URL: ${{ env.MODULE_INDEX_URL }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+          PARTY_SERVER_URL: ${{ secrets.PARTY_SERVER_URL }}
         run: |
           ./gradlew assembleProdRelease \
             -Pvelthy.versionName="${DISPLAY_VERSION}" \
@@ -252,7 +262,27 @@ jobs:
           # Clean the extracted notes for consumer presentation
           notes = sanitize_for_public(notes)
 
-          footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` (~27 MB) di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
+          # Detect update severity from changelog/notes to inject machine-readable marker:
+          # 1. Explicit marker in text (e.g., "Severity: Critical" or "<!-- Velthy-Severity: critical -->")
+          # 2. Keyword heuristic fallback
+          explicit_match = re.search(r'(?:Velthy-Severity|Severity)\s*:\s*[*_`\s]*([A-Za-z]+)', notes, re.IGNORE_CASE)
+          if explicit_match and explicit_match.group(1).lower() in ["critical", "important", "normal"]:
+              severity_tag = explicit_match.group(1).lower()
+          else:
+              notes_lower = notes.lower()
+              if any(k in notes_lower for k in ["critical", "kritis", "crash", "tertutup sendiri", "force close", "fatal", "kebocoran"]):
+                  severity_tag = "critical"
+              elif any(k in notes_lower for k in ["important", "penting", "security", "keamanan", "rebrand", "major"]):
+                  severity_tag = "important"
+              else:
+                  severity_tag = "normal"
+
+          # Inject machine-readable header for AppUpdateChecker parsing (if not already present)
+          if "<!-- Velthy-Severity:" not in notes:
+              severity_header = f"<!-- Velthy-Severity: {severity_tag} -->\n\n"
+              notes = severity_header + notes
+
+          footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
 
           with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
               f.write(notes + footer)

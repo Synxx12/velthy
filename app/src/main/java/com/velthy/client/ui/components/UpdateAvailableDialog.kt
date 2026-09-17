@@ -64,6 +64,7 @@ fun UpdateAvailableDialog(
     hazeState: HazeState,
     onDismiss: () -> Unit,
     onUpdate: () -> Unit,
+    severity: com.velthy.client.data.UpdateSeverity = com.velthy.client.data.UpdateSeverity.NORMAL,
     modifier: Modifier = Modifier,
 ) {
     val canBlur = rememberCanBlur()
@@ -117,8 +118,18 @@ fun UpdateAvailableDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center,
                 )
+                if (severity != com.velthy.client.data.UpdateSeverity.NORMAL) {
+                    UpdateSeverityBadge(
+                        severity = severity,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
                 Text(
-                    text = "Velthy $version is available to download.",
+                    text = if (severity == com.velthy.client.data.UpdateSeverity.NORMAL) {
+                        "Velthy $version is available to download."
+                    } else {
+                        severity.blurb
+                    },
                     modifier = Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 13.sp,

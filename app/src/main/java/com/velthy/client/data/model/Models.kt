@@ -15,6 +15,21 @@ data class Song(
     /** A music-video upload rather than the catalogue track. */
     val isVideo: Boolean = false,
     /**
+     * What this track was started from, for the line under the transport:
+     * the album, the playlist, or the station it came out of. Null when it was
+     * picked from a plain list, where there is nothing useful to name.
+     */
+    val playbackSource: String? = null,
+    /**
+     * Where tapping [playbackSource] should return in the app, and to what.
+     * A source with no id is still worth *naming* — the caption explains where
+     * the music came from either way — but only one with an id can be opened.
+     */
+    val playbackSourceType: PlaybackSourceType? = null,
+    val playbackSourceId: String? = null,
+    /** A station's own name, when the queue was built from one rather than a page. */
+    val radioName: String? = null,
+    /**
      * This track's identity *within one playlist*, which is not its [videoId]:
      * the same song added twice is two entries with two set-video-ids, and
      * removing one of them is only expressible in those terms. Present only on
@@ -40,6 +55,25 @@ data class Song(
     val localPath: String? = null,
     val sourceQuality: String? = null,
 )
+
+/**
+ * Where a track was started from, for the caption under the transport.
+ *
+ * Deliberately not a page type: this is about the *journey* to the song rather
+ * than the song's own catalogue identity, so a track opened from search and the
+ * same track opened from an album are two different answers to "playing from
+ * where?" — which is exactly the question the caption is there to answer.
+ */
+enum class PlaybackSourceType {
+    HOME,
+    SEARCH,
+    HISTORY,
+    REPLAY,
+    EXPLORE,
+    BROWSE,
+    SHARED_LINK,
+    QUEUE,
+}
 
 /**
  * Artwork at a given pixel size.

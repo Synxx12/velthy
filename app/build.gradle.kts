@@ -30,6 +30,13 @@ val lastfmSecret: String = (
         ?: System.getenv("LASTFM_SECRET")
         ?: ""
     ).trim()
+// Where Listen Together reaches its server. The in-app field on the party
+// screen overrides this per install, so a self-hosted deployment never fights
+// it. Same override ladder as the above; `api.velthy.my.id` is this project's
+// own tunnel hostname (see backend-nest/README).
+val partyServerUrl: String = System.getenv("PARTY_SERVER_URL")
+    ?: localProps.getProperty("PARTY_SERVER_URL")
+    ?: "https://api.velthy.my.id"
 
 val signing = Properties().apply {
     val file = rootProject.file("keystore.properties")
@@ -42,9 +49,9 @@ val hasReleaseSigning: Boolean = signing.isNotEmpty()
 // otherwise. Keeping the tag and the APK's versionName in lockstep stops a
 // release from shipping under a name that does not match its tag.
 val appVersionName: String =
-    providers.gradleProperty("velthy.versionName").orNull ?: "1.4.6.5"
+    providers.gradleProperty("velthy.versionName").orNull ?: "1.4.6.6"
 val appVersionCode: Int =
-    providers.gradleProperty("velthy.versionCode").orNull?.toInt() ?: 26
+    providers.gradleProperty("velthy.versionCode").orNull?.toInt() ?: 27
 
 android {
     namespace = "com.velthy.client"
@@ -64,6 +71,7 @@ android {
         buildConfigField("String", "MODULE_INDEX_URL", "\"${moduleIndexUrl}\"")
         buildConfigField("String", "LASTFM_API_KEY", "\"${lastfmApiKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("String", "LASTFM_SECRET", "\"${lastfmSecret.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+        buildConfigField("String", "PARTY_SERVER_URL", "\"${partyServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     splits {
@@ -294,6 +302,12 @@ dependencies {
 
     // ---- Auth/session storage ----
     implementation("androidx.security:security-crypto:1.1.0")
+
+    // ---- Background update checks ----
+    // Periodic release polling without a backend: WorkManager is the only
+    // scheduler Android guarantees will run across process death, Doze and
+    // reboots, which is what keeps a "new version" notification reliable.
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     // Audio is progressive, but Apple serves its motion artwork as HLS — this
     // is what lets the animated sleeve play it. See CanvasArtworkPlayer.

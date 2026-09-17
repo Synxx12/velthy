@@ -33,10 +33,8 @@ import kotlin.math.sqrt
  *
  * All of it is baked into one bitmap because a widget cannot blur anything at
  * runtime — [android.widget.RemoteViews] has no RenderEffect, no Haze, no
- * shaders, and no way to reach a view's render node. So the effect the app gets
- * live from
- * [BottomFadeBlur][com.velthy.client.ui.components.BottomFadeBlur] has to be
- * drawn here instead, once per track, on the CPU.
+ * shaders, and no way to reach a view's render node. So an effect the app draws
+ * with real blur live has to be drawn here instead, once per track, on the CPU.
  *
  * The ramp is four progressively blurrier copies of the bottom of the cover,
  * drawn back over it softest-first, each masked by a vertical alpha gradient

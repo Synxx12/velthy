@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# Velthy Party — what must never reach the repository
+#
+# The rule this file exists for: a checkout should build from source, and
+# nothing that is *generated* or *secret* should ever be committed. Two of the
+# entries below are load-bearing rather than tidy:
+#
+#   .env           holds the Cloudflare tunnel token, which is a credential —
+#                  anyone with it can run this tunnel.
+#   *.zip          the packaged releases of this folder. They are artifacts of
+#                  the source beside them, and a 90 kB blob that changes on
+#                  every repackage makes every diff unreadable.
+# ---------------------------------------------------------------------------
+
+# --- Secrets ---------------------------------------------------------------
+# Never commit. See .env.example for the shape of what belongs here.
+.env
+.env.*
+!.env.example
+*.env
+v.env_variable
+
+# --- Dependencies ----------------------------------------------------------
+node_modules/
+
+# --- Build output ----------------------------------------------------------
+dist/
+build/
+*.tsbuildinfo
+
+# --- Packaged releases -----------------------------------------------------
+# Dockerfile.zip / README.zip / startup.zip — generated, not source.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# --- Logs ------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+srv.out
+srv.err
+
+# --- OS / editor scratch ---------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+
+# --- Local runtime state ---------------------------------------------------
+# Anything written by a run on this machine rather than by the source.
+*.pid
+*.seed
+tmp/
+temp/

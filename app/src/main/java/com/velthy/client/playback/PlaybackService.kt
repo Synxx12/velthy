@@ -57,6 +57,7 @@ import com.velthy.client.data.scrobbling.LastFM
 import com.velthy.client.data.scrobbling.ListenBrainzManager
 import com.velthy.client.data.scrobbling.ScrobbleManager
 import com.velthy.client.data.settings.AppSettings
+import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.data.sources.SourceResolver
 import com.velthy.client.data.sources.SourceStream
 import com.velthy.client.data.sources.StreamFormat
@@ -162,10 +163,15 @@ class PlaybackService : MediaSessionService() {
         SessionCommand(ACTION_TOGGLE_AUTOPLAY, Bundle.EMPTY)
     private val shuffleCommand =
         SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY)
+    private val stationCommand =
+        SessionCommand(ACTION_START_STATION, Bundle.EMPTY)
+    private val revertCommand =
+        SessionCommand(ACTION_REVERT_ORIGINAL, Bundle.EMPTY)
 
     private var favoriteActionJob: Job? = null
     private var autoplayLoadJob: Job? = null
     private var autoplaySeed: String? = null
+    private var stationActionJob: Job? = null
 
     private val sessionCallback = object : MediaSession.Callback {
         override fun onConnect(
@@ -176,6 +182,8 @@ class PlaybackService : MediaSessionService() {
                 .add(favoriteCommand)
                 .add(autoplayCommand)
                 .add(shuffleCommand)
+                .add(stationCommand)
+                .add(revertCommand)
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
@@ -192,6 +200,10 @@ class PlaybackService : MediaSessionService() {
             when (customCommand.customAction) {
                 ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
                 ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromNotification()
+                ACTION_START_STATION -> startStationFromSession()
+                ACTION_REVERT_ORIGINAL -> session.player.currentMediaItem?.mediaId?.let {
+                    toggleRevertFromNotification(it)
+                }
                 ACTION_TOGGLE_FAVORITE -> session.player.currentMediaItem?.mediaId?.let {
                     toggleFavoriteFromNotification(it)
                 }
@@ -354,6 +366,12 @@ class PlaybackService : MediaSessionService() {
                 is Resolved.Module -> {
                     NerdStats.onSourceStream(videoId, won.stream.format)
                     StreamChoice.remember(videoId, won.stream, substituted = true)
+                    // A substitute just took over for this track, which is what
+                    // makes the notification's Revert button applicable — and
+                    // no track transition is coming to refresh the layout, so
+                    // this is the only moment it can appear. Posted rather than
+                    // made here: this runs on the loader thread, mid-resolve.
+                    scope.launch { mediaSession?.setCustomLayout(notificationButtons()) }
                     dataSpec.buildUpon()
                         .setUri(Uri.parse(won.stream.url))
                         .setHttpRequestHeaders(won.stream.headers)
@@ -472,6 +490,10 @@ class PlaybackService : MediaSessionService() {
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 publishWidgetState(playing = playWhenReady)
+                // The *reason* is only available here — [Player] has no getter
+                // for it — and it is the only way to tell a pause caused by
+                // another app taking the audio from one the user asked for.
+                partySync?.onPlayWhenReadyChanged(playWhenReady, reason)
             }
 
             override fun onPositionDiscontinuity(
@@ -506,6 +528,16 @@ class PlaybackService : MediaSessionService() {
                     swappingMediaId = null
                     return
                 }
+
+                // A swap that never completed its fade-up leaves the session
+                // player's own gain below unity, and the volume belongs to the
+                // player rather than to the track — so the *next* track would
+                // inherit the silence. Restored here, at the one moment a swap
+                // can no longer be in flight, as a backstop for any path that
+                // got torn down before its own `finally` could run. Deferred to
+                // a crossfade when one is starting, since it owns the volume
+                // then and is about to raise the incoming track itself.
+                restorePlayerVolume()
 
                 // A new track is a clean slate for [recoverFrom]. The count
                 // exists to stop one broken stream looping, not to hold a
@@ -767,13 +799,36 @@ class PlaybackService : MediaSessionService() {
         crossfade = controller
         controller.start()
 
-        mediaSession = MediaSession.Builder(this, SessionPlayer(exoPlayer, controller))
+        // Listen Together's binding to the transport. Created here, in the
+        // service, rather than in the UI: a party has to survive the app being
+        // backgrounded and the screen going off, which is most of what listening
+        // together actually looks like. See [PartySync].
+        partySync = PartySync(scope) { exoPlayer }.also { it.start() }
+
+        mediaSession = MediaSession.Builder(
+            this,
+            SessionPlayer(
+                player = exoPlayer,
+                crossfade = controller,
+                onUserIntent = { partySync?.onLocalIntent() },
+                deferPlayToParty = { partySync?.shouldDeferPlay() == true },
+            ),
+        )
             .setId(SESSION_ID)
             .setSessionActivity(sessionActivity())
             .setCallback(sessionCallback)
             .build()
         mediaSession?.setCustomLayout(notificationButtons())
     }
+
+    /**
+     * The party layer, or null before the player is built. Read by [SessionPlayer]
+     * so that every user action — from the app, the notification, a headset
+     * button — is published to the party, and by [PlaybackServiceMediator]'s play
+     * path so a resume can be held for the party's own scheduled instant.
+     */
+    @Volatile
+    private var partySync: PartySync? = null
 
     /**
      * The crossfade's tail player: plays out the last seconds of the track
@@ -1204,6 +1259,14 @@ class PlaybackService : MediaSessionService() {
         val duration: Long,
     )
 
+    /**
+     * Ramps the session player to silence ahead of a quality swap.
+     *
+     * This is a whole-player mute, not a per-track one: the volume belongs to
+     * the [ExoPlayer], so anything that leaves it at zero silences every track
+     * after this one too. [restorePlayerVolume] is what puts it back, and the
+     * swap guarantees it runs — see [swapIn].
+     */
     private suspend fun smoothMicroFadeDown(player: ExoPlayer) {
         withContext(Dispatchers.Main) {
             val startVol = player.volume
@@ -1224,6 +1287,27 @@ class PlaybackService : MediaSessionService() {
                 delay(6)
             }
             player.volume = 1f
+        }
+    }
+
+    /**
+     * Puts the session player's own gain back to unity.
+     *
+     * Only safe to call when no crossfade is driving the volume, so every call
+     * site checks that first — a live fade is moving this number on purpose and
+     * a restore would step on it. The whole reason this exists is the quality
+     * swap's mute: it is a property of the *player*, not of the track that was
+     * being swapped, so a swap abandoned between its fade-down and its fade-up
+     * left every later track silent. Nothing else in the app restores it, and
+     * the symptom — "sound disappears mid-song and never comes back" — has no
+     * other cause in this file.
+     */
+    private fun restorePlayerVolume() {
+        if (crossfade?.isTransitioning() == true) return
+        val exoPlayer = player ?: return
+        if (exoPlayer.volume != 1f) {
+            TrackLog.d("Velthy", "restoring player volume (was ${exoPlayer.volume})")
+            exoPlayer.volume = 1f
         }
     }
 
@@ -1344,19 +1428,31 @@ class PlaybackService : MediaSessionService() {
             swappingMediaId = mediaId
             swapCutAt = SystemClock.elapsedRealtime()
 
-            // Smooth micro-fade down to prevent click/glitch
-            smoothMicroFadeDown(player)
+            // The mute and everything after it runs inside `try`, with a
+            // restore in `finally`. The volume is the *player's*, so a swap
+            // torn down between its two halves — a skip, a queue advance, a
+            // recovery, or this very job being cancelled — used to leave the
+            // session player stuck at zero and every following track silent.
+            // The fade-down is inside the try as well as the fade-up: cancelling
+            // the ramp partway leaves the gain at some partial value, which is
+            // just as much a bug as leaving it at zero. `finally` runs on
+            // cancellation too, so the gain comes back however the swap ends.
+            try {
+                // Smooth micro-fade down to prevent click/glitch
+                smoothMicroFadeDown(player)
 
-            player.replaceMediaItem(
-                player.currentMediaItemIndex,
-                now.item.buildUpon().setUri(upgradedUri).build(),
-            )
-            // Precise offset compensation so audio resumes seamlessly with zero repeat/gap
-            player.seekTo(player.currentMediaItemIndex, exactPosition + 35L)
-            player.prepare()
+                player.replaceMediaItem(
+                    player.currentMediaItemIndex,
+                    now.item.buildUpon().setUri(upgradedUri).build(),
+                )
+                // Precise offset compensation so audio resumes seamlessly with zero repeat/gap
+                player.seekTo(player.currentMediaItemIndex, exactPosition + 35L)
+                player.prepare()
 
-            // Smooth micro-fade up once the new lossless stream renders (or after short wait)
-            launch(Dispatchers.Main) {
+                // Smooth micro-fade up once the new lossless stream renders (or
+                // after short wait). Inside the same scope rather than a
+                // detached `launch`, so it cannot outlive or be orphaned by the
+                // swap it belongs to.
                 val startWait = SystemClock.elapsedRealtime()
                 while (player.playbackState != Player.STATE_READY &&
                     player.playbackState != Player.STATE_ENDED &&
@@ -1365,6 +1461,10 @@ class PlaybackService : MediaSessionService() {
                     delay(15)
                 }
                 smoothMicroFadeUp(player)
+            } finally {
+                // A crossfade owns the volume while it is running, so defer to
+                // it; otherwise force unity.
+                restorePlayerVolume()
             }
 
             StreamChoice.remember(mediaId, stream, substituted = true)
@@ -1816,6 +1916,7 @@ class PlaybackService : MediaSessionService() {
                 mediaId = videoId,
                 target = target,
                 playing = quick.format,
+                servedBy = quick.sourceConfigId,
             )
             if (!settled) NerdStats.onLosslessRaceEnd(videoId)
             return Resolved.Module(quick)
@@ -1893,44 +1994,29 @@ class PlaybackService : MediaSessionService() {
         )
     }
 
-    private var losslessPrefetchJob: Job? = null
-
     /**
      * Hands the cache the queue ahead of the one playing: [AudioCache.QUEUE_DEPTH]
      * tracks is more than it does anything with, but it decides that, not this.
-     * Also prefetches Hi-Res Lossless FLAC for the next upcoming track when enabled.
+     *
+     * Each upcoming item rides with its [TrackMatcher.Target] so the cache can
+     * ask a quick source for a substitute *before* the track is reached and pin
+     * the answer — see [AudioCache.prefetchQueue] and
+     * [SourceResolver.prefetchSubstitute]. That start-on-the-source-that-answers
+     * is what makes the next track begin as fast as this one did.
      */
     private fun prefetchAround(player: ExoPlayer) {
         val nextIndex = player.nextMediaItemIndex
-        val upcomingIds = if (nextIndex != C.INDEX_UNSET) {
+        val upcoming = if (nextIndex != C.INDEX_UNSET) {
             val end = (nextIndex + AudioCache.QUEUE_DEPTH - 1).coerceAtMost(player.mediaItemCount - 1)
-            (nextIndex..end).map { player.getMediaItemAt(it).mediaId }
+            (nextIndex..end).mapNotNull { index ->
+                val item = player.getMediaItemAt(index)
+                val uri = item.localConfiguration?.uri
+                uri?.let { AudioCache.Upcoming(item.mediaId, SourceResolver.targetIn(it)) }
+            }
         } else {
             emptyList()
         }
-        AudioCache.prefetchQueue(upcomingIds)
-
-        // Staggered & safe prefetch of Lossless FLAC stream for the next track in the queue
-        if (AppSettings.isLosslessAllowedNow && nextIndex != C.INDEX_UNSET && SourceResolver.canSubstituteForYouTube()) {
-            val nextItem = player.getMediaItemAt(nextIndex)
-            val nextMediaId = nextItem.mediaId
-            val nextUri = nextItem.localConfiguration?.uri
-            if (nextUri != null && StreamChoice.of(nextMediaId) == null) {
-                val target = SourceResolver.targetIn(nextUri)
-                if (target.title.isNotBlank()) {
-                    losslessPrefetchJob?.cancel()
-                    losslessPrefetchJob = scope.launch(Dispatchers.IO) {
-                        delay(3500) // Delay 3.5s so the active song gets initial bandwidth and avoids burst
-                        val losslessStream = SourceResolver.substituteForYouTube(target)
-                        if (losslessStream != null && !losslessStream.belowRequest) {
-                            StreamChoice.remember(nextMediaId, losslessStream, substituted = true)
-                            QualityUpgrade.force(nextMediaId, losslessStream)
-                            TrackLog.d("Velthy", "Prefetched Lossless FLAC for next queue track: '${target.title}'")
-                        }
-                    }
-                }
-            }
-        }
+        AudioCache.prefetchQueue(upcoming)
     }
 
     /**
@@ -2460,16 +2546,24 @@ class PlaybackService : MediaSessionService() {
 
         val exactPosition = player.currentPosition
         scope.launch(Dispatchers.Main) {
-            smoothMicroFadeDown(player)
-            swappingMediaId = mediaId
-            player.replaceMediaItem(
-                player.currentMediaItemIndex,
-                item.buildUpon().setUri(cleanUri).build(),
-            )
-            player.seekTo(player.currentMediaItemIndex, exactPosition + 35L)
-            player.prepare()
-            delay(20)
-            smoothMicroFadeUp(player)
+            // Same guarantee as the upgrade swap: the mute is the player's, so
+            // the gain has to come back even if this coroutine is cancelled
+            // partway through the ramp or between the two halves — otherwise
+            // the whole session goes silent.
+            try {
+                smoothMicroFadeDown(player)
+                swappingMediaId = mediaId
+                player.replaceMediaItem(
+                    player.currentMediaItemIndex,
+                    item.buildUpon().setUri(cleanUri).build(),
+                )
+                player.seekTo(player.currentMediaItemIndex, exactPosition + 35L)
+                player.prepare()
+                delay(20)
+                smoothMicroFadeUp(player)
+            } finally {
+                restorePlayerVolume()
+            }
         }
     }
 
@@ -2506,6 +2600,33 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun notificationButtons(): List<CommandButton> {
+        val current = player?.currentMediaItem?.toSong()
+        // Offered only while there is something to go back to: a real YouTube
+        // id, on a substitute stream, that the listener has not already pinned
+        // here. Anything else and the button would be a no-op with a label.
+        val revert = current
+            ?.takeIf {
+                it.canStartStation() &&
+                    it.localUri == null &&
+                    StreamChoice.isSubstitute(it.videoId)
+            }
+            ?.let {
+                CommandButton.Builder(CommandButton.ICON_SYNC)
+                    .setSessionCommand(revertCommand)
+                    .setDisplayName("Revert to original")
+                    .build()
+            }
+        // The station leads, like BitChord's: Android Auto shows only the first
+        // few custom actions, and "play this as a radio" is the one worth
+        // reaching from a car without a menu.
+        val station = current
+            ?.takeIf { it.canStartStation() }
+            ?.let {
+                CommandButton.Builder(CommandButton.ICON_RADIO)
+                    .setSessionCommand(stationCommand)
+                    .setDisplayName("Start radio")
+                    .build()
+            }
         val favorite = CommandButton.Builder(
             if (LikeState.overrides.value[player?.currentMediaItem?.mediaId] == LikeStatus.LIKE) {
                 CommandButton.ICON_HEART_FILLED
@@ -2527,11 +2648,44 @@ class PlaybackService : MediaSessionService() {
             .setSessionCommand(shuffleCommand)
             .setDisplayName(if (shuffleEnabled) "Shuffle off" else "Shuffle on")
             .build()
-        return listOf(favorite, shuffle)
+        // AutoPlay last, and always present rather than only while it is on:
+        // Android Auto shows a fixed number of these without an overflow menu,
+        // so what is on the list has to be worth its slot in every state. The
+        // heart says whether the track is liked; shuffle and AutoPlay say what
+        // happens next — the three things worth reaching from a lock screen.
+        val autoplayEnabled = AppSettings.autoplay.value
+        val autoplay = CommandButton.Builder(
+            if (autoplayEnabled) {
+                CommandButton.ICON_REPEAT_ALL
+            } else {
+                CommandButton.ICON_REPEAT_OFF
+            },
+        )
+            .setSessionCommand(autoplayCommand)
+            .setDisplayName(if (autoplayEnabled) "Autoplay off" else "Autoplay on")
+            .build()
+        // Station and revert lead, and are conditional; the three that follow
+        // are always present. Android Auto shows only the first few without an
+        // overflow, so the two that describe *this track* come before the three
+        // that describe how the queue plays.
+        return listOfNotNull(station, revert, favorite, shuffle, autoplay)
     }
 
     private fun toggleShuffleFromNotification() {
         player?.let(QueueShuffle::toggle)
+        mediaSession?.setCustomLayout(notificationButtons())
+    }
+
+    /**
+     * Sends the current track back to YouTube's own upload.
+     *
+     * The same call the player's menu makes, and after it the button is gone:
+     * once the copy on screen *is* YouTube's there is nothing further to revert
+     * to, and [notificationButtons] reads the resulting state on the next
+     * refresh rather than being told to.
+     */
+    private fun toggleRevertFromNotification(mediaId: String) {
+        switchToOriginalYouTube(mediaId)
         mediaSession?.setCustomLayout(notificationButtons())
     }
 
@@ -2582,6 +2736,64 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /**
+     * Replaces everything around the current track with its YouTube Music
+     * radio, the way the notification's Station button asks for.
+     *
+     * The playing item itself is retained, so asking from a lock screen does not
+     * restart the song or lose the position. Everything before it goes too: a
+     * station is what is playing *now*, not a thing appended to whatever queue
+     * happened to be open, and leaving the earlier tracks in place would make
+     * the notification's next/previous buttons reach back into a list the
+     * listener did not ask for.
+     */
+    private fun startStationFromSession() {
+        val exoPlayer = player ?: return
+        val currentItem = exoPlayer.currentMediaItem ?: return
+        val seed = currentItem.toSong().takeIf { it.canStartStation() } ?: return
+        // The user's own queue, snapshotted so a station started from a stale
+        // screen cannot land on a queue that has moved on underneath it.
+        val originalManualQueue = (0 until exoPlayer.mediaItemCount)
+            .map { exoPlayer.getMediaItemAt(it) }
+            .filterNot { it.fromAutoplay }
+            .map { it.mediaId }
+
+        stationActionJob?.cancel()
+        stationActionJob = scope.launch {
+            val radioSeed = seed.copy(radioName = seed.title)
+            val related = loadAutoplayTracks(
+                existing = listOf(radioSeed),
+                seedSong = radioSeed,
+            ).getOrElse {
+                TrackLog.w("Velthy", "station failed: ${it.message}")
+                return@launch
+            }
+            if (related.isEmpty()) return@launch
+
+            val activePlayer = player ?: return@launch
+            val activeManualQueue = (0 until activePlayer.mediaItemCount)
+                .map { activePlayer.getMediaItemAt(it) }
+                .filterNot { it.fromAutoplay }
+                .map { it.mediaId }
+            // The queue moved while the station was loading, so this result is
+            // about a track the listener has already left.
+            if (activePlayer.currentMediaItem?.mediaId != currentItem.mediaId ||
+                activeManualQueue != originalManualQueue
+            ) {
+                return@launch
+            }
+
+            val currentIndex = activePlayer.currentMediaItemIndex
+            if (currentIndex + 1 < activePlayer.mediaItemCount) {
+                activePlayer.removeMediaItems(currentIndex + 1, activePlayer.mediaItemCount)
+            }
+            if (currentIndex > 0) activePlayer.removeMediaItems(0, currentIndex)
+            activePlayer.addMediaItems(1, related.map { it.toMediaItem() })
+            saveQueue()
+            publishWidgetState()
+        }
+    }
+
     private fun loadAutoplayForCurrentTrack() {
         val exoPlayer = player ?: return
         if (!AppSettings.autoplay.value ||
@@ -2615,6 +2827,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // Before anything else: the party layer holds coroutines that would
+        // otherwise read a player this method is about to tear down.
+        partySync?.stop()
+        partySync = null
         usbDacWatch?.close()
         usbDacWatch = null
         if (instance == this) instance = null
@@ -2694,21 +2910,78 @@ class PlaybackService : MediaSessionService() {
     private class SessionPlayer(
         player: Player,
         private val crossfade: CrossfadeController,
+        /**
+         * Told whenever a *user* action passes through. Every control this app
+         * publishes to a party comes from here, which is what makes the two
+         * directions distinguishable: the party's own corrections are written to
+         * the raw [androidx.media3.exoplayer.ExoPlayer] underneath this wrapper,
+         * so nothing [PartySync] does to the player can come back to it as an
+         * intent. See [PartySync.onLocalIntent].
+         */
+        private val onUserIntent: () -> Unit = {},
+        /**
+         * Whether a `play()` should be held back for the party's own scheduled
+         * instant. See [PartySync.shouldDeferPlay].
+         */
+        private val deferPlayToParty: () -> Boolean = { false },
     ) : ForwardingPlayer(player) {
 
         override fun seekToPreviousMediaItem() {
             crossfade.onSkipRequested()
             wrappedPlayer.seekToPrevious()
+            onUserIntent()
         }
 
         override fun seekToNextMediaItem() {
             crossfade.onSkipRequested()
             wrappedPlayer.seekToNextMediaItem()
+            onUserIntent()
         }
 
         override fun seekToNext() {
             crossfade.onSkipRequested()
             wrappedPlayer.seekToNext()
+            onUserIntent()
+        }
+
+        override fun play() {
+            // Held for the party when it can schedule the instant, so every
+            // device starts together. The press is never swallowed: the party's
+            // echo starts the player, and a fallback starts it anyway if that
+            // echo never arrives. See [PartySync.shouldDeferPlay].
+            onUserIntent()
+            if (deferPlayToParty()) return
+            wrappedPlayer.play()
+        }
+
+        override fun pause() {
+            onUserIntent()
+            wrappedPlayer.pause()
+        }
+
+        override fun seekTo(positionMs: Long) {
+            onUserIntent()
+            wrappedPlayer.seekTo(positionMs)
+        }
+
+        override fun setMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long) {
+            wrappedPlayer.setMediaItems(mediaItems, startIndex, startPositionMs)
+            onUserIntent()
+        }
+
+        override fun addMediaItems(index: Int, mediaItems: List<MediaItem>) {
+            wrappedPlayer.addMediaItems(index, mediaItems)
+            onUserIntent()
+        }
+
+        override fun removeMediaItems(fromIndex: Int, toIndex: Int) {
+            wrappedPlayer.removeMediaItems(fromIndex, toIndex)
+            onUserIntent()
+        }
+
+        override fun moveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int) {
+            wrappedPlayer.moveMediaItems(fromIndex, toIndex, newIndex)
+            onUserIntent()
         }
     }
 
@@ -2718,6 +2991,8 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_TOGGLE_FAVORITE = "com.velthy.client.action.TOGGLE_FAVORITE"
         const val ACTION_TOGGLE_AUTOPLAY = "com.velthy.client.action.TOGGLE_AUTOPLAY"
         const val ACTION_TOGGLE_SHUFFLE = "com.velthy.client.action.TOGGLE_SHUFFLE"
+        const val ACTION_START_STATION = "com.velthy.client.action.START_STATION"
+        const val ACTION_REVERT_ORIGINAL = "com.velthy.client.action.REVERT_ORIGINAL"
 
         /** How often played-seconds are sampled off the player. */
         const val PROGRESS_SAMPLE_MS = 1_000L
@@ -2914,3 +3189,17 @@ class PlaybackService : MediaSessionService() {
         }
     }
 }
+
+/**
+ * Whether YouTube can build a station from this track.
+ *
+ * Asked of the *id*, not of where the bytes are coming from: a station is looked
+ * up by video id, so anything without a real one — a file on the device
+ * (`content://`, `file://`) or a track from a source-backed id the app minted
+ * itself — has nothing for the radio request to search on.
+ */
+private fun Song.canStartStation(): Boolean =
+    videoId.isNotBlank() &&
+        !videoId.startsWith("content://") &&
+        !videoId.startsWith("file://") &&
+        SourceRegistry.parseTrackKey(videoId) == null

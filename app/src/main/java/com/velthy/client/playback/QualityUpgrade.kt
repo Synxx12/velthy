@@ -7,7 +7,6 @@ import com.velthy.client.data.NerdStats
 import com.velthy.client.data.sources.SourceResolver
 import com.velthy.client.data.sources.SourceStream
 import com.velthy.client.data.sources.StreamFormat
-import com.velthy.client.data.sources.StreamRequest
 import com.velthy.client.data.sources.TrackMatcher
 import kotlinx.coroutines.Deferred
 import java.util.concurrent.ConcurrentHashMap
@@ -75,6 +74,13 @@ object QualityUpgrade {
          * and an unknown floor is one nothing lossy clears.
          */
         val playing: StreamFormat? = null,
+        /**
+         * The source already serving this track, if known — see
+         * [SourceResolver.upgradeFor]'s own `servedBy`. Left out of the second
+         * look so a deterministic catalogue isn't asked the same question
+         * twice for a rejection it already gave the first time.
+         */
+        val servedBy: String? = null,
     )
 
     private val pending = ConcurrentHashMap<String, Pending>()
@@ -160,26 +166,34 @@ object QualityUpgrade {
      * describe the search that is genuinely still running, and go out for good
      * once the answer is known to be no.
      *
-     * Does nothing unless lossless is what the connection and the settings
-     * currently add up to. There is no such thing as an upgrade from a stream
-     * that is already everything that was asked for, and marking one pending
-     * would light the badge for a search with no possible outcome.
+     * Does nothing unless something outranks YouTube to look at. What counts as
+     * an upgrade is [SourceResolver.worthSwapping]'s decision, made against what
+     * is *actually playing* rather than against the request: a track that
+     * landed on YouTube's ~160kbps Opus has a whole list of better copies to
+     * chase, and chasing them used to require the connection to be asking for
+     * lossless — which meant the ordinary case was never upgraded at all.
      */
     fun settledForLess(
         mediaId: String,
         target: TrackMatcher.Target,
         inFlight: Deferred<SourceStream?>? = null,
         playing: StreamFormat? = null,
+        servedBy: String? = null,
     ): Boolean {
-        if (target.title.isBlank() ||
+        // Not gated on the request being lossless. A source ranked above
+        // YouTube can be worth swapping to on bitrate alone — see
+        // [SourceResolver.worthSwapping] — and requiring lossless here meant a
+        // lookup that was still running got cancelled outright the moment
+        // YouTube won the race, so a 320kbps source never finished and never
+        // played. [SourceResolver.upgradeFor] applies the real quality bar.
+        if (target.title.isBlank() || target.isVideo ||
             mediaId in refused ||
-            SourceResolver.requestForNow() !is StreamRequest.Lossless ||
             !SourceResolver.canSubstituteForYouTube()
         ) {
             inFlight?.cancel()
             return false
         }
-        pending[mediaId] = Pending(target, inFlight, playing)
+        pending[mediaId] = Pending(target, inFlight, playing, servedBy)
         NerdStats.onLosslessRaceStart(mediaId)
         TrackLog.d(
             TAG,
@@ -240,12 +254,16 @@ object QualityUpgrade {
      * entry and the settings; nothing here touches the network.
      */
     fun couldStillUpgrade(mediaId: String, uri: Uri?): Boolean {
-        if (uri == null || uri.getQueryParameter("v") == null) return false
+        if (uri == null || uri.getQueryParameter("v") == null ||
+            uri.getQueryParameter("m") == "1"
+        ) return false
         // Already upgraded: this *is* the better copy.
         if (uri.getQueryParameter(MARKER) != null) return false
         if (mediaId in asked || mediaId in refused || pending.containsKey(mediaId)) return false
-        return SourceResolver.requestForNow() is StreamRequest.Lossless &&
-            SourceResolver.canSubstituteForYouTube()
+        // Same widening as [settledForLess]: a track playing off the cache is
+        // worth a second look whenever anything outranks YouTube, not only
+        // when lossless was asked for.
+        return SourceResolver.canSubstituteForYouTube()
     }
 
     /**
@@ -381,6 +399,7 @@ object QualityUpgrade {
             SourceResolver.upgradeFor(
                 waiting.target.copy(durationSec = playingDurationSec ?: waiting.target.durationSec),
                 playing = waiting.playing,
+                servedBy = waiting.servedBy,
             ).also {
                 found = it
                 answered = true

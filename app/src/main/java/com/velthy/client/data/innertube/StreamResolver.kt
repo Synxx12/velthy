@@ -93,20 +93,26 @@ object StreamResolver {
      * No web client appears here. `WEB_REMIX` was the tail of this list and
      * paid for itself in neither reliability nor speed — always ciphered,
      * usually refused, and reached only on tracks that were already failing,
-     * where the one thing left worth spending is time. [newPipeUrl] is the
-     * last resort instead.
+     * where the one thing left worth spending is time. It is still asked, from
+     * [authenticatedWebRemixStream], when there is a session to send with it;
+     * the failsafe below is the better anonymous last resort.
+     *
+     * The order is what makes the *first* track of a session as quick as the
+     * ones after it. [preferred] only exists once a client has served
+     * something, so a cold resolve always starts at the top of this list — and
+     * a ciphered browser client at the top is a guaranteed player-JavaScript
+     * download, on the critical path, before any cheaper identity is asked.
+     * That cost is paid once per process and is exactly the "first song is
+     * slow, the rest are instant" report. [PlayerClient.ANDROID_MUSIC] answers
+     * with plain URLs and is not subject to the proof-of-origin enforcement
+     * that stops the other clients, so it leads.
      *
      * The gating that decides which of these answers is applied per network,
      * not globally — an identity refused on one connection is served on
      * another — which is the whole reason this is a list and why the order is
      * only a starting guess that [clientOrder] corrects from experience.
-     *
-     * TVHTML5 (Cobalt v7) is first because it works on flagged IPs without
-     * PO Token — the most reliable client as of July 2026.
      */
     private val CLIENTS = listOf(
-        PlayerClient.MWEB,
-        PlayerClient.WEB_REMIX,
         PlayerClient.ANDROID_MUSIC,
         PlayerClient.TVHTML5,
         PlayerClient.ANDROID_VR,
@@ -293,6 +299,34 @@ object StreamResolver {
     private const val EXTRACTOR_TIMEOUT_SECONDS = 5L
 
     /**
+     * Pays the one-time costs of the *first* resolve before it is asked for.
+     *
+     * Two things are charged to whoever resolves first and to nobody after
+     * that, which is precisely the "the first song is slow, the rest are
+     * instant" report:
+     *
+     *  - The **visitor id** — a round trip to `sw.js_data`. [playerStream]
+     *    fetches it synchronously before the first `player` POST, and every
+     *    resolve after the first finds it already held. On a cold start that
+     *    round trip lands squarely on the critical path of the track the
+     *    listener just tapped.
+     *  - **NewPipe's extractor init**, which is lazy: the [init] reference
+     *    below builds the downloader and the service registry on first touch.
+     *    It is only reached when every player client fails, but when it *is*
+     *    reached it is the difference between an extraction that starts now
+     *    and one that starts after the library has stood itself up.
+     *
+     * Called from the application on startup, off the main thread, so a cold
+     * launch pays for both while the listener is still choosing a track.
+     * Deliberately silent on failure: this is an optimisation, and the resolve
+     * path still fetches what it needs when it needs it.
+     */
+    suspend fun warmUp() {
+        runCatching { init }
+        runCatching { Innertube.ensureVisitorData() }
+    }
+
+    /**
      * @return a directly streamable URL that has been proven to serve bytes,
      *   or throws with a reason worth showing.
      *
@@ -419,7 +453,7 @@ object StreamResolver {
      */
     private suspend fun authenticatedWebRemixStream(
         videoId: String,
-        select: (JsonObject) -> Audio?,
+        select: (JsonObject) -> List<Audio>,
     ): Stream? {
         if (Innertube.cookie == null) return null
         return try {
@@ -430,13 +464,29 @@ object StreamResolver {
             val response = timed("$videoId WEB_REMIX player()") {
                 Innertube.player(videoId, PlayerClient.WEB_REMIX, timestamp, authenticated = true)
             }
-            val format = select(response) ?: return null
-            val url = timed("$videoId WEB_REMIX streamUrl") {
-                streamUrl(videoId, format)?.let { patchClientVersion(it, PlayerClient.WEB_REMIX.clientVersion) }
-            } ?: return null
-            if (timed("$videoId WEB_REMIX probe") { probe(url) } != Probe.OK) return null
-            Log.d(TAG, "resolved $videoId via authenticated WEB_REMIX @ ${format.kbps}kbps")
-            Stream(url, format.kbps, format.mimeType)
+            // Down the ladder, as in [playerStream]: WEB_REMIX answers with
+            // ciphered formats, so a single failed signature solve on the
+            // top rung would otherwise throw away a whole authenticated
+            // response whose lower rungs may unlock cleanly.
+            var format: Audio? = null
+            var url: String? = null
+            timed("$videoId WEB_REMIX streamUrl") {
+                for (candidate in select(response)) {
+                    val unlocked = streamUrl(videoId, candidate)
+                        ?.let { patchClientVersion(it, PlayerClient.WEB_REMIX.clientVersion) }
+                    if (unlocked != null) {
+                        format = candidate
+                        url = unlocked
+                        break
+                    }
+                }
+            }
+            val picked = format
+            val playable = url
+            if (picked == null || playable == null) return null
+            if (timed("$videoId WEB_REMIX probe") { probe(playable) } != Probe.OK) return null
+            Log.d(TAG, "resolved $videoId via authenticated WEB_REMIX @ ${picked.kbps}kbps")
+            Stream(playable, picked.kbps, picked.mimeType)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -531,10 +581,10 @@ object StreamResolver {
         repeat(DOWNLOAD_ATTEMPTS) { attempt ->
             if (attempt > 0) delay(DOWNLOAD_RETRY_MS)
             val responses = mutableMapOf<PlayerClient, JsonObject>()
-            val picker: (JsonObject) -> Audio? = if (preferM4a) {
-                { response -> pickM4a(response)?.also { offered = true } }
+            val picker: (JsonObject) -> List<Audio> = if (preferM4a) {
+                { response -> pickM4a(response).also { if (it.isNotEmpty()) offered = true } }
             } else {
-                { response -> pickOpus(response)?.also { offered = true } }
+                { response -> pickOpus(response).also { if (it.isNotEmpty()) offered = true } }
             }
             playerStream(videoId, picker, responses)?.let { return it }
         }
@@ -569,6 +619,10 @@ object StreamResolver {
      * accepts or none of which can be unciphered, or mint a URL that turns out
      * to be dead. Only running out of clients is a failure.
      *
+     * [select] returns the whole ladder rather than one pick, so a format whose
+     * URL cannot be unlocked costs the *format* and not the client: the walk
+     * steps down to the next rung before moving on to the next identity.
+     *
      * [responses] memoises the player response per client for the caller that
      * walks twice — see [resolveForDownload]. A client that is asked again
      * inside one walk is a bug, not a cost, so the default is a fresh map.
@@ -577,7 +631,7 @@ object StreamResolver {
      */
     private suspend fun playerStream(
         videoId: String,
-        select: (JsonObject) -> Audio?,
+        select: (JsonObject) -> List<Audio>,
         responses: MutableMap<PlayerClient, JsonObject> = mutableMapOf(),
     ): Stream? {
         // Before anything asks. Without one, the good clients refuse outright
@@ -616,27 +670,55 @@ object StreamResolver {
                 }
                 responses[client] = response
 
-                val format = select(response) ?: continue
-                val url = timed("$videoId ${client.clientName} streamUrl") {
-                    streamUrl(videoId, format)?.let { patchClientVersion(it, client.clientVersion) }
+                // Answered, but with nothing this app can use. Logged because
+                // the two ways that happens are worth telling apart and the
+                // timings alone cannot: a client that offers no acceptable
+                // format never reaches [streamUrl], so both cases look
+                // identical from outside — a `player()` line and then silence.
+                val candidates = select(response)
+                if (candidates.isEmpty()) {
+                    Log.d(TAG, "${client.clientName} offered no usable format for $videoId")
+                    refused(videoId, client)
+                    continue
                 }
-                if (url == null) {
+                // Down the ladder rather than one shot at the top of it: a
+                // format that will not unlock used to end the client's turn,
+                // which conflates two different things — a client being refused
+                // the track, and the one format that happened to win on
+                // bitrate being the one whose URL could not be unlocked.
+                var format: Audio? = null
+                var url: String? = null
+                timed("$videoId ${client.clientName} streamUrl") {
+                    for (candidate in candidates) {
+                        val unlocked = streamUrl(videoId, candidate)
+                            ?.let { patchClientVersion(it, client.clientVersion) }
+                        if (unlocked != null) {
+                            format = candidate
+                            url = unlocked
+                            break
+                        }
+                    }
+                }
+                val picked = format
+                val playable = url
+                if (picked == null || playable == null) {
                     Log.d(
                         TAG,
-                        "${client.clientName} offered ${format.mimeType} for $videoId but its URL could not be unlocked",
+                        "${client.clientName} offered ${candidates.size} format(s) for $videoId but none " +
+                            "could be unlocked (${candidates.joinToString { "${it.mimeType} @ ${it.kbps}kbps" }})",
                     )
                     refused(videoId, client)
                     continue
                 }
 
-                val verdict = timed("$videoId ${client.clientName} probe") { probe(url) }
+                val verdict = timed("$videoId ${client.clientName} probe") { probe(playable) }
                 Log.d(TAG, "TIMING $videoId ${client.clientName} total: ${SystemClock.elapsedRealtime() - clientStart}ms")
                 when (verdict) {
                     Probe.OK -> {
-                        Log.d(TAG, "resolved $videoId via ${client.clientName} @ ${format.kbps}kbps")
+                        Log.d(TAG, "resolved $videoId via ${client.clientName} @ ${picked.kbps}kbps")
                         served(client)
                         preferred = client
-                        return Stream(url, format.kbps, format.mimeType)
+                        return Stream(playable, picked.kbps, picked.mimeType)
                     }
                     // The client itself is being refused this track; don't
                     // spend another round trip on it for a while.
@@ -656,7 +738,7 @@ object StreamResolver {
                 Log.w(
                     TAG,
                     "${client.clientName} minted an unusable URL for $videoId: " +
-                        "$verdict for ${format.mimeType} @ ${format.kbps}kbps",
+                        "$verdict for ${picked.mimeType} @ ${picked.kbps}kbps",
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -746,9 +828,36 @@ object StreamResolver {
             ?.filter { it.url != null || it.signatureCipher != null }
             .orEmpty()
 
-    /** What playback wants: the best format the connection's ceiling allows. */
-    private fun pickForPlayback(response: JsonObject): Audio? =
-        pickForQuality(audioFormats(response).map { it.kbps to it })
+    /**
+     * What playback wants, best first: the formats the connection's ceiling
+     * allows, in the order they are worth trying.
+     *
+     * A list rather than a single pick because unlocking can fail per format —
+     * see [playerStream] and [streamUrl]. A response is routinely a mix, some
+     * entries carrying a plain `url` and some ciphered, and ranking by bitrate
+     * alone is blind to which is which — so a single pick that will not unlock
+     * used to end the client's turn, discarding a serviceable rung one step
+     * down.
+     */
+    private fun pickForPlayback(response: JsonObject): List<Audio> =
+        rankByQuality(audioFormats(response), AppSettings.effectiveAudioQuality.maxKbps)
+
+    /**
+     * [candidates] in the order they are worth attempting: the highest at or
+     * under [maxKbps] first and the rest of the ladder descending from it, then
+     * anything above the ceiling ascending — because a rung over budget still
+     * beats no audio at all, and the cheapest such rung is the least wrong.
+     *
+     * Unciphered formats break bitrate ties, and are not moved ahead of
+     * ciphered ones outright: a plain `url` is one fewer network dependency,
+     * but a ciphered 256kbps still beats an unciphered 64kbps for listening.
+     */
+    private fun rankByQuality(candidates: List<Audio>, maxKbps: Int): List<Audio> {
+        val order = compareByDescending<Audio> { it.url != null }
+        val (withinBudget, overBudget) = candidates.partition { it.kbps <= maxKbps }
+        return withinBudget.sortedWith(compareByDescending<Audio> { it.kbps }.then(order)) +
+            overBudget.sortedWith(compareBy<Audio> { it.kbps }.then(order))
+    }
 
     /**
      * What a download wants: the best Opus there is, and nothing else.
@@ -760,17 +869,18 @@ object StreamResolver {
      * force would bake a temporary decision about mobile data into a permanent
      * artefact.
      */
-    private fun pickOpus(response: JsonObject): Audio? =
-        audioFormats(response).filter { it.isOpus }.maxByOrNull { it.kbps }
+    private fun pickOpus(response: JsonObject): List<Audio> =
+        audioFormats(response).filter { it.isOpus }.sortedByDescending { it.kbps }
 
-    private fun pickM4a(response: JsonObject): Audio? =
-        audioFormats(response).filter { !it.isOpus && (it.mimeType.contains("mp4") || it.mimeType.contains("m4a") || it.mimeType.contains("aac")) }
-            .maxByOrNull { it.kbps }
-            ?: pickBest(response)
+    private fun pickM4a(response: JsonObject): List<Audio> =
+        audioFormats(response)
+            .filter { !it.isOpus && (it.mimeType.contains("mp4") || it.mimeType.contains("m4a") || it.mimeType.contains("aac")) }
+            .sortedByDescending { it.kbps }
+            .ifEmpty { pickBest(response) }
 
     /** The fallback for the rare track that no client offers Opus for. */
-    private fun pickBest(response: JsonObject): Audio? =
-        audioFormats(response).maxByOrNull { it.kbps }
+    private fun pickBest(response: JsonObject): List<Audio> =
+        audioFormats(response).sortedByDescending { it.kbps }
 
     private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.content
 

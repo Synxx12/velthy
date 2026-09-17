@@ -1,5 +1,6 @@
 package com.velthy.client.data
 
+import android.content.Context
 import com.velthy.client.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,12 @@ object AppUpdateChecker {
         val fileSize: Long,
         val releaseNotes: String,
         val publishedAt: String,
+        /**
+         * How loudly to announce this release — see [UpdateSeverity]. Derived
+         * from the notes, so every construction path has to go through
+         * [UpdateSeverity.fromReleaseNotes] rather than trusting a caller.
+         */
+        val severity: UpdateSeverity = UpdateSeverity.fromReleaseNotes(releaseNotes),
     )
 
     private const val RELEASES_API_URL =
@@ -58,6 +65,18 @@ object AppUpdateChecker {
             finalUpdate
         }.getOrNull()
     }
+
+    /**
+     * Runs a check and raises [UpdateNotifier] if there is something newer.
+     *
+     * The one entry point everything that checks from a context should call:
+     * the on-launch check, the Settings row, and the background worker all
+     * funnel through here, so "check for an update" and "tell the user about
+     * one" can never drift apart. [UpdateNotifier] itself decides whether a
+     * banner is due — it will not repeat one for a version it already posted.
+     */
+    suspend fun checkAndNotify(context: Context): UpdateInfo? =
+        check(force = true)?.also { UpdateNotifier.notifyIfNeeded(context, it) }
 
     /**
      * Resolves the latest release via GitHub's HTTP 302 /releases/latest redirect.
