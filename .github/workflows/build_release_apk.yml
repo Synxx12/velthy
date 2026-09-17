@@ -265,7 +265,7 @@ jobs:
           # Detect update severity from changelog/notes to inject machine-readable marker:
           # 1. Explicit marker in text (e.g., "Severity: Critical" or "<!-- Velthy-Severity: critical -->")
           # 2. Keyword heuristic fallback
-          explicit_match = re.search(r'(?:Velthy-Severity|Severity)\s*:\s*[*_`\s]*([A-Za-z]+)', notes, re.IGNORE_CASE)
+          explicit_match = re.search(r'(?:Velthy-Severity|Severity)\s*:\s*[*_`\s]*([A-Za-z]+)', notes, re.IGNORECASE)
           if explicit_match and explicit_match.group(1).lower() in ["critical", "important", "normal"]:
               severity_tag = explicit_match.group(1).lower()
           else:
