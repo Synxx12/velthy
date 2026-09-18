@@ -42,8 +42,13 @@ internal fun Modifier.revealLyricsControlsOnTap(
     onReveal: () -> Unit,
 ): Modifier {
     val currentOnReveal = rememberUpdatedState(onReveal)
-    return pointerInput(enabled) {
-        if (!enabled) return@pointerInput
+    // Applied only while it has something to do. A `pointerInput` node is a hit
+    // target whether or not its handler consumes anything, and — because it does
+    // not share pointer input with siblings — a disabled one sitting over the
+    // title row still swallowed taps meant for the buttons there. Returning `this`
+    // when off keeps the node out of the tree entirely.
+    if (!enabled) return this
+    return pointerInput(Unit) {
         val tapSlop = viewConfiguration.touchSlop * TAP_SLOP_FACTOR
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)

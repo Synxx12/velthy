@@ -789,6 +789,9 @@ fun NowPlayingScreen(
 
     val syncedLyricsEnabled by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
+    // Read here rather than only inside the panel: the offset control now lives
+    // in the title row, which is composed whether or not the lyrics panel is.
+    val lyricsOffsetMs by AppSettings.lyricsOffsetMs.collectAsStateWithLifecycle()
 
     // Animated cover art: the looping video some labels publish alongside a
     // release, laid over the sleeve. A miss is the normal answer — see
@@ -1795,6 +1798,30 @@ fun NowPlayingScreen(
                         )
                     }
                     Spacer(Modifier.width(10.dp))
+                    // Lyrics controls sit in the title row, just before the
+                    // like and overflow buttons, but only while the lyrics
+                    // panel is open: they act on the words on screen, and a
+                    // translate/offset button over the artwork would invite a
+                    // tap with nothing to apply it to. The offset control also
+                    // needs synced lines to shift.
+                    if (lyricsOpen && syncedLyricsEnabled && !lyrics.isNullOrEmpty()) {
+                        CircleGlyph(
+                            icon = Icons.Rounded.Tune,
+                            contentDescription = "Lyrics offset",
+                            onClick = {
+                                haptics.play(Haptic.Tap)
+                                showLyricsOffset = true
+                            },
+                            active = lyricsOffsetMs != 0,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        TranslationToggleButton(
+                            state = translationState,
+                            showingTranslation = showingTranslation,
+                            onClick = toggleTranslation,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
                     // Beside the credits rather than down in the toggle row:
                     // liking is about *this song*, and the row below is about
                     // how the queue plays. Guests get nothing to tap, since
@@ -1851,13 +1878,6 @@ fun NowPlayingScreen(
                                 isPlaying = isPlaying,
                                 onSeekToLine = onSeek,
                                 onUserScroll = { panelScrollHidden = it },
-                                translationState = translationState,
-                                showingTranslation = showingTranslation,
-                                onToggleTranslation = toggleTranslation,
-                                onOpenOffset = {
-                                    haptics.play(Haptic.Tap)
-                                    showLyricsOffset = true
-                                },
                                 translationProgress = particleProgress,
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -3475,12 +3495,6 @@ private fun LyricsPanel(
     isPlaying: Boolean,
     onSeekToLine: (Long) -> Unit,
     onUserScroll: (Boolean) -> Unit = {},
-    /** Where the translation of this track is, for the button in the corner. */
-    translationState: LyricsTranslationUiState = LyricsTranslationUiState.Idle,
-    showingTranslation: Boolean = false,
-    onToggleTranslation: (() -> Unit)? = null,
-    /** Opens the offset drawer, from the control in the panel's corner. */
-    onOpenOffset: (() -> Unit)? = null,
     translationProgress: State<Float>? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -3908,71 +3922,7 @@ private fun LyricsPanel(
                 }
             }
         }
-    }
-
-        // Top-end rather than in the flow of the list: these are controls over
-        // the whole panel, not rows in it, and putting them here keeps them put
-        // while the words scroll underneath.
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(end = PLAYER_GUTTER - GLOW_ROOM + 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (onOpenOffset != null) {
-                PanelCircleButton(
-                    icon = Icons.Rounded.Tune,
-                    contentDescription = "Lyrics offset",
-                    highlighted = lyricsOffsetMs != 0,
-                    onClick = onOpenOffset,
-                )
-            }
-            if (onToggleTranslation != null) {
-                TranslationToggleButton(
-                    state = translationState,
-                    showingTranslation = showingTranslation,
-                    onClick = onToggleTranslation,
-                )
-            }
         }
-    }
-}
-
-/**
- * A small circular control in the lyrics panel's corner — the offset button's
- * own composable because it lights when the lyrics are shifted, which is a fact
- * the translate button beside it has no equivalent of.
- */
-@Composable
-private fun PanelCircleButton(
-    icon: ImageVector,
-    contentDescription: String,
-    highlighted: Boolean,
-    onClick: () -> Unit,
-) {
-    val discAlpha by animateFloatAsState(
-        targetValue = if (highlighted) 0.34f else 0.18f,
-        label = "panelDisc",
-    )
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = discAlpha))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = Color.White.copy(alpha = if (highlighted) 1f else 0.78f),
-            modifier = Modifier.size(19.dp),
-        )
     }
 }
 

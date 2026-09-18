@@ -6,6 +6,17 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
+### [1.4.6.7] — Kontrol Lirik di Baris Judul
+> 📅 2026-09-18
+> ⚠️ **Severity: Important**
+
+#### ✨ Fitur Baru & Tampilan
+- **Tombol Lirik Pindah ke Baris Judul**: Tombol **terjemah** dan **geser waktu lirik (offset)** kini berada di baris judul lagu, tepat di sebelah kiri tombol suka dan menu — bukan lagi di pojok panel lirik. Keduanya hanya muncul saat panel lirik terbuka, sehingga tetap berkaitan dengan kata-kata yang sedang tampil.
+- **Panel Lyrics Offset Disamakan dengan Panel Audio Output**: Panel pengatur offset lirik kini memakai bentuk yang sama dengan panel keluaran suara — lembaran yang meluncur dari bawah dengan pegangan geser, kartu nilai `+0.0 s`, penggeser, tombol **−/+** berukuran seragam, dan baris **Reset to zero**. Geser-turun untuk menutupnya sekarang mengikuti gerakan yang sama halusnya dengan panel lain, tidak lagi terasa berat atau patah-patah.
+
+#### 🐛 Perbaikan Masalah
+- **Tombol Lirik Bisa Ditekan**: Sebelumnya tombol terjemah dan offset tidak merespons saat panel lirik terbuka karena lapisan panel menelan ketukan sebelum sampai ke tombol. Kini ketukan diteruskan dengan benar.
+
 ### [1.4.6.6] — Listen Together, Lirik & Perbaikan Tab
 > 📅 2026-09-18
 > ⚠️ **Severity: Important**
