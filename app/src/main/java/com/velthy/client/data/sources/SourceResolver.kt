@@ -229,6 +229,37 @@ object SourceResolver {
     }
 
     /**
+     * The reliable last rung for a source-backed queue item whose chosen stream
+     * failed in the player.
+     *
+     * Unlike [resolve], this asks only YouTube. The failed addon/JioSaavn source
+     * must not get another chance to return the identical URL — its catalogue
+     * lookup is deterministic, so asking again can only reproduce the stream
+     * that just died — and unlike [substituteForYouTube] this starts with
+     * metadata rather than an existing YouTube video id, so it first finds the
+     * matching YouTube Music row.
+     *
+     * @return the YouTube stream, or null when YouTube is disabled or nothing in
+     *   its catalogue matches. Null is not a failure to report: the caller falls
+     *   back to its ordinary recovery, which is what it would have done anyway.
+     */
+    suspend fun youtubeFallback(target: TrackMatcher.Target): SourceStream? {
+        if (target.title.isBlank() || target.isVideo) return null
+        val youtube = SourceRegistry.activeForPlayback()
+            .firstOrNull { it.kind == SourceKind.YOUTUBE }
+            ?: return null
+        return matchAndStream(
+            source = youtube,
+            target = target,
+            request = StreamRequest.Best,
+            strictLength = target.durationSec != null,
+            requireSharedArtist = true,
+        )?.also {
+            TrackLog.d(TAG, "YouTube fallback matched '${target.title}' after its higher-quality source failed")
+        }
+    }
+
+    /**
      * A stream that genuinely satisfies the current request, for a track that
      * is already playing on one that doesn't — or null if there isn't one.
      *

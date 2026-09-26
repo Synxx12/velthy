@@ -28,7 +28,15 @@ import org.schabi.newpipe.extractor.ServiceList
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
+import org.schabi.newpipe.extractor.exceptions.AccountTerminatedException
+import org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException
+import org.schabi.newpipe.extractor.exceptions.GeographicRestrictionException
+import org.schabi.newpipe.extractor.exceptions.PaidContentException
+import org.schabi.newpipe.extractor.exceptions.PrivateContentException
 import org.schabi.newpipe.extractor.exceptions.ReCaptchaException
+import org.schabi.newpipe.extractor.exceptions.SoundCloudGoPlusContentException
+import org.schabi.newpipe.extractor.exceptions.UnsupportedContentInCountryException
+import org.schabi.newpipe.extractor.exceptions.YoutubeMusicPremiumContentException
 import org.schabi.newpipe.extractor.services.youtube.YoutubeJavaScriptPlayerManager
 import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
@@ -341,6 +349,10 @@ object StreamResolver {
             ?.takeIf { SystemClock.elapsedRealtime() - it.at < URL_TTL_MS }
             ?.let { return it.url }
 
+        // A verdict, not a failure: asking again cannot change the answer, so
+        // every caller after the first is told so without a request being sent.
+        unplayableReason(videoId)?.let { throw PermanentlyUnplayableException(it) }
+
         val stream = coalescedResolve(videoId)
 
         // The container carries no bitrate field, so this is the only place the
@@ -389,14 +401,40 @@ object StreamResolver {
     private suspend fun resolveUncached(videoId: String): Stream {
         val resolveStart = SystemClock.elapsedRealtime()
         val stream = try {
-            timed("$videoId playerStream") { playerStream(videoId, ::pickForPlayback) }
-                ?: timed("$videoId authenticatedWebRemixStream") { authenticatedWebRemixStream(videoId, ::pickForPlayback) }
+            // InnerTubeX first. Its client catalog is benchmarked live and its
+            // cipher tiers unlock the formats the plain client walk cannot, so
+            // it is the answer for the overwhelming majority of tracks — and it
+            // is the difference between a track starting in a few hundred
+            // milliseconds and one that queues behind a walk of seven identities.
+            timed("$videoId InnerTubeX") { innerTubeXStream(videoId) }
                 ?: run {
-                    Log.w(TAG, "every player client failed for $videoId; falling back to extraction")
-                    timed("$videoId newPipeStream") { newPipeStream(videoId, ::pickForQuality) }
+                    Log.w(TAG, "InnerTubeX found no usable stream for $videoId; walking player clients")
+                    timed("$videoId playerStream") { playerStream(videoId, ::pickForPlayback) }
+                        ?: timed("$videoId authenticatedWebRemixStream") { authenticatedWebRemixStream(videoId, ::pickForPlayback) }
+                        ?: run {
+                            Log.w(TAG, "every player client failed for $videoId; falling back to extraction")
+                            timed("$videoId newPipeStream") { newPipeStream(videoId, ::pickForQuality) }
+                        }
                 }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: LinkageError) {
+            // Every strategy above either runs third-party extraction code or
+            // drives YouTube's player JavaScript, so any of them can turn out to
+            // have been compiled against an API this OS version does not carry.
+            // That arrives as an Error, which the clause below does not catch and
+            // no caller of this function catches either — ExoPlayer's loader
+            // thread least of all, which is where it surfaced as a process kill
+            // rather than a failed track. Converted here, at the one point every
+            // strategy passes through, so the answer is the same wherever the
+            // linkage failure came from.
+            Log.w(
+                TAG,
+                "resolve hit a linkage failure for $videoId after " +
+                    "${SystemClock.elapsedRealtime() - resolveStart}ms: ${e.javaClass.name}: ${e.message}",
+                e,
+            )
+            throw IOException("Stream resolution cannot run on this device: $e", e)
         } catch (e: Exception) {
             // The one path out of here that said nothing at all. A resolve that
             // throws is handed to ExoPlayer as a load error, which retries it on
@@ -412,10 +450,162 @@ object StreamResolver {
                     "${e.javaClass.name}: ${e.message}",
                 e,
             )
+            // Recorded before it is rethrown, so the retries stacked above this
+            // — ExoPlayer's, the service's, read-ahead's — are answered from
+            // memory instead of each one asking InnerTubeX and extracting three
+            // times against a refusal that is never going to soften.
+            permanentReason(e)?.let { reason ->
+                rememberUnplayable(videoId, reason)
+                Log.w(TAG, "$videoId is not playable: $reason; not asking again for 10 minutes")
+                throw PermanentlyUnplayableException(reason)
+            }
             throw e
         }
         Log.d(TAG, "TIMING $videoId total resolve: ${SystemClock.elapsedRealtime() - resolveStart}ms")
         return stream
+    }
+
+    /**
+     * A probed stream from [InnerTubeXResolver], or null to fall through to the
+     * client walk.
+     *
+     * A client whose URL fails the probe is skipped and InnerTubeX asked again,
+     * up to [INNERTUBEX_ATTEMPTS] times, since its catalog has further clients
+     * behind it. That is the whole reason this is a loop rather than one ask:
+     * InnerTubeX picks a format and an identity together, and a refusal is about
+     * the identity, not the track.
+     */
+    private suspend fun innerTubeXStream(
+        videoId: String,
+        maxKbps: Int = AppSettings.effectiveAudioQuality.maxKbps,
+        requireM4a: Boolean = false,
+    ): Stream? {
+        val skip = mutableSetOf<String>()
+        repeat(INNERTUBEX_ATTEMPTS) {
+            val found = try {
+                InnerTubeXResolver.extract(videoId, maxKbps, skip, requireM4a)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "InnerTubeX failed for $videoId: ${e.javaClass.simpleName}: ${e.message}")
+                return null
+            } ?: return null
+            val verdict = timed("$videoId InnerTubeX ${found.profileId} probe") { probe(found.url) }
+            if (verdict == Probe.OK) {
+                Log.d(TAG, "resolved $videoId via InnerTubeX ${found.profileId} @ ${found.kbps}kbps")
+                return Stream(found.url, found.kbps, found.mimeType)
+            }
+            Log.w(TAG, "InnerTubeX ${found.profileId} minted an unusable URL for $videoId: $verdict")
+            skip += found.profileId
+        }
+        return null
+    }
+
+    private const val INNERTUBEX_ATTEMPTS = 3
+
+    /**
+     * The headers a media fetch for [url] must carry to match whoever minted it.
+     *
+     * InnerTubeX's URLs have to be fetched as the exact client variant that
+     * minted them, and it is the only thing that knows which one that was — the
+     * URL's own `c` parameter names a family, not a profile. Falls back to the
+     * URL's own answer for anything InnerTubeX did not mint.
+     */
+    fun mediaHeadersFor(url: String): Map<String, String> =
+        InnerTubeXResolver.headersFor(url) ?: PlayerClient.forStreamUrl(url).mediaHeaders()
+
+    /**
+     * A track this app cannot play, for a reason that will read the same in ten
+     * seconds — an age gate no session gets past, a takedown, a region block.
+     *
+     * Its own type because everything above the resolver has to be able to tell
+     * it apart from a failure worth retrying, and the layers in between are
+     * ExoPlayer's: a load error carries whatever exception it was given and
+     * nothing else, so the distinction has to travel in the type.
+     */
+    class PermanentlyUnplayableException(reason: String) : IOException(reason)
+
+    /**
+     * Tracks that have already failed for a reason retrying cannot fix, and
+     * until when.
+     *
+     * This is the single change that turns a track that sits in BUFFERING for
+     * minutes on end, hammering youtubei, back into a failure that happens once.
+     * Nothing above this object retries *less* than three deep: ExoPlayer's own
+     * load-error policy retries the source, the service's `recoverFrom` retries
+     * the player, and read-ahead resolves the same track again on its own
+     * schedule. Against a permanent refusal every one of those is a full client
+     * walk plus a triple extraction.
+     *
+     * Entries expire rather than being permanent, because the reasons behind
+     * them do: an age gate stops mattering the moment the listener signs in (see
+     * [onSessionChanged], called from the login flow), and Google's region and
+     * bot verdicts are measured in hours, not sessions.
+     */
+    private val unplayable = ConcurrentHashMap<String, Verdict>()
+
+    private class Verdict(val reason: String, val at: Long)
+
+    private fun unplayableReason(videoId: String): String? {
+        val entry = unplayable[videoId] ?: return null
+        if (SystemClock.elapsedRealtime() - entry.at < UNPLAYABLE_TTL_MS) return entry.reason
+        unplayable.remove(videoId)
+        return null
+    }
+
+    private fun rememberUnplayable(videoId: String, reason: String) {
+        if (unplayable.size > MAX_REMEMBERED) unplayable.clear()
+        unplayable[videoId] = Verdict(reason, SystemClock.elapsedRealtime())
+    }
+
+    private const val UNPLAYABLE_TTL_MS = 10 * 60 * 1000L
+
+    /**
+     * Why [e] means "never", or null if it only means "not just now".
+     *
+     * The distinction is the difference between one failed track and a request
+     * storm, and it is not available from the exception hierarchy: NewPipe files
+     * a takedown, a region block and a truncated watch page under the same
+     * [ParsingException] ancestry, so a `catch (e: Exception)` treats "this
+     * video does not exist" exactly like "the page arrived cut in half".
+     *
+     * Kept as a message rather than a boolean because the message is what the
+     * listener eventually sees, and "This video is age-restricted" is a
+     * different thing to be told than `ERROR_CODE_IO_UNSPECIFIED`.
+     */
+    private fun permanentReason(e: Throwable): String? = when (e) {
+        is PermanentlyUnplayableException -> e.message ?: "This track cannot be played"
+        is AgeRestrictedContentException ->
+            if (Innertube.cookie == null) {
+                "This track is age-restricted. Sign in to YouTube to play it."
+            } else {
+                "YouTube will not serve this age-restricted track to this app."
+            }
+        is GeographicRestrictionException -> "This track isn't available in your country"
+        is UnsupportedContentInCountryException -> "This track isn't available in your country"
+        is PaidContentException -> "This track is paid content"
+        is YoutubeMusicPremiumContentException -> "This track needs YouTube Music Premium"
+        is PrivateContentException -> "This track is private"
+        is AccountTerminatedException -> "The channel behind this track was terminated"
+        is SoundCloudGoPlusContentException -> "This track needs SoundCloud Go+"
+        // ExoPlayer and the coroutine machinery both wrap freely, and the
+        // classification has to survive being wrapped or it never fires.
+        else -> e.cause?.takeIf { it !== e }?.let(::permanentReason)
+    }
+
+    /**
+     * Forget every verdict recorded above, and InnerTubeX's client exclusions
+     * with them.
+     *
+     * Signing in is the one event that can turn an age-gated track playable, and
+     * signing out the one that can turn it back — so both have to clear this, or
+     * the listener who signs in specifically to play a track is told for the
+     * next ten minutes that it still cannot be played. A client refused while
+     * anonymous is owed a fresh hearing now that there is a session to send.
+     */
+    fun onSessionChanged() {
+        InnerTubeXResolver.onSessionChanged()
+        unplayable.clear()
     }
 
     /** Logs how long [block] took, whatever it returns — a timing probe, not a control flow change. */
@@ -577,6 +767,15 @@ object StreamResolver {
         val formatPref = AppSettings.downloadFormat.value
         val preferM4a = formatPref == com.velthy.client.data.settings.DownloadFormat.M4A
         var offered = false
+
+        // InnerTubeX hands back its best rung of the container asked for, and
+        // has no ceiling of its own — so within the setting it is the answer,
+        // and over it the walk below can still pick a lower rung. The container
+        // is asked up front rather than filtered out of whatever it picks,
+        // because it answers with one format per ask.
+        innerTubeXStream(videoId, AppSettings.effectiveAudioQuality.maxKbps, preferM4a)
+            ?.takeIf { if (preferM4a) it.downloadExtension == "m4a" else it.downloadExtension == "webm" }
+            ?.let { return it }
 
         repeat(DOWNLOAD_ATTEMPTS) { attempt ->
             if (attempt > 0) delay(DOWNLOAD_RETRY_MS)
@@ -1032,9 +1231,21 @@ object StreamResolver {
      * rather than a more favourable version of it.
      */
     private fun probe(url: String): Probe {
+        // The range has to be as large as the real fetch will ask for, not a
+        // token one. A URL minted for a session Google has reservations about
+        // serves small ranges to anybody — enough to pass a small probe — and
+        // then refuses the multi-megabyte ranges actual listening is made of
+        // with a 403.
+        //
+        // And it starts past [AUTH_BOUNDARY_BYTES] when the file is that long:
+        // some clients' URLs serve the first megabyte and 403 everything after
+        // it, so a probe of the opening passes and playback dies ~50s in.
+        val length = url.toHttpUrlOrNull()?.queryParameter("clen")?.toLongOrNull()
+        val start = if (length != null && length > AUTH_BOUNDARY_BYTES + PROBE_READ_BYTES) AUTH_BOUNDARY_BYTES else 0L
+        val end = minOf(start + PlayerClient.rangeBytesFor(url), length ?: Long.MAX_VALUE) - 1
         val builder = okhttp3.Request.Builder().url(url)
-            .header("Range", "bytes=0-${PROBE_RANGE_BYTES - 1}")
-        PlayerClient.forStreamUrl(url).mediaHeaders().forEach { (name, value) ->
+            .header("Range", "bytes=$start-$end")
+        mediaHeadersFor(url).forEach { (name, value) ->
             builder.header(name, value)
         }
         return try {
@@ -1047,6 +1258,9 @@ object StreamResolver {
                     // A refusal dressed as a success: an error page, or the
                     // consent/captcha interstitial, rather than media stream.
                     isTextOrHtml -> Probe.REFUSED
+                    // A refusal dressed as a success: an error page, or the
+                    // consent/captcha interstitial, rather than audio.
+                    contentType.startsWith("audio/") != true -> Probe.REFUSED
                     // Headers can arrive long before a body that never does —
                     // exactly the shaping this whole path exists to sidestep.
                     // Insisting on the bytes is the point: a trickle that
@@ -1062,6 +1276,12 @@ object StreamResolver {
     }
 
     private val REFUSAL_CODES = setOf(403, 404, 410)
+
+    /**
+     * Where googlevideo stops authorising some clients' URLs — InnerTubeX's own
+     * note reads "CDN 403 after 1 MiB".
+     */
+    private const val AUTH_BOUNDARY_BYTES = 1024L * 1024
 
     /**
      * The probe's own client: the app's, but on a short leash.
@@ -1218,6 +1438,15 @@ object StreamResolver {
         // answering 404 stands down the client that mints most of YouTube's,
         // and the next YouTube track pays for a failure on a different server.
         if (url.toHttpUrlOrNull()?.host?.endsWith("googlevideo.com") != true) return
+        // When InnerTubeX minted it, the refusal is about the exact client
+        // profile it chose — a finer distinction than [PlayerClient] models,
+        // since one family holds several profiles. It also knows the videoId
+        // without the reverse lookup below, and refreshes the remote cipher
+        // config, which a refused ciphered URL is the signal for.
+        InnerTubeXResolver.onRefused(url)?.let { videoId ->
+            recent.remove(videoId)
+            return
+        }
         val client = PlayerClient.forStreamUrl(url)
         // Keyed by videoId, and the fetch only knows the googlevideo URL it was
         // handed; the map is a latency cache of a few dozen entries, so finding
