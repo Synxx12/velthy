@@ -1186,8 +1186,21 @@ private fun VelthyApp(
                                     if (resolved.videoId == song.videoId && resolved.albumName == song.albumName) return@launch
                                     withContext(Dispatchers.Main) {
                                         val c = controller ?: return@withContext
-                                        val at = (0 until c.mediaItemCount)
-                                            .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
+                                        // The player state's own queue snapshot
+                                        // first, which is one value already in
+                                        // this process — the loop below is a
+                                        // Binder round trip *per item*, and on a
+                                        // long queue that is the difference
+                                        // between a frame and a stall. Falling
+                                        // back to the controller when the two
+                                        // disagree in length, because the
+                                        // snapshot can be a beat behind an edit.
+                                        val at = player.queue
+                                            .takeIf { it.size == c.mediaItemCount }
+                                            ?.indexOfFirst { it.videoId == song.videoId }
+                                            ?.takeIf { it >= 0 }
+                                            ?: (0 until c.mediaItemCount)
+                                                .firstOrNull { c.getMediaItemAt(it).mediaId == song.videoId }
                                             ?: return@withContext
                                         c.replaceMediaItem(at, resolved.toMediaItem())
                                     }

@@ -88,7 +88,29 @@ fun rememberPlayerState(controller: MediaController?): PlayerState {
     DisposableEffect(controller) {
         val player = controller ?: return@DisposableEffect onDispose {}
 
-        fun sync(error: String? = null) {
+        /**
+         * The queue, as a list of [Song].
+         *
+         * Reading it is one Binder round trip *per item*, and this runs inside
+         * `onEvents`, which fires for every position tick, buffer change and
+         * play/pause — dozens of times a second on a busy player. Rebuilding a
+         * hundred-item queue on each of those is what made the queue drawer
+         * stutter on long queues: the work is real IPC, and it lands on the
+         * main thread.
+         *
+         * So it is only rebuilt when the timeline genuinely changed, or when
+         * the count no longer matches what is held (which catches an edit that
+         * arrived without the timeline event). Everything else reuses the list
+         * already in hand.
+         */
+        fun syncQueue(timelineChanged: Boolean): List<Song> {
+            val count = player.mediaItemCount
+            val held = state.queue
+            if (!timelineChanged && held.size == count) return held
+            return (0 until count).map { player.getMediaItemAt(it).toSong() }
+        }
+
+        fun sync(error: String? = null, timelineChanged: Boolean = false) {
             val item = player.currentMediaItem
             state = state.copy(
                 song = item?.toSong(),
@@ -100,7 +122,9 @@ fun rememberPlayerState(controller: MediaController?): PlayerState {
                 error = error,
                 isLoading = player.playbackState == Player.STATE_BUFFERING,
                 repeatMode = player.repeatMode,
-                queue = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).toSong() },
+                // Rebuilt only when the timeline actually changed, or when the
+                // count disagrees with what is held — see [syncQueue].
+                queue = syncQueue(timelineChanged),
                 queueIndex = player.currentMediaItemIndex,
                 hasPrevious = player.hasPreviousMediaItem(),
                 hasNext = player.hasNextMediaItem(),
@@ -108,7 +132,12 @@ fun rememberPlayerState(controller: MediaController?): PlayerState {
         }
 
         val listener = object : Player.Listener {
-            override fun onEvents(p: Player, events: Player.Events) = sync(state.error)
+            override fun onEvents(p: Player, events: Player.Events) {
+                sync(
+                    error = state.error,
+                    timelineChanged = events.contains(Player.EVENT_TIMELINE_CHANGED),
+                )
+            }
             override fun onPlayerErrorChanged(error: androidx.media3.common.PlaybackException?) {
                 sync(error?.let { "Playback failed: ${it.errorCodeName}" })
             }
