@@ -973,8 +973,8 @@ class PlaybackService : MediaSessionService() {
         scope.launch {
             delay(RESTORED_WARM_DELAY_MS)
             runCatching { StreamResolver.resolve(videoId) }
-                .onSuccess { TrackLog.d(TAG, "restored track $videoId warmed") }
-                .onFailure { TrackLog.d(TAG, "restored track warm-up skipped $videoId: ${it.message}") }
+                .onSuccess { TrackLog.d("Velthy", "restored track $videoId warmed") }
+                .onFailure { TrackLog.d("Velthy", "restored track warm-up skipped $videoId: ${it.message}") }
         }
     }
 
