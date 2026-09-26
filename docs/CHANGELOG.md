@@ -6,7 +6,7 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
-### [Unreleased] — Mesin Suara Baru & Pemutar Layar Lebar
+### [1.4.7] — Mesin Suara Baru & Pemutar Layar Lebar
 > 📅 2026-09-25
 > ⚠️ **Severity: Important**
 

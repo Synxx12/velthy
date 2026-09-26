@@ -59,9 +59,9 @@ val hasReleaseSigning: Boolean = signing.isNotEmpty()
 // otherwise. Keeping the tag and the APK's versionName in lockstep stops a
 // release from shipping under a name that does not match its tag.
 val appVersionName: String =
-    providers.gradleProperty("velthy.versionName").orNull ?: "1.4.6.7"
+    providers.gradleProperty("velthy.versionName").orNull ?: "1.4.7"
 val appVersionCode: Int =
-    providers.gradleProperty("velthy.versionCode").orNull?.toInt() ?: 28
+    providers.gradleProperty("velthy.versionCode").orNull?.toInt() ?: 1040700
 
 android {
     namespace = "com.velthy.client"

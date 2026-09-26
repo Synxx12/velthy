@@ -19,6 +19,15 @@ Enjoy high-fidelity audio, synchronized lyrics, offline downloads, seamless cros
 
 [🌐 **Website**](https://velthy.my.id) • [📥 **Download Latest APK**](https://velthy.my.id) • [✨ **Features**](#-features) • [🏛️ **Architecture**](#-client-side-architecture) • [🚀 **Quick Start**](#-building-from-source)
 
+<br/>
+
+> ### 🔗 Fork Notice
+> **Velthy for Android is a fork of [BitChord](https://github.com/kushagrasinghx/BitChord)** by **Kushagra Singh** (and contributors).
+>
+> The player, the audio pipeline, the source-addon engine and the overall Material 3 design originate from that project. Velthy continues it as an independent, rebranded client with its own release line, server deployment and feature work.
+>
+> Both are licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE). Upstream credit is kept here and in the app itself (**Settings → About**), as that licence requires.
+
 </div>
 
 ---

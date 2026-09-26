@@ -468,6 +468,23 @@ fun SettingsScreen(
                     withLink(LinkAnnotation.Url("https://github.com/Synxx12", linkStyles)) {
                         append("Developer")
                     }
+                    // Velthy is a fork of BitChord, which is GPL-3.0 — and a
+                    // fork under that licence owes its upstream the credit, in
+                    // the place a listener can actually find it rather than only
+                    // in the repository. Named here, with the licence and a way
+                    // back to the original, because that is the whole of what
+                    // the obligation asks for.
+                    append("\n\n")
+                    append("A fork of BitChord by Kushagra Singh\n")
+                    append("Licensed under GPL-3.0\n")
+                    withLink(
+                        LinkAnnotation.Url(
+                            "https://github.com/kushagrasinghx/BitChord",
+                            linkStyles,
+                        ),
+                    ) {
+                        append("Original project")
+                    }
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
