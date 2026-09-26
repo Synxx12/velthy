@@ -1,4 +1,4 @@
-﻿package com.velthy.client.ui.player
+package com.velthy.client.ui.player
 
 import android.content.Intent
 import android.database.ContentObserver
@@ -330,14 +330,65 @@ private val PILL_PARTY_SIZE = 22.dp
 private val PLAYER_MAX_WIDTH = 560.dp
 
 /**
+ * The least a landscape window has to offer before the player splits into its
+ * two columns: enough that each half still holds what it is given — the sleeve
+ * above the lyrics / output / queue row on the left, the credits and transport
+ * on the right — with the bottom row's three-up capsule still fitting across
+ * the narrower half.
+ *
+ * Low enough to take in a phone turned sideways, which is the point: the same
+ * answer is given to a tablet and to a phone on its side, because both are
+ * asked the same question — the window's own proportions — rather than what
+ * kind of device this is.
+ */
+private val LANDSCAPE_PLAYER_MIN_WIDTH = 560.dp
+
+/**
+ * The width from which the player counts as tablet-sized — which, here, decides
+ * nothing about layout and one thing about Settings: a window this wide keeps
+ * the full-bleed artwork switch listed.
+ */
+private val TABLET_PLAYER_MIN_WIDTH = 700.dp
+
+/**
+ * Whether the player takes its landscape shape: the sleeve and the lyrics /
+ * output / queue row in the left column, and the right column showing the
+ * credits and transport, the lyrics or the queue — one of the three at a time.
+ *
+ * Width alone isn't enough: a tablet held upright can be as wide as a phone
+ * held sideways, and the two-column layout is a landscape shape, not a "wide
+ * enough" one. Upright, every device gets the portrait player — a tall window
+ * is the shape it was drawn for.
+ *
+ * The window's own measured size is passed in rather than read from
+ * [LocalConfiguration], because a freeform or desktop window can report the
+ * display rather than the window it is actually in, and it lands a beat late
+ * while that window is dragged. A measured constraint cannot be stale — it is
+ * the very width the split is about to be laid out in.
+ */
+internal fun landscapePlayerAvailable(windowWidth: Dp, windowHeight: Dp): Boolean =
+    windowWidth > windowHeight && windowWidth >= LANDSCAPE_PLAYER_MIN_WIDTH
+
+/** See [TABLET_PLAYER_MIN_WIDTH]. */
+private fun tabletSizedPlayer(windowWidth: Dp): Boolean =
+    windowWidth >= TABLET_PLAYER_MIN_WIDTH
+
+/**
  * Whether this screen is narrow enough for the player to run artwork edge to
  * edge on it — the gate on both the motion-artwork banner and
  * [AppSettings.fullBleedArtwork]. Public so the settings sheet can leave the
  * switch out entirely where it would do nothing.
+ *
+ * A tablet-sized window keeps it too: full bleed is the phone idiom for a
+ * sleeve that would otherwise be a stamp, but a tablet has the room to draw the
+ * banner properly, so the switch stays listed there rather than disappearing
+ * from a screen that could honour it.
  */
 @Composable
-fun fullBleedArtworkAvailable(): Boolean =
-    LocalConfiguration.current.screenWidthDp.dp <= PLAYER_MAX_WIDTH + PLAYER_GUTTER * 2
+fun fullBleedArtworkAvailable(): Boolean {
+    val width = LocalConfiguration.current.screenWidthDp.dp
+    return width <= PLAYER_MAX_WIDTH + PLAYER_GUTTER * 2 || tabletSizedPlayer(width)
+}
 
 /** Share of a lyric line's own length spent fading out, and its bounds. */
 private const val LYRIC_FADE_FRACTION = 0.28f
@@ -811,12 +862,25 @@ fun NowPlayingScreen(
     /** Reports where this player's artwork will sit once fully open, in window
      *  pixels, so the host can aim the morph's travelling cover at it. */
     onArtTargetChanged: ((CoverTarget?) -> Unit)? = null,
+    /**
+     * The window's own measured size.
+     *
+     * The player reads this for exactly one question — whether the window is a
+     * landscape one, see [landscapePlayerAvailable] — and it is passed in
+     * rather than read from [LocalConfiguration] because a freeform or desktop
+     * window can report the display rather than the window it is actually in.
+     * Defaulted to the configuration so a caller that has not measured yet
+     * still lays out sensibly.
+     */
+    windowWidth: Dp = LocalConfiguration.current.screenWidthDp.dp,
+    windowHeight: Dp = LocalConfiguration.current.screenHeightDp.dp,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val isCompactScreen = configuration.screenHeightDp < 740
+    val landscape = landscapePlayerAvailable(windowWidth, windowHeight)
     var sleeveRootRect by remember { mutableStateOf<Rect?>(null) }
 
     val syncedLyricsEnabled by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
@@ -1400,6 +1464,464 @@ fun NowPlayingScreen(
                         ),
                 )
             }
+        }
+
+        // A landscape window — a tablet, or a phone on its side — takes an
+        // entirely different shape from the portrait player below: two columns
+        // rather than one, see [landscapePlayerAvailable] and
+        // [LandscapePlayerLayout].
+        //
+        // A separate branch rather than something woven into the layout below:
+        // the portrait player's collapsing sleeve, hero banner and vertical drag
+        // gesture exist to let one tall column be the player, the lyrics and the
+        // queue in turn, and in landscape none of them has anything to do — the
+        // sleeve never has to get out of anything's way.
+        if (landscape) {
+            val sleepAfterTrackLandscape by SleepTimer.afterTrack.collectAsStateWithLifecycle()
+            val sleepBadgeLandscape = remember(sleepRemaining, sleepAfterTrackLandscape, durationMs, positionMs) {
+                val rem = sleepRemaining
+                when {
+                    rem != null && rem > 0L -> "${(rem / 60_000L) + 1}"
+                    sleepAfterTrackLandscape && durationMs > 0L ->
+                        "${((durationMs - positionMs).coerceAtLeast(0L) / 60_000L) + 1}"
+                    else -> null
+                }
+            }
+            LandscapePlayerLayout(
+                pane = when {
+                    lyricsOpen -> PlayerPane.Lyrics
+                    queueOpen -> PlayerPane.Queue
+                    else -> PlayerPane.Main
+                },
+                gutter = PLAYER_GUTTER,
+                background = { backgroundModifier ->
+                    // The mesh the portrait player already draws, moved rather
+                    // than duplicated: the same blobs, at the same pace, so
+                    // rotating does not restart the drift.
+                    Box(backgroundModifier) {
+                        if (meshColors != null) {
+                            MeshGradientBackground(palette = meshColors!!, trackKey = song.videoId)
+                        } else {
+                            ArtworkMeshBackdrop(mesh = artMesh, seam = 0.dp)
+                        }
+                    }
+                },
+                // The one piece of chrome that is not decoration: Velthy's
+                // player is drawn by the host rather than being a bottom sheet,
+                // so nothing else inherits a downward drag. This is the way out.
+                dismissStrip = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(LANDSCAPE_DISMISS_STRIP)
+                            .pointerInput(Unit) {
+                                var down = 0f
+                                val dismissTravelPx = with(density) { 200.dp.toPx() }
+                                val velocity = VelocityTracker()
+                                detectVerticalDragGestures(
+                                    onDragStart = {
+                                        down = 0f
+                                        velocity.resetTracking()
+                                    },
+                                    onVerticalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        velocity.addPosition(change.uptimeMillis, change.position)
+                                        down = (down + dragAmount).coerceAtLeast(0f)
+                                        onPull((1f - down / dismissTravelPx).coerceIn(0f, 1f))
+                                    },
+                                    onDragEnd = {
+                                        onPullEnd(velocity.progressVelocity(dismissTravelPx))
+                                    },
+                                    onDragCancel = { onPullEnd(0f) },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(38.dp)
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color.White.copy(alpha = 0.32f)),
+                        )
+                    }
+                },
+                artwork = { artworkModifier ->
+                    Box(
+                        modifier = artworkModifier
+                            .graphicsLayer {
+                                // The paused shrink and the swipe nudge only make
+                                // sense on the full sleeve.
+                                val idle = artScale
+                                scaleX = idle
+                                scaleY = idle
+                                translationX = swipeSettle
+                            }
+                            .onGloballyPositioned { sleeveRootRect = it.boundsInRoot() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer { alpha = artRevealOf(morph) }
+                                .shadow(
+                                    if (artLoaded) 14.dp else 0.dp,
+                                    RoundedCornerShape(10.dp),
+                                )
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color.Black.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (!artLoaded) {
+                                Icon(
+                                    imageVector = VelthyIcons.MusicNote,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.35f),
+                                    modifier = Modifier.size(40.dp),
+                                )
+                            }
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(song.artworkAt(ART_PX))
+                                    .size(ART_PX)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                onState = { artLoaded = it is AsyncImagePainter.State.Success },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+                },
+                // Lyrics / output / queue, with the output name under them — the
+                // row both layouts end on, and the only thing in the landscape
+                // player's left column besides the sleeve.
+                actions = {
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val rowWidth = BOTTOM_ACTION_SIZE * 2 + pillWidth(3)
+                        val edgeInset = ((maxWidth - rowWidth) / 4).coerceAtLeast(0.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            BottomGlyph(
+                                icon = VelthyIcons.LyricsQuote,
+                                contentDescription = "Lyrics",
+                                onClick = {
+                                    haptics.play(if (!lyricsOpen) Haptic.ToggleOn else Haptic.ToggleOff)
+                                    queueOpen = false
+                                    lyricsOpen = !lyricsOpen
+                                },
+                                highlighted = lyricsOpen,
+                            )
+                            if (queueOpen) {
+                                QueueModesPill(
+                                    shuffleEnabled = shuffleEnabled,
+                                    repeatMode = repeatMode,
+                                    autoplayEnabled = autoplayEnabled,
+                                    onShuffle = onToggleShuffle,
+                                    onRepeat = onCycleRepeat,
+                                    onAutoplay = onToggleAutoplay,
+                                )
+                            } else {
+                                OutputPartyPill(
+                                    onSleep = {
+                                        haptics.play(Haptic.Tap)
+                                        showSleepTimerSheet = true
+                                    },
+                                    onOutput = {
+                                        haptics.play(Haptic.Tap)
+                                        showAudioOutputSheet = true
+                                    },
+                                    onParty = {
+                                        haptics.play(Haptic.Tap)
+                                        onOpenParty()
+                                    },
+                                    inParty = party.inParty,
+                                    sleepBadge = sleepBadgeLandscape,
+                                )
+                            }
+                            BottomGlyph(
+                                icon = VelthyIcons.Queue,
+                                contentDescription = "Queue",
+                                onClick = {
+                                    haptics.play(if (!queueOpen) Haptic.ToggleOn else Haptic.ToggleOff)
+                                    lyricsOpen = false
+                                    queueOpen = !queueOpen
+                                },
+                                highlighted = queueOpen,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(20.dp),
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
+                        OutputCaption(
+                            outputName = if (activeDevice.isExternal) {
+                                activeDevice.name
+                            } else {
+                                "This phone"
+                            },
+                            hostFirstName = party.members.firstOrNull { it.isHost }
+                                ?.displayName
+                                ?.trim()
+                                ?.split(Regex("\\s+"))
+                                ?.firstOrNull(),
+                            inParty = party.inParty,
+                            onOpenOutput = {
+                                haptics.play(Haptic.Tap)
+                                showAudioOutputSheet = true
+                            },
+                            onOpenParty = {
+                                haptics.play(Haptic.Tap)
+                                onOpenParty()
+                            },
+                        )
+                    }
+                },
+                mainPane = { compact ->
+                    Column(
+                        modifier = Modifier
+                            .widthIn(max = PLAYER_MAX_WIDTH)
+                            .fillMaxWidth(),
+                    ) {
+                        if (p < 0.999f) {
+                            PlayingFromCaption(
+                                song = song,
+                                playedBy = null,
+                                onParty = onOpenParty,
+                                onOpenQueue = {
+                                    queueOpen = true
+                                    lyricsOpen = false
+                                },
+                                onOpenSource = onOpenPlaybackSource,
+                                alpha = 1f,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(if (compact) 4.dp else 8.dp))
+                        }
+                        // ---- Credits ----
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                MarqueeText(
+                                    text = song.title,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    color = Color.White,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .opensPage(song.albumId, onOpenAlbum),
+                                )
+                                Text(
+                                    text = song.artist,
+                                    style = MaterialTheme.typography.titleLarge.copy(
+                                        fontWeight = FontWeight.W500,
+                                    ),
+                                    color = Color.White.copy(alpha = 0.55f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.opensPage(song.artistId, onOpenArtist),
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            if (signedIn && song.localUri == null) {
+                                val liked = likeStatus == LikeStatus.LIKE
+                                CircleGlyph(
+                                    icon = if (liked) VelthyIcons.HeartFilled else VelthyIcons.Heart,
+                                    contentDescription = if (liked) "Remove from Liked Music" else "Like",
+                                    onClick = onToggleLike,
+                                    active = liked,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            CircleGlyph(
+                                icon = Icons.Rounded.MoreHoriz,
+                                contentDescription = "More",
+                                onClick = onOpenMenu,
+                            )
+                        }
+                        Spacer(Modifier.height(if (compact) 2.dp else 10.dp))
+                        // ---- Current lyric, one line ----
+                        if (syncedLyricsEnabled) {
+                            Box(modifier = Modifier.fillMaxWidth().offset(y = 6.dp)) {
+                                if (!lyrics.isNullOrEmpty()) {
+                                    CurrentLyricLine(
+                                        lines = lyrics,
+                                        trackKey = song.videoId,
+                                        positionMs = positionMs,
+                                        isPlaying = isPlaying,
+                                        durationMs = durationMs,
+                                        onClick = { lyricsOpen = true },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                } else if (lyricsUnavailable) {
+                                    LyricsUnavailableLine(
+                                        trackKey = song.videoId,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                } else {
+                                    LyricsLoadingLine(
+                                        trackKey = song.videoId,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            }
+                        }
+                        // ---- Scrubber ----
+                        val mixingLandscape by AppSettings.smartMixInProgress.collectAsStateWithLifecycle()
+                        val transitionWindowLandscape by AppSettings.smartTransitionWindow.collectAsStateWithLifecycle()
+                        ThinSlider(
+                            value = shown,
+                            onValueChange = {
+                                scrubbing = true
+                                scrubValue = it
+                            },
+                            onValueChangeFinished = {
+                                haptics.play(Haptic.Select)
+                                pendingSeek = scrubValue
+                                onSeekFraction(scrubValue)
+                                scrubbing = false
+                            },
+                            mixing = mixingLandscape && !scrubbing,
+                            transitionWindow = transitionWindowLandscape
+                                ?.takeIf { !scrubbing && it.end > it.start }
+                                ?.let { it.start..it.end },
+                            isLoading = isLoading && !scrubbing,
+                        )
+                        Spacer(Modifier.height(if (compact) 0.dp else 8.dp))
+                        // ---- Transport ----
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TransportGlyph(
+                                icon = Icons.Rounded.FastRewind,
+                                contentDescription = "Previous",
+                                size = if (compact) 38.dp else 46.dp,
+                                onClick = {
+                                    haptics.play(Haptic.SkipPrevious)
+                                    onPrevious()
+                                },
+                                enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
+                            )
+                            TransportGlyph(
+                                icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                size = if (compact) 52.dp else 62.dp,
+                                onClick = {
+                                    haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
+                                    onPlayPause()
+                                },
+                            )
+                            TransportGlyph(
+                                icon = Icons.Rounded.FastForward,
+                                contentDescription = "Next",
+                                size = if (compact) 38.dp else 46.dp,
+                                onClick = {
+                                    haptics.play(Haptic.SkipNext)
+                                    onNext()
+                                },
+                                enabled = hasNext,
+                            )
+                        }
+                        if (!hideVolumeBar) {
+                            Spacer(Modifier.height(if (compact) 0.dp else 12.dp))
+                            // ---- Volume ----
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.VolumeDown,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                ThinSlider(
+                                    value = volume.value,
+                                    onValueChange = {
+                                        volumeDragging = true
+                                        scope.launch { volume.snapTo(it) }
+                                        audioManager?.setStreamVolume(
+                                            AudioManager.STREAM_MUSIC,
+                                            (it * maxVolume).roundToInt(),
+                                            0,
+                                        )
+                                    },
+                                    onValueChangeFinished = { volumeDragging = false },
+                                    idleHeight = 6.dp,
+                                    activeHeight = 10.dp,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.VolumeUp,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                    }
+                },
+                lyricsPane = {
+                    LyricsTranslationMotion(
+                        trigger = translationTransition,
+                        reduceMotion = reduceAnimation,
+                        modifier = Modifier.fillMaxSize(),
+                    ) { particleProgress ->
+                        LyricsPanel(
+                            lines = displayedLyrics,
+                            trackKey = song.videoId,
+                            positionMs = positionMs,
+                            looking = lyricsLooking,
+                            isPlaying = isPlaying,
+                            onSeekToLine = onSeek,
+                            // A constant `true`: the flag exists because the
+                            // portrait player hides its transport behind the
+                            // lyrics and needs a tap to bring it back. Here
+                            // there is nothing hidden for a tap to reveal, and
+                            // leaving the reveal gesture armed would only eat
+                            // taps meant for the lines.
+                            onUserScroll = {},
+                            translationProgress = particleProgress,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                },
+                queuePane = {
+                    InlineQueue(
+                        queue = queue,
+                        currentIndex = queueIndex,
+                        autoplayEnabled = autoplayEnabled,
+                        onJumpTo = onJumpTo,
+                        onRemove = onRemoveFromQueue,
+                        onMove = onMoveInQueue,
+                        onClear = onClearQueue,
+                        onUserScroll = {},
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                },
+                modifier = modifier,
+            )
+
+            // The sheets and drawers, which belong to the player rather than to
+            // either arrangement — raised here so a rotation mid-panel keeps
+            // whatever was open.
+            if (showLyricsOffset) {
+                LyricsOffsetSheet(onDismiss = { showLyricsOffset = false })
+            }
+            if (showSleepTimerSheet) {
+                SleepTimerSheet(onDismiss = { showSleepTimerSheet = false })
+            }
+            if (showAudioOutputSheet) {
+                AudioOutputSheet(onDismiss = { showAudioOutputSheet = false })
+            }
+            return
         }
 
         Column(
@@ -2419,183 +2941,9 @@ fun NowPlayingScreen(
     }
 
     // ---- Compact Sleep Timer Modal Sheet ----
-        if (showSleepTimerSheet) {
-            val afterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
-
-            ModalBottomSheet(
-                onDismissRequest = { showSleepTimerSheet = false },
-                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-                containerColor = Color(0xFF16161A),
-                contentColor = Color.White,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                dragHandle = {
-                    Box(
-                        modifier = Modifier
-                            .padding(top = 10.dp, bottom = 6.dp)
-                            .size(width = 32.dp, height = 4.dp)
-                            .background(Color.White.copy(alpha = 0.25f), CircleShape),
-                    )
-                },
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp)
-                        .navigationBarsPadding(),
-                ) {
-                    // Header (Compact)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Sleep Timer",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = (-0.2).sp,
-                            ),
-                            color = Color.White,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-
-                    // Two faces, never both. Before anything is picked this is
-                    // the menu; once a timer is armed it is that timer — what is
-                    // left, five more minutes, and the way out. The rungs leave
-                    // with the menu, because changing the duration now means
-                    // turning this one off first: one screen for choosing, one
-                    // for what was chosen.
-                    if (sleepRemaining == null && !afterTrack) {
-                        // Compact Grouped Inset
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color.White.copy(alpha = 0.08f)),
-                        ) {
-                            CompactOptionRow(
-                                label = "After this song",
-                                onClick = {
-                                    SleepTimer.startAfterTrack()
-                                    showSleepTimerSheet = false
-                                },
-                            )
-
-                            HorizontalDivider(
-                                modifier = Modifier.padding(start = 16.dp),
-                                thickness = 0.5.dp,
-                                color = Color.White.copy(alpha = 0.08f),
-                            )
-
-                            val presets = listOf(
-                                15 to "15 minutes",
-                                30 to "30 minutes",
-                                45 to "45 minutes",
-                                60 to "1 hour",
-                            )
-
-                            presets.forEachIndexed { index, (minutes, label) ->
-                                CompactOptionRow(
-                                    label = label,
-                                    onClick = {
-                                        SleepTimer.start(minutes)
-                                        showSleepTimerSheet = false
-                                    },
-                                )
-                                if (index < presets.lastIndex) {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(start = 16.dp),
-                                        thickness = 0.5.dp,
-                                        color = Color.White.copy(alpha = 0.08f),
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        val rem = sleepRemaining
-                        if (rem != null) {
-                            // What is left, at the size of a clock rather than a
-                            // caption — the one number someone who opened this
-                            // sheet half asleep is looking for, and the reason
-                            // they opened it at all.
-                            Text(
-                                text = SleepTimer.clock(rem),
-                                style = MaterialTheme.typography.displaySmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = (-1).sp,
-                                ),
-                                color = Color.White,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 6.dp, bottom = 16.dp),
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 12.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(Color.White.copy(alpha = 0.12f))
-                                    .clickable { SleepTimer.extend(5) }
-                                    .padding(vertical = 12.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Add,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "Add 5 minutes",
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = Color.White,
-                                )
-                            }
-                        } else {
-                            // No number to add to: an end-of-track timer is an
-                            // event, not a duration, so it gets the state and
-                            // the way out and nothing else.
-                            Text(
-                                text = "End of current track",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = Color.White,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 10.dp, bottom = 22.dp),
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f))
-                                .clickable {
-                                    SleepTimer.cancel()
-                                    showSleepTimerSheet = false
-                                }
-                                .padding(vertical = 12.dp, horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                        ) {
-                            Text(
-                                text = "Turn Off Timer",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
-        }
+    if (showSleepTimerSheet) {
+        SleepTimerSheet(onDismiss = { showSleepTimerSheet = false })
+    }
 
         // Where the music comes out, and how loud â€” the drawer BitChord uses,
         // down to the arrangement: the outputs, then volume.
@@ -2622,6 +2970,199 @@ private fun CompactOptionRow(
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White.copy(alpha = 0.85f),
         )
+    }
+}
+
+/**
+ * The sleep timer's sheet: the picker, or the timer it became.
+ *
+ * Raised by both the portrait and the landscape player, which is why it is a
+ * composable rather than the inline block it used to be — the two layouts share
+ * one timer and must share the one way of setting it, or a rotation mid-choice
+ * would close a sheet the other arrangement could not reopen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SleepTimerSheet(onDismiss: () -> Unit) {
+    val afterTrack by SleepTimer.afterTrack.collectAsStateWithLifecycle()
+    val sleepRemaining by produceState<Long?>(initialValue = SleepTimer.remainingMs(), afterTrack) {
+        while (true) {
+            value = SleepTimer.remainingMs()
+            delay(1000)
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Color(0xFF16161A),
+        contentColor = Color.White,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .padding(top = 10.dp, bottom = 6.dp)
+                    .size(width = 32.dp, height = 4.dp)
+                    .background(Color.White.copy(alpha = 0.25f), CircleShape),
+            )
+        },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 6.dp)
+                .navigationBarsPadding(),
+        ) {
+            // Header (Compact)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Sleep Timer",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.2).sp,
+                    ),
+                    color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // Two faces, never both. Before anything is picked this is the
+            // menu; once a timer is armed it is that timer — what is left, five
+            // more minutes, and the way out. The rungs leave with the menu,
+            // because changing the duration now means turning this one off
+            // first: one screen for choosing, one for what was chosen.
+            if (sleepRemaining == null && !afterTrack) {
+                // Compact Grouped Inset
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.08f)),
+                ) {
+                    CompactOptionRow(
+                        label = "After this song",
+                        onClick = {
+                            SleepTimer.startAfterTrack()
+                            onDismiss()
+                        },
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 16.dp),
+                        thickness = 0.5.dp,
+                        color = Color.White.copy(alpha = 0.08f),
+                    )
+
+                    val presets = listOf(
+                        15 to "15 minutes",
+                        30 to "30 minutes",
+                        45 to "45 minutes",
+                        60 to "1 hour",
+                    )
+
+                    presets.forEachIndexed { index, (minutes, label) ->
+                        CompactOptionRow(
+                            label = label,
+                            onClick = {
+                                SleepTimer.start(minutes)
+                                onDismiss()
+                            },
+                        )
+                        if (index < presets.lastIndex) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = 16.dp),
+                                thickness = 0.5.dp,
+                                color = Color.White.copy(alpha = 0.08f),
+                            )
+                        }
+                    }
+                }
+            } else {
+                val rem = sleepRemaining
+                if (rem != null) {
+                    // What is left, at the size of a clock rather than a
+                    // caption — the one number someone who opened this sheet
+                    // half asleep is looking for, and the reason they opened it
+                    // at all.
+                    Text(
+                        text = SleepTimer.clock(rem),
+                        style = MaterialTheme.typography.displaySmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-1).sp,
+                        ),
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp, bottom = 16.dp),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.12f))
+                            .clickable { SleepTimer.extend(5) }
+                            .padding(vertical = 12.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Add 5 minutes",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = Color.White,
+                        )
+                    }
+                } else {
+                    // No number to add to: an end-of-track timer is an event,
+                    // not a duration, so it gets the state and the way out and
+                    // nothing else.
+                    Text(
+                        text = "End of current track",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp, bottom = 22.dp),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f))
+                        .clickable {
+                            SleepTimer.cancel()
+                            onDismiss()
+                        }
+                        .padding(vertical = 12.dp, horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = "Turn Off Timer",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+        }
     }
 }
 

@@ -1,7 +1,11 @@
 ﻿package com.velthy.client
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -90,6 +94,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +120,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.velthy.client.auth.DiscordLoginScreen
@@ -210,6 +216,7 @@ import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.ui.player.CoverMorphOverlay
 import com.velthy.client.ui.player.CoverTarget
 import com.velthy.client.ui.player.NowPlayingScreen
+import com.velthy.client.ui.player.landscapePlayerAvailable
 import com.velthy.client.ui.player.bottomChromeReveal
 import com.velthy.client.ui.player.coverChromeReveal
 import com.velthy.client.ui.screens.AppUpdateSheet
@@ -288,7 +295,25 @@ class MainActivity : ComponentActivity() {
                     LocalLiquidGlassEnabled provides liquidGlassEnabled,
                     LocalAppBackdrop provides appBackdrop,
                 ) {
-                    VelthyApp(darkTheme = darkTheme, appBackdrop = appBackdrop)
+                    // The window's size, measured rather than asked for.
+                    //
+                    // `Configuration.screenWidthDp` is the wrong question here:
+                    // in a freeform or desktop window it can report the display
+                    // rather than the window it is actually in, and it lands a
+                    // beat late when that window is dragged. The player splits
+                    // in two on the strength of this number and sizes both
+                    // halves from it, so a stale one is a column sized for a
+                    // window that no longer exists. A measured constraint cannot
+                    // be stale — it is the very size the split is about to be
+                    // laid out in.
+                    BoxWithConstraints(Modifier.fillMaxSize()) {
+                        VelthyApp(
+                            darkTheme = darkTheme,
+                            appBackdrop = appBackdrop,
+                            windowWidth = maxWidth,
+                            windowHeight = maxHeight,
+                        )
+                    }
                 }
             }
         }
@@ -456,11 +481,28 @@ internal fun shouldSkipAfterDislike(
     currentVideoId: String?,
 ): Boolean = previousStatus != LikeStatus.DISLIKE && targetVideoId == currentVideoId
 
+/** The activity under a Compose context, through any wrappers around it. */
+private fun Context.findActivity(): Activity? =
+    generateSequence(this) { (it as? ContextWrapper)?.baseContext }
+        .filterIsInstance<Activity>()
+        .firstOrNull()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VelthyApp(
     darkTheme: Boolean,
     appBackdrop: LayerBackdrop,
+    /** The width of the window this is laid out in — see the call site. */
+    windowWidth: Dp,
+    /**
+     * The window's height, measured the same way and for the same reason as
+     * [windowWidth] — and needed alongside it for exactly one thing: telling a
+     * portrait window apart from a landscape one. Width alone can't; a big
+     * tablet's portrait width comfortably clears a phone's landscape width, so
+     * the two-column player would fire in portrait too if it only ever asked
+     * about width.
+     */
+    windowHeight: Dp,
     viewModel: MainViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -2383,6 +2425,31 @@ private fun VelthyApp(
             LaunchedEffect(song) {
                 if (songActions?.videoId == song.videoId) songActions = song
             }
+            // A phone stays upright everywhere but in the player. The pages
+            // behind it are drawn for a tall single column (see
+            // R.bool.allow_rotation), but the player has a landscape shape of
+            // its own — the same one a tablet gets — so while it is up the
+            // phone follows the user's own rotation setting, and puts itself
+            // back upright the moment the player goes. A screen too small for
+            // that shape stays pinned rather than squashing the portrait
+            // player.
+            val phoneRotatesInPlayer = remember(context) {
+                !context.resources.getBoolean(R.bool.allow_rotation) &&
+                    landscapePlayerAvailable(windowWidth, windowHeight)
+            }
+            if (phoneRotatesInPlayer) {
+                LaunchedEffect(true) {
+                    context.findActivity()?.requestedOrientation =
+                        ActivityInfo.SCREEN_ORIENTATION_USER
+                }
+                DisposableEffect(Unit) {
+                    onDispose {
+                        context.findActivity()?.requestedOrientation =
+                            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    }
+                }
+            }
+
             // The player's chrome fades in behind a single travelling cover —
             // CoverMorphOverlay below — so the cover grows out of the mini
             // player's artwork and the player's own sleeve/banner takes over
@@ -2400,6 +2467,10 @@ private fun VelthyApp(
                     isLoading = player.isLoading,
                     positionMs = player.positionMs,
                     durationMs = player.durationMs,
+                    // The window's own measured size, which is what decides
+                    // whether the player takes its two-column shape.
+                    windowWidth = windowWidth,
+                    windowHeight = windowHeight,
                     // The finger owns the morph outright while it is down. No
                     // stop(), no coroutine, nothing that could reach the host's
                     // own animation — see [pullProgress].

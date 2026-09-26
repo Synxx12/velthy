@@ -82,15 +82,40 @@
             android:value="true" />
 
         <!--
-          Portrait only. Every screen is laid out for a tall single column —
-          the player's artwork square, the frosted bars, the floating tab bar —
-          and none of it has a landscape design to fall back on.
+          Portrait on phones, free to rotate on tablets — see
+          R.bool.allow_rotation and MainActivity.
+
+          Every page here is laid out for a tall single column: the home feed,
+          the library grid, the frosted bars, the floating tab bar. None of them
+          has a landscape design to fall back on, so a phone turned sideways
+          would get a worse version of every screen.
+
+          One screen is the exception, and it is the one that matters: the
+          player has a landscape shape of its own — the same two-column one a
+          tablet gets — so while it is up, MainActivity lets a phone follow the
+          user's own rotation setting after all, and pins it upright again the
+          moment the player closes.
+
+          [android:configChanges] is the other half of that: without it, a
+          rotation the system allows is still a full Activity restart, which
+          throws away every bit of in-memory Compose state along with it — the
+          sheet showing Now Playing, whether the lyrics or queue panel was open,
+          mid-scrub position, all of it — before any of this screen's own
+          responsive layout logic ever gets a chance to run. Declaring these
+          configurations here is what turns a rotation back into an ordinary
+          recomposition: the same Activity keeps running, the same state
+          survives, and the width- and height-aware branches in NowPlayingScreen
+          decide the new layout.
+
+          uiMode is deliberately *not* in the list: a day/night change should
+          still recreate the Activity so the theme is rebuilt from resources.
         -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:theme="@style/Theme.Velthy">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

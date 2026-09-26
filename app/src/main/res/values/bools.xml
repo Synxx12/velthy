@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Whether this device is free to rotate outside the player.
+
+      False on a phone, and that is a statement about the *pages*, not about the
+      player: the home feed, the library grid, the frosted bars and the floating
+      tab bar are all laid out for a tall single column, and a phone turned
+      sideways gets a worse version of every one of them.
+
+      The player is the exception and is handled where it belongs — while it is
+      up, MainActivity lets the window follow the user's own rotation setting
+      into the same two-column player a tablet gets, and pins it upright again
+      when the player closes. A screen too small for that shape stays pinned
+      rather than squashing the portrait player.
+
+      The sw600dp copy of this file overrides it to true — 600dp on the shortest
+      side is the line Android itself draws for "this is not a phone", and past
+      it a tablet held in landscape is the ordinary way to hold one rather than
+      a phone being turned on its side for a moment. MainActivity reads it once,
+      at startup.
+    -->
+    <bool name="allow_rotation">false</bool>
+</resources>
