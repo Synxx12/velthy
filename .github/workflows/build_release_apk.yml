@@ -144,6 +144,53 @@ jobs:
           echo "✅ Properties configured securely"
 
       # ── 6. BUILD PRODUCTION APK RELEASE ──
+      # A bigger heap than gradle.properties asks for, and only on the runner.
+      #
+      # That file is tuned for a developer's machine, where several Gradle and
+      # Kotlin daemons can end up alive at once and native memory is what runs
+      # out first. A runner has one job and its own memory. The Kotlin backend
+      # on this codebase — a 5,800-line player composable among it — genuinely
+      # needs more than the local ceiling: it died with `OutOfMemoryError: Java
+      # heap space` inside `compileProdReleaseKotlin`, on a commit that changed
+      # only a workflow file.
+      #
+      # The keys are *replaced*, not appended: a duplicate would leave the
+      # answer up to which occurrence Gradle happens to read, and this needs to
+      # be certain. The checked-in values stay untouched for the local machine.
+      - name: Raise build memory for CI
+        run: |
+          python3 - <<'EOF'
+          import re
+
+          path = "gradle.properties"
+          with open(path, encoding="utf-8") as f:
+              text = f.read()
+
+          overrides = {
+              "org.gradle.jvmargs":
+                  "-Xmx4g -XX:MaxMetaspaceSize=1g -XX:ReservedCodeCacheSize=512m "
+                  "-Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true",
+              "kotlin.daemon.jvmargs":
+                  "-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ReservedCodeCacheSize=512m",
+          }
+
+          for key, value in overrides.items():
+              pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+              if pattern.search(text):
+                  text = pattern.sub(f"{key}={value}", text)
+              else:
+                  text = text.rstrip("\n") + f"\n{key}={value}\n"
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(text)
+
+          for line in text.splitlines():
+              if line.startswith(("org.gradle.jvmargs", "kotlin.daemon.jvmargs",
+                                  "org.gradle.workers.max")):
+                  print("  " + line)
+          print("CI memory overrides applied")
+          EOF
+
       - name: Build Android APK
         env:
           MODULE_INDEX_URL: ${{ env.MODULE_INDEX_URL }}
