@@ -30,6 +30,8 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import android.os.Bundle
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -48,6 +50,7 @@ import com.velthy.client.data.NerdStats
 import com.velthy.client.data.TrackLog
 import com.velthy.client.data.YtMusicRepository
 import com.velthy.client.data.discord.DiscordRPC
+import com.velthy.client.data.innertube.InnerTubeXResolver
 import com.velthy.client.data.innertube.PlaybackTracker
 import com.velthy.client.data.innertube.PlayerClient
 import com.velthy.client.data.innertube.StreamResolver
@@ -229,6 +232,13 @@ class PlaybackService : MediaSessionService() {
         // state lives.
         NerdStats.forgetLastSession()
         QualityUpgrade.forgetLastSession()
+
+        // Pays InnerTubeX's cold costs before a track needs them: the player
+        // config, the EJS solver (seconds in QuickJS when the cipher library
+        // lacks the player's hash), and the BotGuard WebView behind the
+        // PoToken. Paid on the play path instead, those put an age-restricted
+        // track many seconds from first audio.
+        InnerTubeXResolver.init(this)
 
         usbDacWatch = AudioDeviceHelper.watchUsbDacPreference(this)
 
@@ -1023,10 +1033,27 @@ class PlaybackService : MediaSessionService() {
         if (givingUp) {
             TrackLog.w("Velthy", "$mediaId has failed $attempts times; leaving it alone")
         }
+        // An addon/JioSaavn stream gets one chance. If it fails after selection,
+        // retrying the ordinary item only lets the same deterministic lookup win
+        // again and hand the player the same broken stream — so the item is
+        // rebuilt as an explicit YouTube request for the rest of this playback.
+        // This also clears a DASH/HLS MIME left on an upgraded item, which
+        // otherwise makes Media3 parse YouTube's WebM bytes as a manifest
+        // forever.
+        //
+        // Ahead of the substitute bookkeeping below, which is the same reasoning
+        // one step further on: that path refuses the substitute and retries, and
+        // this one refuses it *and* the retry's freedom to land back on it.
+        if (fallbackFailedAlternativeToYouTube(item, uri, position)) return
         // The upgraded rendition goes with the cache entry it lived in, so the
         // marker on the URI would otherwise point at nothing.
         QualityUpgrade.forget(mediaId)
-        val isUpgradedUri = uri?.let(QualityUpgrade::cacheTag) != null
+        // Only a rendition tag that actually names an upgrade counts. The same
+        // parameter carries `original` on an item the YouTube fallback rebuilt,
+        // and treating that as an upgraded URI would refuse upgrades on a track
+        // whose stream never was one.
+        val isUpgradedUri = uri?.let(QualityUpgrade::cacheTag)
+            ?.let { it == "hifi" || it.startsWith("hifi-") } == true
         if (isUpgradedUri) {
             QualityUpgrade.refuseUpgrades(mediaId)
             QualityUpgrade.removeForced(mediaId)
@@ -1078,13 +1105,70 @@ class PlaybackService : MediaSessionService() {
                     val cleanUriString = uri.toString()
                         .replace("&${QualityUpgrade.MARKER}=hifi", "")
                         .replace("?${QualityUpgrade.MARKER}=hifi", "")
-                    val fallbackItem = item.buildUpon().setUri(Uri.parse(cleanUriString)).build()
+                    // The item being retried may have declared DASH/HLS for its
+                    // upgrade, so the MIME has to be sniffed again from a clean
+                    // item rather than inherited.
+                    val fallbackItem = item.buildUpon()
+                        .setUri(Uri.parse(cleanUriString))
+                        .setMimeType(null)
+                        .build()
                     player.replaceMediaItem(player.currentMediaItemIndex, fallbackItem)
                 }
                 player.seekTo(player.currentMediaItemIndex, position)
                 player.prepare()
             }
         }
+    }
+
+    /**
+     * Replaces a failed addon/JioSaavn/quality-upgrade rendition with YouTube
+     * audio and never offers the failed source again during this playback.
+     *
+     * @return true when the item was rebuilt and playback is being recovered
+     *   from YouTube, in which case the caller must stop — the ordinary retry
+     *   below it would re-resolve the same source.
+     */
+    private fun fallbackFailedAlternativeToYouTube(
+        item: MediaItem,
+        uri: Uri?,
+        position: Long,
+    ): Boolean {
+        val playbackUri = uri ?: return false
+        val videoId = playbackUri.getQueryParameter("v")
+        val substituted = videoId?.let(StreamChoice::isSubstitute) == true
+        if (!PlaybackFallback.isAlternative(playbackUri.toString(), substituted)) return false
+        val fallback = item.toYouTubeFallbackMediaItem() ?: return false
+        val mediaId = item.mediaId
+
+        QualityUpgrade.forget(mediaId)
+        QualityUpgrade.refuseUpgrades(mediaId)
+        videoId?.let {
+            StreamChoice.refuseSubstitutes(it)
+            StreamChoice.forget(it)
+        }
+        NerdStats.clearDeclared(mediaId)
+        // A fresh budget for the fallback: the attempts that failed belong to
+        // the source that is now out of the picture, and counting them here
+        // would give up on YouTube for a stream it never served.
+        recoveries.remove(mediaId)
+        TrackLog.w(
+            "Velthy",
+            "$mediaId failed on a higher-quality source; falling back to YouTube audio",
+        )
+
+        scope.launch {
+            delay(RECOVERY_DELAY_MS)
+            withContext(Dispatchers.IO) { AudioCache.discard(playbackUri) }
+            withContext(Dispatchers.Main) {
+                val player = this@PlaybackService.player ?: return@withContext
+                if (player.currentMediaItem?.mediaId != mediaId) return@withContext
+                swappingMediaId = mediaId
+                player.replaceMediaItem(player.currentMediaItemIndex, fallback)
+                player.seekTo(player.currentMediaItemIndex, position)
+                player.prepare()
+            }
+        }
+        return true
     }
 
     /**
@@ -1603,6 +1687,27 @@ class PlaybackService : MediaSessionService() {
     ): Long? {
         QualityUpgrade.beginAudition(mediaId)
         val startedAt = SystemClock.elapsedRealtime()
+        // What [auditionVerdict] checks a "Ready" claim against, alongside
+        // Media3's own bufferedPosition/bufferedPercentage. Those two are the
+        // player's own estimate of how far it could seek right now, and nothing
+        // stops that estimate from running well ahead of what has actually come
+        // off the network — a DASH source's duration and buffered-position
+        // arithmetic is derived from index/segment bookkeeping that is not the
+        // same thing as bytes received. Counting completed loads is the one
+        // number here that cannot be that wrong, because it is Media3 reporting
+        // what its own loader actually finished reading.
+        var mediaBytesLoaded = 0L
+        val loadCounter = object : AnalyticsListener {
+            override fun onLoadCompleted(
+                eventTime: AnalyticsListener.EventTime,
+                loadEventInfo: LoadEventInfo,
+                mediaLoadData: MediaLoadData,
+            ) {
+                if (mediaLoadData.dataType == C.DATA_TYPE_MEDIA) {
+                    mediaBytesLoaded += loadEventInfo.bytesLoaded
+                }
+            }
+        }
         withContext(Dispatchers.IO) {
             // A clean entry first, because `#hifi` names a *slot* and not a
             // file. Every audition is a fresh candidate — a different catalogue,
@@ -1635,6 +1740,7 @@ class PlaybackService : MediaSessionService() {
         }
         val audition = withContext(Dispatchers.Main) {
             buildAuditionPlayer().apply {
+                addAnalyticsListener(loadCounter)
                 setMediaItem(at.item.buildUpon().setUri(upgradedUri).build())
                 seekTo(at.position)
                 prepare()
@@ -1645,7 +1751,7 @@ class PlaybackService : MediaSessionService() {
             warmedThrough = withTimeoutOrNull(UPGRADE_AUDITION_MS) {
                 while (true) {
                     val verdict = withContext(Dispatchers.Main) {
-                        auditionVerdict(audition, at.duration, stream)
+                        auditionVerdict(audition, at.duration, stream, mediaBytesLoaded)
                     }
                     when (verdict) {
                         is Audition.Ready -> return@withTimeoutOrNull verdict.bufferedTo
@@ -1704,6 +1810,7 @@ class PlaybackService : MediaSessionService() {
         audition: ExoPlayer,
         previousDuration: Long,
         stream: SourceStream,
+        bytesLoaded: Long,
     ): Audition {
         audition.playerError?.let {
             return Audition.Rejected("${it.errorCodeName} opening ${stream.format.summary}")
@@ -1755,6 +1862,18 @@ class PlaybackService : MediaSessionService() {
         //   upgrade landing at 39889ms, past the 32496ms warmed for it
         // ```
         if (buffered >= wantedThrough || audition.bufferedPercentage >= 100) {
+            // Neither of those numbers is bytes. Both are the player's own read
+            // of a container's index/duration bookkeeping, and that bookkeeping
+            // can say "ready" while almost nothing has actually come off the
+            // network — measured on this exact path: "buffered through 23466ms"
+            // after 1.6 real seconds, with 2.7 kilobytes sitting in the cache
+            // entry the swap was about to read from. A swap taken on that claim
+            // finds nothing local to read, and the stutter that follows is
+            // indistinguishable from a track looping. [loadCounter] is Media3
+            // reporting what its own loader actually finished reading, which the
+            // bookkeeping above cannot get wrong the same way — so it gates the
+            // swap rather than only the buffered-position claim.
+            if (bytesLoaded < MIN_PROVEN_LOAD_BYTES) return Audition.Waiting
             return Audition.Ready(buffered)
         }
         return Audition.Waiting
@@ -1866,7 +1985,13 @@ class PlaybackService : MediaSessionService() {
             val abandoned = item.localConfiguration?.uri
             player.replaceMediaItem(
                 player.currentMediaItemIndex,
-                item.buildUpon().setUri(previousUri).build(),
+                item.buildUpon()
+                    .setUri(previousUri)
+                    // The item being reverted may have declared DASH/HLS for its
+                    // upgrade. The previous stream must be sniffed afresh, or
+                    // Media3 parses a progressive WebM as a manifest.
+                    .setMimeType(null)
+                    .build(),
             )
             player.seekTo(player.currentMediaItemIndex, position)
             player.prepare()
@@ -3184,6 +3309,18 @@ class PlaybackService : MediaSessionService() {
          * cannot be relied on to leave it behind.
          */
         const val UPGRADE_HEADER_BYTES = 512L * 1024
+
+        /**
+         * Real, Media3-reported bytes an audition must have actually loaded
+         * before its buffered-position/percentage claim is trusted — see the
+         * cross-check in [auditionVerdict].
+         *
+         * Set to [UPGRADE_HEADER_BYTES]: anything short of that is, at most, the
+         * container header the audition already fetches on its own before a
+         * single audio byte is read, so a "Ready" verdict backed by less than
+         * this is backed by no more than the header.
+         */
+        const val MIN_PROVEN_LOAD_BYTES = UPGRADE_HEADER_BYTES
 
         /**
          * Opening fetched after an upgrade so the track stays analysable. Four

@@ -438,6 +438,24 @@ private data class SourceProbe(
     val duplicate: Boolean = false,
 )
 
+/**
+ * Whether thumbing a track down should also move the queue on.
+ *
+ * Only a *new* dislike does. Tapping the thumb again takes the rating back, and
+ * skipping on that would punish the correction rather than the rating — the
+ * listener who disliked by mistake and immediately undid it would lose the
+ * track they were listening to.
+ *
+ * And only for the track that is actually playing: disliking a row in the
+ * queue, or a song in a list, has nothing to do with what is coming out of the
+ * speaker.
+ */
+internal fun shouldSkipAfterDislike(
+    previousStatus: LikeStatus,
+    targetVideoId: String,
+    currentVideoId: String?,
+): Boolean = previousStatus != LikeStatus.DISLIKE && targetVideoId == currentVideoId
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun VelthyApp(
@@ -2652,7 +2670,19 @@ private fun VelthyApp(
                     // The sheet stays up for a rating: it shows the new state
                     // in place, and people often thumb a song and then queue it.
                     onToggleLike = { viewModel.toggleLike(song.videoId) },
-                    onToggleDislike = { viewModel.toggleDislike(song.videoId) },
+                    onToggleDislike = {
+                        val previousStatus = viewModel.toggleDislike(song.videoId)
+                        if (
+                            previousStatus != null &&
+                            shouldSkipAfterDislike(
+                                previousStatus = previousStatus,
+                                targetVideoId = song.videoId,
+                                currentVideoId = player.song?.videoId,
+                            )
+                        ) {
+                            controller?.seekToNextMediaItem()
+                        }
+                    },
                     onAddToPlaylist = {
                         songActions = null
                         viewModel.loadPlaylists()

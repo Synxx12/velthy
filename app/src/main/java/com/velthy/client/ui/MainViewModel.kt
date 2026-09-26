@@ -355,11 +355,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * is a one-tap, low-stakes action taken while a song is playing; waiting
      * on a round trip before the heart fills reads as the tap not having
      * registered, and people tap again.
+     *
+     * @return the rating that was in place before this call, or null when
+     *   nothing changed — not signed in, or the rating already held. The
+     *   thumb-down uses it to tell a *new* dislike from a tap that merely
+     *   took one back, and only the former should move the queue on.
      */
-    fun setLike(videoId: String, status: LikeStatus) {
-        if (!requireSignIn()) return
+    fun setLike(videoId: String, status: LikeStatus): LikeStatus? {
+        if (!requireSignIn()) return null
         val previous = likeStatusOf(videoId)
-        if (previous == status) return
+        if (previous == status) return null
         LikeState.set(videoId, status)
         viewModelScope.launch {
             YtMusicRepository.rate(videoId, status).fold(
@@ -378,6 +383,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 },
             )
         }
+        return previous
     }
 
     /**
@@ -443,7 +449,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** As [toggleLike], for the thumb-down. */
-    fun toggleDislike(videoId: String) = setLike(
+    fun toggleDislike(videoId: String): LikeStatus? = setLike(
         videoId,
         if (likeStatusOf(videoId) == LikeStatus.DISLIKE) {
             LikeStatus.INDIFFERENT
@@ -1635,6 +1641,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
         authStore.cookie = cookie
         Innertube.cookie = cookie
+        // Signing in is the one event that can turn an age-gated track
+        // playable, so the resolver's "not playable" verdicts and InnerTubeX's
+        // client exclusions are cleared with it — otherwise the listener who
+        // signed in specifically to play that track is told for the next ten
+        // minutes that it still cannot be played.
+        StreamResolver.onSessionChanged()
         _signedIn.value = true
         // A fresh sign-in has not been asked which of its channels to act as,
         // so it starts on the one the session serves by default.
@@ -1702,6 +1714,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.velthy.client.data.history.PlaybackHistoryManager.clearRemoteHistory()
         authStore.cookie = saved.cookie
         Innertube.cookie = saved.cookie
+        StreamResolver.onSessionChanged()
         _signedIn.value = true
         // This session's own channel, installed before any of its pages are
         // fetched — the same identity it was left acting as.
@@ -1771,6 +1784,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onWebSession(session: com.velthy.client.auth.CapturedSession) {
         authStore.cookie = session.cookie
         Innertube.cookie = session.cookie
+        StreamResolver.onSessionChanged()
         _signedIn.value = true
         Innertube.selectChannel(session.pageId, session.dataSyncId, session.authUser)
         _channels.value = emptyList()
@@ -1822,6 +1836,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun signOut() {
         authStore.signOut()
         Innertube.cookie = null
+        // The mirror image of signing in: a client refused while a session was
+        // attached is owed a fresh hearing now that there is none.
+        StreamResolver.onSessionChanged()
         _signedIn.value = false
         _account.value = null
         // The channels belong to the account that just left, and so does the

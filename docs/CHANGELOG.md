@@ -6,6 +6,22 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
+### [Unreleased] — Mesin Suara Baru & Pemutar Layar Lebar
+> 📅 2026-09-25
+> ⚠️ **Severity: Important**
+
+#### ⚡ Peningkatan Kualitas & Performa
+- **Lagu Mulai Terdengar Hampir Seketika**: Mesin pengambil suara diganti sepenuhnya dengan katalog identitas server yang diuji langsung dan terus diperbarui dari jarak jauh, ditambah lapisan pembuka kunci format yang lebih baru. Sebelumnya aplikasi mencoba identitas satu per satu dan sering tersangkut pada yang lambat atau sudah ditolak; kini yang tercepat yang menang, sehingga jeda panjang sebelum lagu pertama berbunyi hampir hilang — terutama pada lagu yang dibatasi usia atau wilayah.
+- **Lagu yang Sedang Ramai Tetap Lancar**: Identitas server yang sudah dipakai untuk sebuah lagu kini dicoba lagi secara otomatis tanpa mengulang dari awal bila pembukaannya ditolak di tengah jalan. Permintaan yang sama untuk lagu yang sama juga tidak lagi dijalankan dua kali bersamaan, sehingga perpindahan antrean yang cepat tidak saling memperlambat.
+- **Lagu yang Tidak Bisa Diputar Gagal Sekali, Bukan Berulang**: Lagu yang ditolak karena alasan tetap — batas usia, tak tersedia di wilayah ini, konten berbayar, atau kanal yang sudah ditutup — kini dicatat sebagai jawaban akhir selama sepuluh menit, bukan ditanyakan ulang setiap tiga puluh detik. Sebelumnya satu lagu seperti ini bisa memicu belasan penelusuran penuh tanpa pernah berbunyi. Verdict itu dibersihkan begitu kamu masuk atau keluar akun, karena masuk akun adalah satu-satunya hal yang bisa mengubah jawabannya.
+- **Sumber Pengganti yang Gagal Kembali ke YouTube**: Bila lagu yang sedang diputar dari sumber alternatif (addon atau katalog pihak ketiga) mati di tengah jalan, aplikasi tidak lagi mencoba sumber yang sama berulang kali — ia langsung memindahkan lagu itu ke suara YouTube aslinya dan tidak menawarkan sumber yang gagal itu lagi selama pemutaran berlangsung. Ini menghilangkan kasus lagu yang tidak pernah bisa diputar sementara salinan YouTube-nya sudah siap di tangan.
+- **Peningkatan Kualitas Suara Tidak Lagi Berhenti Terlalu Dini**: Perpindahan ke versi berkualitas lebih tinggi kini menunggu bukti nyata bahwa berkasnya benar-benar sudah terunduh, bukan sekadar laporan perkiraan posisi dari pemutar. Sebelumnya perpindahan bisa terjadi saat berkas baru terisi beberapa kilobyte, yang terdengar seperti lagu tersendat atau mengulang. Perpindahan juga membersihkan jenis berkas lama sehingga isi yang baru tidak pernah salah dibaca.
+- **Peluncuran Aplikasi Menyiapkan Suara Lebih Awal**: Seluruh modal untuk memutar lagu — konfigurasi pemutar, pembuka kunci format, dan penyedia token — kini disiapkan sejak aplikasi dijalankan, bukan saat lagu pertama diketuk.
+
+#### 🐛 Perbaikan Masalah
+- **Lagu yang Ditandai Tidak Suka Langsung Dilewati**: Menekan tombol tidak suka pada lagu yang sedang diputar kini langsung memindahkan pemutaran ke lagu berikutnya, alih-alih hanya mengubah tandanya dan membiarkan lagunya terus berjalan.
+- **Cache Suara Tidak Lagi Bercampur**: Berkas suara dari sumber alternatif kini disimpan pada kunci terpisah per versi kualitas, sehingga versi lossless tidak pernah ditulis ke tengah berkas lossy yang sudah ada — sumber dari salah satu jenis kerusakan berkas yang paling sulit dilacak.
+
 ### [1.4.6.7] — Kontrol Lirik di Baris Judul
 > 📅 2026-09-18
 > ⚠️ **Severity: Important**
