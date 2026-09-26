@@ -65,7 +65,9 @@ val appVersionCode: Int =
 
 android {
     namespace = "com.velthy.client"
-    compileSdk = 36
+    // InnerTubeX's AAR requires compiling against 37; targetSdk (runtime
+    // behaviour) stays 36.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.velthy.client"
@@ -280,14 +282,19 @@ dependencies {
     implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0")
 
     // ---- Innertube (YouTube Music) client: Ktor + kotlinx.serialization ----
-    implementation("io.ktor:ktor-client-core:3.0.3")
-    implementation("io.ktor:ktor-client-okhttp:3.0.3")
-    implementation("io.ktor:ktor-client-content-negotiation:3.0.3")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    // Ktor and serialization are held at InnerTubeX's versions (below) so the
+    // upgrade it forces is explicit rather than resolved behind our backs.
+    implementation("io.ktor:ktor-client-core:3.5.2")
+    implementation("io.ktor:ktor-client-okhttp:3.5.2")
+    implementation("io.ktor:ktor-client-content-negotiation:3.5.2")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.5.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     // ---- Discord Rich Presence: Ktor WebSocket gateway client ----
-    implementation("io.ktor:ktor-client-websockets:3.0.3")
+    implementation("io.ktor:ktor-client-websockets:3.5.2")
+
+    // ---- YouTube stream extraction: live-benchmarked client catalog + cipher tiers ----
+    implementation("com.github.MetrolistGroup.innertubex:innertubex-android:v0.7.0")
 
     // ---- Stream resolution: NewPipe solves YouTube's signature + `n` throttling ----
     // Pinned to v0.26.3, not the newer v0.26.4: v0.26.4's player-JS parser fails with
@@ -324,7 +331,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
 
     // ---- JS module execution: QuickJS VM for Convx-style source plugins ----
-    implementation("io.github.dokar3:quickjs-kt-android:1.0.5")
+    // Held at InnerTubeX's version; the same VM runs QuickJsExecutor's module sources.
+    implementation("io.github.dokar3:quickjs-kt-android:1.0.14")
 
     // ---- Smart Fade: on-device beat/downbeat model (Beat This!, MIT-licensed) ----
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.28.0")

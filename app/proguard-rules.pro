@@ -104,6 +104,18 @@
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# InnerTubeX (YouTube stream extraction)
+#
+# Its client catalog, cipher tiers and player-config store are all reached
+# reflectively, and the cipher solver drives the same player JavaScript Rhino
+# does. Keep the package whole.
+# ─────────────────────────────────────────────────────────────────────────────
+-keep class com.metrolist.** { *; }
+-keepclassmembers class com.metrolist.** { *; }
+-dontwarn com.metrolist.**
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Ktor client + engines
 # ─────────────────────────────────────────────────────────────────────────────
 -keep class io.ktor.** { *; }

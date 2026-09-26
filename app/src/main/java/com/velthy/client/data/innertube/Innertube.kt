@@ -40,6 +40,7 @@ import kotlinx.serialization.json.putJsonObject
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.Locale
 
 /**
  * Minimal Innertube (youtubei) client.
@@ -58,6 +59,29 @@ import java.util.Base64
  * from the stored cookie; no long-lived token is ever minted or stored.
  */
 object Innertube {
+
+    /**
+     * The UI language, as an Innertube `hl` code.
+     *
+     * Read by [InnerTubeXResolver], which has to hand YouTube a locale for the
+     * same reason this object does: a request without one is answered with the
+     * wrong region's catalogue and the wrong language's metadata.
+     *
+     * Velthy has no per-app locale override — the app follows the device — so
+     * this is [Locale.getDefault]. Two codes are rewritten because YouTube
+     * still speaks the older spelling: Android reports Hebrew as `iw` and
+     * Indonesian as `in`, and YouTube expects `he` and `id`.
+     */
+    internal val currentLanguage: String
+        get() {
+            val raw = Locale.getDefault().language.ifEmpty { "en" }
+            return when (raw.lowercase(Locale.ROOT)) {
+                "iw" -> "he"
+                "in" -> "id"
+                "ji" -> "yi"
+                else -> raw
+            }
+        }
 
     private const val MUSIC_BASE = "https://music.youtube.com/youtubei/v1"
     private const val YT_BASE = "https://www.youtube.com/youtubei/v1"

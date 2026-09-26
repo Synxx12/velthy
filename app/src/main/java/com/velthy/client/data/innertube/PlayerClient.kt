@@ -1,6 +1,7 @@
 ﻿package com.velthy.client.data.innertube
 
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.util.Locale
 
 /**
  * One client identity for the `player` endpoint.
@@ -261,5 +262,32 @@ data class PlayerClient(
                 else -> IOS
             }
         }
+
+        /**
+         * Largest single range googlevideo reliably serves for [url]'s client.
+         *
+         * The clients differ in how much they will hand over in one request:
+         * asking a VR or TV client for a megabyte gets a refusal partway
+         * through, which reads downstream as a dead URL rather than a request
+         * that was simply too big. Mirrors InnerTubeX's own
+         * `mediaRangeChunkSize`, so a probe and the fetch it is standing in for
+         * ask for the same thing.
+         *
+         * Anything not minted by googlevideo — a module's own server, a local
+         * file — is left uncapped.
+         */
+        fun rangeBytesFor(url: String): Long {
+            val parsed = url.toHttpUrlOrNull() ?: return Long.MAX_VALUE
+            if (!parsed.host.endsWith("googlevideo.com")) return Long.MAX_VALUE
+            val name = parsed.queryParameter("c")?.uppercase(Locale.ROOT)
+            return if (name == "ANDROID_VR" || name?.startsWith("TVHTML5_SIMPLY") == true) {
+                NARROW_RANGE_BYTES
+            } else {
+                RANGE_BYTES
+            }
+        }
+
+        private const val RANGE_BYTES = 1024L * 1024
+        private const val NARROW_RANGE_BYTES = 512L * 1024
     }
 }

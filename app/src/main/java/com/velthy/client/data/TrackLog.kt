@@ -6,7 +6,10 @@ import com.velthy.client.BuildConfig
 import com.velthy.client.data.model.Song
 import com.velthy.client.data.sources.SourceResolver
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,37 +57,63 @@ object TrackLog {
     // reads it (see the class doc), so a release build skips straight to
     // record(), which is what Copy Log actually depends on.
 
-    fun d(tag: String, message: String) {
+    /**
+     * The track whose work this thread is doing, if it is doing any.
+     *
+     * Read by the logging calls as their default [about], so a line written
+     * deep inside a resolve is filed against the track that resolve is for
+     * without every layer in between having to pass an id down.
+     */
+    private val working = ThreadLocal<String?>()
+
+    /**
+     * A coroutine context that files everything logged inside it against [id].
+     *
+     *     scope.async(Dispatchers.IO + TrackLog.about(videoId)) { … }
+     *
+     * The alternative is passing an id down to every call that logs, and the
+     * lines worth having are exactly the ones furthest from anyone who knows
+     * which track they are for: a fetch inside a source ladder inside a resolve.
+     * None of those layers has any other use for a track id.
+     *
+     * Carried as a [kotlinx.coroutines.ThreadContextElement] rather than a bare
+     * thread local because that work hops threads constantly — `withContext(IO)`
+     * for a fetch, `Dispatchers.Default` for the JS engine — and this follows
+     * it, including into every child coroutine.
+     */
+    fun about(id: String?): CoroutineContext = working.asContextElement(id)
+
+    fun d(tag: String, message: String, about: String? = working.get()) {
         if (BuildConfig.DEBUG) Log.d(tag, message)
-        record('D', message)
+        record('D', message, about)
     }
 
-    fun i(tag: String, message: String) {
+    fun i(tag: String, message: String, about: String? = working.get()) {
         if (BuildConfig.DEBUG) Log.i(tag, message)
-        record('I', message)
+        record('I', message, about)
     }
 
-    fun w(tag: String, message: String) {
+    fun w(tag: String, message: String, about: String? = working.get()) {
         if (BuildConfig.DEBUG) Log.w(tag, message)
-        record('W', message)
+        record('W', message, about)
     }
 
-    fun w(tag: String, message: String, error: Throwable) {
+    fun w(tag: String, message: String, error: Throwable, about: String? = working.get()) {
         if (BuildConfig.DEBUG) Log.w(tag, message, error)
-        record('W', "$message\n${error.stackTraceToString()}")
+        record('W', "$message\n${error.stackTraceToString()}", about)
     }
 
-    fun e(tag: String, message: String) {
+    fun e(tag: String, message: String, about: String? = working.get()) {
         if (BuildConfig.DEBUG) Log.e(tag, message)
-        record('E', message)
+        record('E', message, about)
     }
 
-    fun e(tag: String, message: String, error: Throwable) {
+    fun e(tag: String, message: String, error: Throwable, about: String? = working.get()) {
         if (BuildConfig.DEBUG) Log.e(tag, message, error)
-        record('E', "$message\n${error.stackTraceToString()}")
+        record('E', "$message\n${error.stackTraceToString()}", about)
     }
 
-    private class Line(val at: Long, val level: Char, val text: String)
+    private class Line(val at: Long, val level: Char, val text: String, val track: String?)
 
     private val lines = ArrayDeque<Line>()
 
@@ -97,14 +126,14 @@ object TrackLog {
      * limit that counts them the same either wastes memory or throws away the
      * history that matters.
      */
-    private fun record(level: Char, message: String) {
+    private fun record(level: Char, message: String, about: String?) {
         val text = if (message.length > MAX_LINE_CHARS) {
             message.take(MAX_LINE_CHARS) + "…(${message.length - MAX_LINE_CHARS} more)"
         } else {
             message
         }
         synchronized(lines) {
-            lines.addLast(Line(System.currentTimeMillis(), level, text))
+            lines.addLast(Line(System.currentTimeMillis(), level, text, about))
             held += text.length
             while (held > MAX_HELD_CHARS && lines.isNotEmpty()) {
                 held -= lines.removeFirst().text.length
