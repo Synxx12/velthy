@@ -296,8 +296,23 @@ jobs:
 
           footer = f"\n---\n\n### 📱 Cara Instalasi\n1. Unduh file `Velthy-v{display_ver}.apk` di bawah.\n2. Buka file APK di perangkat Android Anda.\n3. Izinkan **Install dari Sumber Tidak Dikenal** jika diminta.\n"
 
+          # Velthy is a fork of BitChord, which is GPL-3.0 — and a fork under
+          # that licence owes its upstream the credit. Kept in every release's
+          # notes rather than only in the repository, because a release page is
+          # where someone who installed the APK actually looks.
+          attribution = (
+              "\n---\n\n"
+              "### 🔗 Tentang Proyek Ini\n"
+              "**Velthy adalah fork dari [BitChord](https://github.com/kushagrasinghx/BitChord)** "
+              "oleh **Kushagra Singh** dan para kontributornya.\n\n"
+              "Mesin pemutar, pipeline audio, sistem sumber/addon, dan rancangan Material 3-nya "
+              "berasal dari proyek tersebut. Velthy melanjutkannya sebagai klien mandiri dengan "
+              "lini rilis, server, dan pengembangan fiturnya sendiri.\n\n"
+              "Keduanya berlisensi **GNU General Public License v3.0**.\n"
+          )
+
           with open("RELEASE_NOTES.md", "w", encoding="utf-8") as f:
-              f.write(notes + footer)
+              f.write(notes + footer + attribution)
 
           print(f"✅ Generated RELEASE_NOTES.md ({len(notes)} chars)")
           EOF
