@@ -617,6 +617,11 @@ class CrossfadeController(
      * gating reintroduces the staleness this exists to remove.
      */
     private fun publishAnalysisState() {
+        // Nothing reads this while the app is off screen — it exists for the
+        // stats line on the player — and it is the one thing here that writes a
+        // StateFlow on every idle tick, which is four times a second forever.
+        // Skipped away from the screen and republished on the first tick back.
+        if (!AppVisibility.isVisible) return
         val currentItem = player.currentMediaItem
         val nextIndex = player.nextMediaItemIndex
         val nextItem = if (nextIndex == C.INDEX_UNSET) null else player.getMediaItemAt(nextIndex)

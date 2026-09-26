@@ -45,12 +45,11 @@ jobs:
           PARTY_SERVER_URL: ${{ secrets.PARTY_SERVER_URL }}
         run: |
           echo "MODULE_INDEX_URL=${MODULE_INDEX_URL:-https://monochrome.rickyaddons.dpdns.org/8spine-source.json}" > local.properties
-          # Listen Together's server, when a runner is given one. The build has a
-          # default, so an absent secret is not a failure — the app simply ships
-          # with the checked-in address.
-          if [ -n "${PARTY_SERVER_URL}" ]; then
-            echo "PARTY_SERVER_URL=${PARTY_SERVER_URL}" >> local.properties
-          fi
+          # Listen Together's server. Written unconditionally, and blank counts
+          # as absent on the Gradle side too — a CI run with no secret must not
+          # produce a build that differs from a release in this one setting.
+          echo "PARTY_SERVER_URL=${PARTY_SERVER_URL:-https://api.velthy.my.id}" >> local.properties
+          echo "✅ Party server: ${PARTY_SERVER_URL:-https://api.velthy.my.id}"
 
       - name: Run unit tests
         run: ./gradlew test --stacktrace

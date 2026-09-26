@@ -17,25 +17,35 @@ val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
-val moduleIndexUrl: String = System.getenv("MODULE_INDEX_URL")
-    ?: localProps.getProperty("MODULE_INDEX_URL")
+
+/**
+ * The first non-blank value of a build setting, from the environment or from
+ * `local.properties`.
+ *
+ * Blank counts as absent, and that is the whole reason this exists rather than
+ * a chain of `?:`. GitHub Actions sets every `env:` entry it is given, so a
+ * secret that has not been configured arrives as an *empty string* — and an
+ * empty string is not null, so `System.getenv(name) ?: fallback` returns `""`
+ * and the fallback is never reached. That shipped a release with no party
+ * server baked in, which is the one setting here whose absence is silent: the
+ * app simply said it had none, and every other value looked correct.
+ */
+fun setting(envName: String, propName: String = envName): String? =
+    listOfNotNull(System.getenv(envName), localProps.getProperty(propName))
+        .map { it.trim() }
+        .firstOrNull { it.isNotEmpty() }
+
+val moduleIndexUrl: String = setting("MODULE_INDEX_URL")
     ?: "https://monochrome.rickyaddons.dpdns.org/8spine-source.json"
-val lastfmApiKey: String = (
-    localProps.getProperty("LASTFM_API_KEY")
-        ?: System.getenv("LASTFM_API_KEY")
-        ?: ""
-    ).trim()
-val lastfmSecret: String = (
-    localProps.getProperty("LASTFM_SECRET")
-        ?: System.getenv("LASTFM_SECRET")
-        ?: ""
-    ).trim()
+val lastfmApiKey: String = setting("LASTFM_API_KEY").orEmpty()
+val lastfmSecret: String = setting("LASTFM_SECRET").orEmpty()
 // Where Listen Together reaches its server. The in-app field on the party
 // screen overrides this per install, so a self-hosted deployment never fights
-// it. Same override ladder as the above; `api.velthy.my.id` is this project's
-// own tunnel hostname (see backend-nest/README).
-val partyServerUrl: String = System.getenv("PARTY_SERVER_URL")
-    ?: localProps.getProperty("PARTY_SERVER_URL")
+// it. `api.velthy.my.id` is this project's own deployment (see
+// backend-nest/README), and it is the default rather than something a build
+// has to be told: a release with no party server at all is a broken feature,
+// not a conservative one.
+val partyServerUrl: String = setting("PARTY_SERVER_URL")
     ?: "https://api.velthy.my.id"
 
 val signing = Properties().apply {

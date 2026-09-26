@@ -922,6 +922,60 @@ class PlaybackService : MediaSessionService() {
             last.index,
             last.positionMs,
         )
+        warmRestoredTrack(player)
+    }
+
+    /**
+     * Resolves the restored track's stream URL now, so the first press of play
+     * is a cache hit rather than a client walk.
+     *
+     * This is the one gap the read-ahead never covered. [prefetchAround] runs
+     * from `onIsPlayingChanged`, which is to say only once something is already
+     * playing — so on a cold start the track sitting in the mini player was the
+     * one track in the app nothing had looked at, and pressing play paid the
+     * full price: a walk down [StreamResolver]'s client list, a signature solve
+     * on the rungs that need one, and a probe, all before a byte could be
+     * fetched. Every track *after* it started instantly, which is exactly the
+     * "the first song is always the slow one" report this closes.
+     *
+     * Deliberately not a `prepare()`, and the difference is the whole reason
+     * this is safe to do unprompted. Preparing leaves the player idle-state and
+     * posts a media notification for a session nobody has touched — the reason
+     * [restoreLastQueue] leaves the queue cold in the first place. This touches
+     * neither: it fills [StreamResolver]'s twenty-minute URL cache and stops.
+     * If the listener never presses play, the cost is one request pair and
+     * about sixteen kilobytes — see [StreamResolver]'s probe, which asks for a
+     * range and reads a fraction of it.
+     *
+     * Two cases are skipped, because for them there is nothing to warm:
+     *
+     *  - **A downloaded track** plays from disk. It never asks for a URL, so
+     *    minting one would spend a client walk on a cache entry nothing reads.
+     *  - **A source-backed track** resolves through its own server, not
+     *    YouTube. [StreamResolver] speaks YouTube ids only, so the walk would
+     *    fail and log a warning about a track that is not in any trouble.
+     *
+     * Started after a short delay rather than immediately: at a cold start the
+     * app is also fetching its home feed, and [StreamResolver.warmUp] — the
+     * visitor id and extractor init this walk needs — is running alongside.
+     * Waiting lets that land first, so the resolve does not race it for the
+     * same one-time setup. Nothing is lost if play is pressed inside the delay:
+     * a resolve already in flight is joined rather than duplicated, which is
+     * what [StreamResolver]'s own coalescing is for.
+     */
+    private fun warmRestoredTrack(player: ExoPlayer) {
+        val song = player.currentMediaItem?.toSong() ?: return
+        val videoId = song.videoId
+        if (videoId.isBlank()) return
+        if (videoId.startsWith("content://") || videoId.startsWith("file://")) return
+        if (SourceRegistry.parseTrackKey(videoId) != null) return
+        if (com.velthy.client.download.Downloads.saved.value.containsKey(videoId)) return
+        scope.launch {
+            delay(RESTORED_WARM_DELAY_MS)
+            runCatching { StreamResolver.resolve(videoId) }
+                .onSuccess { TrackLog.d(TAG, "restored track $videoId warmed") }
+                .onFailure { TrackLog.d(TAG, "restored track warm-up skipped $videoId: ${it.message}") }
+        }
     }
 
     /** The background hunt for a better copy of whatever is playing. */
@@ -1946,6 +2000,12 @@ class PlaybackService : MediaSessionService() {
      * for the UI to omit — better a shorter line than a made-up number.
      */
     private fun publishNerdStats() {
+        // Nobody is looking at a stats line with the screen off, and this is a
+        // fresh Snapshot object written to a StateFlow every second the loop
+        // runs — a subscription wake-up and a recomposition for a panel that is
+        // not mounted. Skipped away from the screen; the sampler and
+        // onAudioInputFormatChanged both republish the moment it is back.
+        if (!AppVisibility.isVisible) return
         val player = player ?: return
         val format = player.audioFormat
         val mediaId = player.currentMediaItem?.mediaId
@@ -3050,6 +3110,18 @@ class PlaybackService : MediaSessionService() {
          * waits *longer* under a tighter cap than a looser one.
          */
         const val RESOLVE_TIMEOUT_MS = 120_000L
+
+        /**
+         * How long the restored track's warm-up waits before going out.
+         *
+         * Enough for [StreamResolver.warmUp] — the visitor id and the
+         * extractor's own init, both started by the application at launch — to
+         * have landed, so this walk does not race the one-time setup it needs
+         * for the same connection and the same work. Short enough that it is
+         * still comfortably ahead of a person: reaching the mini player and
+         * deciding to press play takes longer than this.
+         */
+        const val RESTORED_WARM_DELAY_MS = 1_200L
 
         /**
          * Cap on offering a YouTube track to a higher-ranked source.

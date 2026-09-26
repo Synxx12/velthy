@@ -6,13 +6,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.net.URI
 
-/** Relays a BitChord web invite from [com.velthy.client.MainActivity] to Compose. */
+/** Relays a Listen Together invite from [com.velthy.client.MainActivity] to Compose. */
 object JamInviteLink {
 
-    const val ORIGIN = "https://bitchord.kushagrasingh.in"
+    const val ORIGIN = "https://velthy.my.id"
 
-    private const val EXTRA_CONSUMED = "bitchord.jamInviteConsumed"
-    private const val HOST = "bitchord.kushagrasingh.in"
+    private const val EXTRA_CONSUMED = "velthy.jamInviteConsumed"
+    private const val HOST = "velthy.my.id"
 
     private val _pending = MutableStateFlow<String?>(null)
     val pending: StateFlow<String?> = _pending.asStateFlow()
@@ -35,17 +35,42 @@ object JamInviteLink {
         _pending.value = null
     }
 
-    /** Returns the normalized party code only for the public invite URL shape. */
+    /**
+     * Returns the normalized party code for either invite shape.
+     *
+     * Two forms carry it, and both have to work: `velthy://join/ABC123` from a
+     * device that has the app, and `https://velthy.my.id/join/ABC123` for
+     * anywhere a custom scheme would not be clickable. The path is the same in
+     * both, so the code is read the same way once the scheme check is out of
+     * the way.
+     */
     fun parse(value: String?): String? {
         val uri = runCatching { URI(value ?: return null) }.getOrNull() ?: return null
-        if (!uri.scheme.equals("https", ignoreCase = true)) return null
-        if (!uri.host.equals(HOST, ignoreCase = true)) return null
+        val scheme = uri.scheme?.lowercase()
+        val host = uri.host?.lowercase()
+        val isAppLink = scheme == "velthy" && host == "join"
+        val isWebLink = scheme == "https" && host == HOST
+        if (!isAppLink && !isWebLink) return null
 
-        val match = INVITE_PATH.matchEntire(uri.path.orEmpty()) ?: return null
+        // The app form puts the code where a web form puts its first path
+        // segment, so the two are read from the same place.
+        val path = if (isAppLink) "/join${uri.path.orEmpty()}" else uri.path.orEmpty()
+        val match = INVITE_PATH.matchEntire(path) ?: return null
         return match.groupValues[1].uppercase()
     }
 
-    fun url(code: String): String = "$ORIGIN/invite/${code.uppercase()}"
+    /**
+     * The link to hand somebody else.
+     *
+     * The `velthy://` form comes first because it is the one that opens the app
+     * directly, on a device that has it installed. The web address is the
+     * fallback a chat client will still make clickable, and it carries the same
+     * code in the same place.
+     */
+    fun url(code: String): String = "velthy://join/${code.uppercase()}"
 
-    private val INVITE_PATH = Regex("""/invite/([A-Za-z0-9]{${ListenTogether.CODE_LENGTH}})""")
+    /** The same invite as a plain web address, for anywhere a custom scheme is not clickable. */
+    fun webUrl(code: String): String = "$ORIGIN/join/${code.uppercase()}"
+
+    private val INVITE_PATH = Regex("""/join/([A-Za-z0-9]{${ListenTogether.CODE_LENGTH}})""")
 }

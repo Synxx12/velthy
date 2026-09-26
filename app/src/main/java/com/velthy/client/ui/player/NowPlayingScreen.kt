@@ -169,6 +169,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
@@ -691,6 +692,29 @@ private fun artRevealOf(morph: State<Float>?): Float =
     coverArtReveal(morph?.value ?: 1f)
 
 /**
+ * The finger's vertical speed, converted into the units the morph moves in.
+ *
+ * Pixels per second is not a number the host can use: what it has is a progress
+ * value, and how many pixels make a whole point of that progress is
+ * [travelPx] — the same distance the drag itself is measured against, so a
+ * velocity of one means "the finger was covering a full open or close every
+ * second". Positive is towards open, because progress grows as the finger rises.
+ *
+ * Clamped, because a flick off the edge of a screen can report several thousand
+ * pixels a second and a spring handed that would overshoot into a bounce nobody
+ * asked for. Four progress-units a second is already far past "this was
+ * deliberate".
+ */
+private fun VelocityTracker.progressVelocity(travelPx: Float): Float {
+    if (travelPx <= 0f) return 0f
+    val raw = calculateVelocity().y / travelPx
+    return (-raw).coerceIn(-MAX_PULL_VELOCITY, MAX_PULL_VELOCITY)
+}
+
+/** Ceiling on how much of a snap the finger's own speed is allowed to decide. */
+private const val MAX_PULL_VELOCITY = 4f
+
+/**
  * Apple Music's Now Playing, closely: artwork that shrinks when paused, a
  * hairline scrubber with elapsed / remaining either side, oversized transport
  * glyphs, a volume capsule flanked by speaker icons, and lyrics / AirPlay /
@@ -767,8 +791,16 @@ fun NowPlayingScreen(
     /** Fired as the player is pulled down from the top strip, with the current
      *  expanded fraction (1 = fully open, 0 = collapsed). */
     onPull: (Float) -> Unit = {},
-    /** Fired when the pull gesture ends; the host decides whether to snap. */
-    onPullEnd: () -> Unit = {},
+    /**
+     * Fired when the pull gesture ends, carrying how fast the finger was moving
+     * in progress-per-second — positive towards open, negative towards closed.
+     *
+     * The host decides whether to snap, and this is the half of the answer a
+     * position cannot give it: a short fast flick and a long slow drag that end
+     * at the same place are different intentions, and a gesture that ignores
+     * the difference feels like it is arguing with the hand.
+     */
+    onPullEnd: (Float) -> Unit = {},
     /**
      * The open/close progress (1 = fully open) driving the mini → full cover
      * morph. While < 1 the player's own artwork stays hidden behind the moving
@@ -879,7 +911,20 @@ fun NowPlayingScreen(
     val activeDevice by rememberActiveAudioDevice()
     val palette = rememberArtworkPalette(song.thumbnailUrl)
     val sleepDeadline by SleepTimer.deadline.collectAsStateWithLifecycle()
-    val sleepRemaining by produceState<Long?>(initialValue = SleepTimer.remainingMs(), sleepDeadline) {
+    // Only ticks while a timer is actually armed. The countdown is read by the
+    // badge and the sheet, both of which are showing a number that changes once
+    // a second — but with no deadline there is no number to change, and the loop
+    // used to run anyway: one wakeup per second, forever, on a screen somebody
+    // may leave open all night.
+    val sleepRemaining by produceState<Long?>(
+        initialValue = SleepTimer.remainingMs(),
+        sleepDeadline,
+    ) {
+        val deadline = sleepDeadline
+        if (deadline == null) {
+            value = null
+            return@produceState
+        }
         while (true) {
             value = SleepTimer.remainingMs()
             delay(1000)
@@ -1403,17 +1448,34 @@ fun NowPlayingScreen(
                         // divided by the full screen height which made it feel
                         // impossibly stiff.
                         val dismissTravelPx = with(density) { 200.dp.toPx() }
+                        // How fast the finger was moving when it left, in
+                        // progress-per-second. A flick that covers 40dp in 80ms
+                        // and a slow drag that covers the same 40dp in 600ms are
+                        // the same *position* and completely different
+                        // intentions, and only the velocity tells them apart —
+                        // which is why every platform's own dismiss gesture
+                        // weighs it. Without it, a flick had to be dragged all
+                        // the way past the halfway point before it counted, and
+                        // a decisive flick that stopped short snapped back.
+                        val velocity = VelocityTracker()
                         detectVerticalDragGestures(
-                            onDragStart = { down = 0f },
+                            onDragStart = {
+                                down = 0f
+                                velocity.resetTracking()
+                            },
                             onVerticalDrag = { change, dragAmount ->
                                 change.consume()
+                                velocity.addPosition(change.uptimeMillis, change.position)
                                 // Signed: pulling down grows `down` (closing),
                                 // pulling back up shrinks it again (cancel).
                                 down = (down + dragAmount).coerceAtLeast(0f)
                                 onPull((1f - down / dismissTravelPx).coerceIn(0f, 1f))
                             },
-                            onDragEnd = { onPullEnd() },
-                            onDragCancel = { onPullEnd() },
+                            // Signed so a flick *up* carries the player back
+                            // open: the progress grows as the finger rises, so
+                            // its own velocity is already in that direction.
+                            onDragEnd = { onPullEnd(velocity.progressVelocity(dismissTravelPx)) },
+                            onDragCancel = { onPullEnd(0f) },
                         )
                     },
                 contentAlignment = Alignment.Center,

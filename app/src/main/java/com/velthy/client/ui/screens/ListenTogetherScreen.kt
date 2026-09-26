@@ -88,6 +88,13 @@ fun ListenTogetherScreen(
     onSignIn: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
+    /**
+     * A code that arrived in an invite link, already typed in for the user.
+     * Consumed once — [onInviteHandled] clears it at the source — so backing out
+     * and coming back does not re-fill a code somebody has since cleared.
+     */
+    inviteCode: String? = null,
+    onInviteHandled: () -> Unit = {},
 ) {
     val state by ListenTogether.state.collectAsStateWithLifecycle()
     val serverStatus by ListenTogether.serverStatus.collectAsStateWithLifecycle()
@@ -107,6 +114,16 @@ fun ListenTogetherScreen(
     LaunchedEffect(Unit) {
         ListenTogether.refreshServerHealth()
         ListenTogether.ensureConnected()
+    }
+
+    // An invite link arrives with its code already known, so it goes straight
+    // into the field and the source is cleared. Typing over it afterwards is
+    // normal: this is a starting value, not a lock.
+    LaunchedEffect(inviteCode) {
+        if (!inviteCode.isNullOrBlank() && !state.inParty) {
+            codeInput = inviteCode
+            onInviteHandled()
+        }
     }
 
     Column(
@@ -188,7 +205,17 @@ fun ListenTogetherScreen(
                         Intent.createChooser(
                             Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, "$link\n\nJoin my party with code $code")
+                                // Both forms, because only one of them is
+                                // clickable depending on where this ends up:
+                                // the app link opens Velthy directly, and the
+                                // web link still works for somebody who does
+                                // not have it yet.
+                                putExtra(
+                                    Intent.EXTRA_TEXT,
+                                    "Join my party with code $code\n" +
+                                        "$link\n" +
+                                        JamInviteLink.webUrl(code),
+                                )
                             },
                             null,
                         ),

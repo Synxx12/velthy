@@ -154,6 +154,25 @@
                     android:host="discord"
                     android:path="/callback" />
             </intent-filter>
+            <!-- Listen Together invites: velthy://join/ABC123 from a device that
+                 has the app, and the velthy.my.id web address as the fallback. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="velthy"
+                    android:host="join" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="velthy.my.id"
+                    android:pathPrefix="/join" />
+            </intent-filter>
         </activity>
 
         <service

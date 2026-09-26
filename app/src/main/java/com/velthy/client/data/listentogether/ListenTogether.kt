@@ -369,43 +369,61 @@ object ListenTogether {
     // Any member may send any of these. There is no host privilege in this
     // feature, on either side of the wire.
 
-    fun play(positionMs: Long? = null) = control("play") { positionMs?.let { put("positionMs", it) } }
+    fun play(positionMs: Long? = null): Boolean =
+        control("play") { positionMs?.let { put("positionMs", it) } }
 
-    fun pause(positionMs: Long? = null) = control("pause") { positionMs?.let { put("positionMs", it) } }
+    fun pause(positionMs: Long? = null): Boolean =
+        control("pause") { positionMs?.let { put("positionMs", it) } }
 
-    fun seek(positionMs: Long) = control("seek") { put("positionMs", positionMs) }
+    fun seek(positionMs: Long): Boolean = control("seek") { put("positionMs", positionMs) }
 
-    fun next() = control("next") {}
+    fun next(): Boolean = control("next") {}
 
-    fun previous() = control("previous") {}
+    fun previous(): Boolean = control("previous") {}
 
-    fun setTrack(track: PartyTrack, positionMs: Long = 0, isPlaying: Boolean = true) =
+    fun setTrack(track: PartyTrack, positionMs: Long = 0, isPlaying: Boolean = true): Boolean =
         control("setTrack") {
             put("track", json.encodeToJsonElement(PartyTrack.serializer(), track))
             put("positionMs", positionMs)
             put("isPlaying", isPlaying)
         }
 
-    fun setQueue(queue: List<PartyTrack>, index: Int) = control("setQueue") {
+    fun setQueue(queue: List<PartyTrack>, index: Int): Boolean = control("setQueue") {
         put("queue", json.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(PartyTrack.serializer()), queue))
         put("queueIndex", index)
     }
 
-    private fun control(action: String, body: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit) {
+    /**
+     * Sends one control, and reports whether it was actually handed to a live
+     * socket.
+     *
+     * The return value is not decoration. A control that goes nowhere leaves the
+     * party describing the world before the button was pressed, so the sender's
+     * own reconcile would undo the action a moment later — the song someone just
+     * picked snapping back to the one they left. A caller that is told the frame
+     * did not go out can hold off instead, and say it again when the socket
+     * returns. See `PartySync.publish`.
+     */
+    private fun control(
+        action: String,
+        body: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): Boolean {
         val frame = buildJsonObject {
             put("type", "control")
             put("action", action)
             body()
         }
-        send(frame)
+        return send(frame)
     }
 
-    private fun send(frame: JsonObject) {
-        val live = session ?: return
+    /** False when there is no socket to carry the frame. */
+    private fun send(frame: JsonObject): Boolean {
+        val live = session ?: return false
         scope.launch {
             runCatching { live.send(Frame.Text(frame.toString())) }
                 .onFailure { Log.w(TAG, "control not sent: ${redact(it.message)}") }
         }
+        return true
     }
 
     // --------------------------------------------------------- the playhead --

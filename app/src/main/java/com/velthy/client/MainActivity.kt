@@ -145,6 +145,7 @@ import com.velthy.client.ui.screens.LocalMusicScreen
 import com.velthy.client.ui.screens.LocalTopBarSegmentedControl
 import com.velthy.client.ui.screens.SearchScreen
 import com.velthy.client.ui.screens.ListenTogetherScreen
+import com.velthy.client.ui.screens.SettingsCategory
 import com.velthy.client.ui.screens.SettingsScreen
 import com.velthy.client.ui.screens.SourcesScreen
 import com.velthy.client.ui.screens.SpotifyCanvasAuthScreen
@@ -152,6 +153,7 @@ import com.velthy.client.data.sources.SourceConfig
 import com.velthy.client.data.sources.SourceHealth
 import com.velthy.client.data.sources.SourceRegistry
 import com.velthy.client.playback.QueueBuilder
+import com.velthy.client.playback.AppVisibility
 import com.velthy.client.playback.QueueShuffle
 import com.velthy.client.playback.autoplaySectionStart
 import com.velthy.client.playback.dropAutoplayTracks
@@ -167,6 +169,7 @@ import com.velthy.client.ui.components.SongActionsSheet
 import com.velthy.client.playback.rememberMediaController
 import com.velthy.client.playback.rememberPlayerState
 import com.velthy.client.ui.MainViewModel
+import com.velthy.client.ui.rememberIsForeground
 import com.velthy.client.ui.components.AccountChannelDialog
 import com.velthy.client.ui.components.AccountProfileSelector
 import com.velthy.client.ui.components.LocalAppBackdrop
@@ -186,6 +189,7 @@ import com.velthy.client.ui.components.SourceEditorAlert
 import com.velthy.client.ui.components.MiniPlayer
 import com.velthy.client.ui.components.MusicRecognitionSheet
 import com.velthy.client.ui.components.TopFadeBlur
+import com.velthy.client.data.listentogether.JamInviteLink
 import com.velthy.client.data.listentogether.ListenTogether
 import com.velthy.client.ui.components.LyricsSourcesDialog
 import com.velthy.client.ui.components.TranslationLanguageDialog
@@ -244,8 +248,15 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         PlayerDeepLink.consume(intent)
         MusicLink.consume(intent)
+        JamInviteLink.consume(intent)
         handleIntent(intent)
         setContent {
+            // Told to the playback service, which cannot see a window of its
+            // own: it drops its per-second sampling to a fifth of the rate while
+            // nothing of this app is on screen. RESUMED rather than STARTED, so
+            // a screen-off counts as away — which is the whole point.
+            val isForeground = rememberIsForeground()
+            LaunchedEffect(isForeground) { AppVisibility.set(isForeground) }
             val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
             val highPerformance by AppSettings.highPerformanceMode.collectAsStateWithLifecycle()
             val performanceRefreshRate by AppSettings.performanceRefreshRate.collectAsStateWithLifecycle()
@@ -288,6 +299,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         PlayerDeepLink.consume(intent)
         MusicLink.consume(intent)
+        JamInviteLink.consume(intent)
         handleIntent(intent)
     }
 
@@ -345,23 +357,32 @@ class MainActivity : ComponentActivity() {
 /**
  * The mini → full player morph, opening and closing.
  *
- * Both ends are evenly damped and close to the same stiffness on purpose. The
- * old pair had the opening on a soft spring and the close on a much stiffer
- * one, so the player drifted open and then snapped shut — the two halves of
- * one gesture read as two different animations. Low stiffness rather than a
- * tween because the distance travelled is whatever the layout reports and not
- * a fixed number of pixels; a spring is the only spec that can be told "take
- * this long to settle" without working out that distance first.
+ * Both ends are damped the same way and close to the same stiffness on purpose.
+ * The old pair had the opening on a soft spring and the close on a much stiffer
+ * one, so the player drifted open and then snapped shut — the two halves of one
+ * gesture read as two different animations. Low stiffness rather than a tween
+ * because the distance travelled is whatever the layout reports and not a fixed
+ * number of pixels; a spring is the only spec that can be told "take this long
+ * to settle" without working out that distance first.
  *
- * Soft, and softer than they look: this runs the length of the screen, and a
- * stiff spring covers that in a couple of frames and then sits still, which is
- * what made the whole thing read as a jump cut rather than a movement. No
- * bounce either — the morph clamps at 1, so the cover has already handed over
- * to the real artwork by the time an overshoot would land, and all the bounce
- * would buy is slack in the timing.
+ * The damping is the part that matters to how this *feels*, and it now matches
+ * the player's own artwork rather than being dead flat. [NowPlayingScreen]'s
+ * sleeve breathes on `DampingRatioLowBouncy`, so a cover that travelled the
+ * whole screen on a critically-damped curve arrived looking like a different
+ * kind of object than the one it turned into: the flight was correct and felt
+ * mechanical. 0.78 is between Compose's medium-bouncy and no-bouncy — a single
+ * small overshoot that reads as weight, not as wobble.
+ *
+ * Overshoot is safe here in a way it would not be on a plain progress value.
+ * Both reveal curves clamp (`coverArtReveal` and `coverDeparture` both run
+ * through [smooth]), so a morph that passes 1 and settles back shows the real
+ * artwork the whole way through rather than flickering a second hand-over, and
+ * the same is true at the other end.
  */
-private val PLAYER_OPEN_SPEC: SpringSpec<Float> = spring(dampingRatio = 1f, stiffness = 170f)
-private val PLAYER_CLOSE_SPEC: SpringSpec<Float> = spring(dampingRatio = 1f, stiffness = 200f)
+private val PLAYER_OPEN_SPEC: SpringSpec<Float> =
+    spring(dampingRatio = 0.78f, stiffness = 170f)
+private val PLAYER_CLOSE_SPEC: SpringSpec<Float> =
+    spring(dampingRatio = 0.82f, stiffness = 200f)
 
 /**
  * How long the open waits for the player to compose, lay out and decode its
@@ -470,9 +491,44 @@ private fun VelthyApp(
      * [playerProgress] and nothing on the gesture path can interrupt it.
      */
     var pullProgress by remember { mutableStateOf<Float?>(null) }
+    /**
+     * How fast the finger was moving when it let go of a *close*, in
+     * progress-per-second.
+     *
+     * Handed to the close animation so a throw keeps its momentum. Held rather
+     * than passed as an argument because the close runs inside the effect that
+     * owns [playerProgress], and the gesture cannot reach into it — see
+     * [pullProgress] for why nothing on the gesture path is allowed to touch
+     * that animatable. Cleared by whoever reads it.
+     */
+    var closeVelocity by remember { mutableStateOf(0f) }
     // Bounds of the mini player's artwork (window pixels) — where the cover
     // begins its journey when the full player opens.
     var miniBounds by remember { mutableStateOf<Rect?>(null) }
+    /**
+     * Where that artwork actually is *right now*, which is not always where it
+     * was laid out.
+     *
+     * The swipe-up gesture lifts the bar with a `graphicsLayer` translation,
+     * and a layer transform is a draw-phase thing: `onGloballyPositioned` does
+     * not fire for it, so [miniBounds] keeps describing the bar's resting place
+     * for the whole drag. Opening from a lifted bar then started the cover from
+     * a position the artwork had already left, and the flight began with a jump
+     * backwards before it went anywhere — which is exactly what a gesture that
+     * ends in an animation must never do, because the finger has just been
+     * shown where the thing is.
+     *
+     * Derived rather than written on every drag frame: this is read once when
+     * the morph starts and in the overlay while it runs, so there is nothing to
+     * gain from pushing a new value into state 120 times a second.
+     */
+    val liveMiniBounds by remember {
+        derivedStateOf {
+            val base = miniBounds ?: return@derivedStateOf null
+            val lift = miniLift.value
+            if (lift == 0f) base else base.translate(0f, -lift)
+        }
+    }
     // Surfaced as a State: the reveal curves and the morph overlay read it every
     // frame, and reading it through State confines the recomposition to the
     // overlay instead of the whole app.
@@ -535,7 +591,7 @@ private fun VelthyApp(
                 // still open rather than leaving the app stuck behind an invisible
                 // screen.
                 withTimeoutOrNull(PLAYER_READY_TIMEOUT_MS) {
-                    snapshotFlow { miniBounds != null && coverTarget != null && coverArtReady }
+                    snapshotFlow { liveMiniBounds != null && coverTarget != null && coverArtReady }
                         .first { it }
                 }
             }
@@ -546,7 +602,18 @@ private fun VelthyApp(
             // then vanish from there, which is the snap this exists to avoid.
             // No readiness wait on this side: the player is already composed,
             // so there is nothing to wait for.
-            playerProgress.animateTo(targetValue = 0f, animationSpec = PLAYER_CLOSE_SPEC)
+            //
+            // Whatever speed the finger left behind is carried in, so a flick
+            // that was thrown shut keeps going instead of arriving at a
+            // standstill and then being animated from rest. Read and cleared in
+            // one go: the next close must not inherit this one's throw.
+            val thrown = closeVelocity
+            closeVelocity = 0f
+            playerProgress.animateTo(
+                targetValue = 0f,
+                animationSpec = PLAYER_CLOSE_SPEC,
+                initialVelocity = thrown,
+            )
             playerPresent = false
         }
     }
@@ -594,6 +661,17 @@ private fun VelthyApp(
     var captureFailed by remember { mutableStateOf(false) }
     var showListenBrainzLogin by remember { mutableStateOf(false) }
     var showLastfmLogin by remember { mutableStateOf(false) }
+    // Which Settings category page is open, or null for the index. Held here
+    // rather than inside the screen because the top bar owns the page title and
+    // the single back affordance — a second one inside the scroll would sit
+    // under the bar's blur and read as a duplicate.
+    var settingsCategory by remember { mutableStateOf<SettingsCategory?>(null) }
+    // Leaving Settings always lands back on the index. The screen is dropped
+    // with the page, so a category left set would reopen the next visit one
+    // level down, on a page nobody asked for.
+    LaunchedEffect(showSettings) {
+        if (!showSettings) settingsCategory = null
+    }
     var songActions by remember { mutableStateOf<Song?>(null) }
     // Whether the player's album/artist lookup (below, for the current track)
     // is still in flight — read by the long-press sheet so it can show a
@@ -619,6 +697,17 @@ private fun VelthyApp(
         if (playerDeepLinkPending) {
             PlayerDeepLink.handled()
             showNowPlaying = true
+        }
+    }
+
+    // An invite link opens the party screen with its code already typed, so the
+    // only thing left to press is Join. A code arriving from a share sheet is
+    // the one case where the six characters are known before the screen is.
+    val jamInviteCode by JamInviteLink.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(jamInviteCode) {
+        if (jamInviteCode != null) {
+            showNowPlaying = false
+            showListenTogether = true
         }
     }
 
@@ -807,6 +896,11 @@ private fun VelthyApp(
     LaunchedEffect(autoplay, player.queueIndex, player.queue.size, player.song?.videoId, player.repeatMode) {
         val current = player.song?.videoId
         if (!autoplay || current == null) return@LaunchedEffect
+        // Not in a party: its queue is one list every member shares, and a
+        // radio mix is this device's own idea of what should come next. Two
+        // devices each adding their own would keep replacing the running order
+        // neither of them picked. See PlaybackService.loadAutoplayForCurrentTrack.
+        if (ListenTogether.state.value.inParty) return@LaunchedEffect
         if (player.repeatMode == Player.REPEAT_MODE_ALL) {
             autoplaySeed = null
             return@LaunchedEffect
@@ -829,7 +923,17 @@ private fun VelthyApp(
     }
 
     // Lyrics follow whatever is playing; duration lands a beat after the track.
-    LaunchedEffect(player.song?.videoId, player.song?.albumName, player.durationMs) {
+    //
+    // Gated on the app being on screen. A lyrics lookup is up to seven network
+    // calls to third-party services, and the player screen's composition
+    // outlives the activity being stopped — so without this every track change
+    // with the screen off, or while somebody is in another app, went out and
+    // fetched words for a panel nobody was looking at. Nothing is lost by
+    // waiting: the effect re-runs the moment the app is back, and the track is
+    // still the same one.
+    val foreground = rememberIsForeground()
+    LaunchedEffect(player.song?.videoId, player.song?.albumName, player.durationMs, foreground) {
+        if (!foreground) return@LaunchedEffect
         player.song?.let {
             viewModel.loadLyrics(
                 videoId = it.videoId,
@@ -1351,10 +1455,17 @@ private fun VelthyApp(
         BackHandler(enabled = moodGenre != null) { moodGenre = null }
         // One back step out of Settings, or out of any tab but Home, lands on
         // Home rather than exiting — only Home itself hands back to the system,
-        // which is what actually closes/minimizes the app.
+        // which is what actually closes/minimizes the app. Inside a category
+        // page the first back returns to the index instead: the page is one
+        // level deeper than Settings, and leaving the whole page from a
+        // category would skip the level the user just walked down.
         BackHandler(enabled = showSettings && !showAccountScrobbling && !showDiscord && !showReplay && !showHistory && !showSources && !showSpotifyCanvasAuth) {
-            showSettings = false
-            if (detail == null) selectedTab = TAB_HOME
+            if (settingsCategory != null) {
+                settingsCategory = null
+            } else {
+                showSettings = false
+                if (detail == null) selectedTab = TAB_HOME
+            }
         }
         // Registered after the Settings step above, so it wins while the page
         // is open: one back closes the Sources page and lands on Settings
@@ -1363,7 +1474,31 @@ private fun VelthyApp(
         BackHandler(enabled = showSpotifyCanvasAuth) { showSpotifyCanvasAuth = false }
         BackHandler(enabled = showTranslationLanguage) { showTranslationLanguage = false }
         BackHandler(enabled = showListenTogether) { showListenTogether = false }
-        BackHandler(enabled = detail == null && !showSettings && !showAccountScrobbling && !showDiscord && !showNotifications && !showReplay && !showHistory && libraryShowAll == null && selectedTab != TAB_HOME) {
+        // Every page that is one level *above* a tab, and the tab step itself
+        // last. The dispatch order is not something to rely on here: a handler
+        // registered after this one wins, and the mood page and the local
+        // drill-down are both registered from inside the content below — which
+        // is exactly how a back press from Explore's category page used to
+        // jump straight to Home instead of returning to the list it came from.
+        // So each of them is excluded by name, and this stays the weakest
+        // handler in the tree.
+        BackHandler(
+            enabled = detail == null &&
+                moodGenre == null &&
+                libraryShowAll == null &&
+                localDrillDownLabel == null &&
+                !showSettings &&
+                !showAccountScrobbling &&
+                !showDiscord &&
+                !showNotifications &&
+                !showReplay &&
+                !showHistory &&
+                !showSources &&
+                !showSpotifyCanvasAuth &&
+                !showTranslationLanguage &&
+                !showListenTogether &&
+                selectedTab != TAB_HOME,
+        ) {
             selectedTab = TAB_HOME
         }
         BackHandler(enabled = showHistory) { showHistory = false }
@@ -1579,6 +1714,8 @@ private fun VelthyApp(
                     signedIn = signedIn,
                     onSignIn = { showLogin = true },
                     contentPadding = listPadding,
+                    inviteCode = jamInviteCode,
+                    onInviteHandled = { JamInviteLink.handled() },
                 )
             } else if (key == "settings") {
                 SettingsScreen(
@@ -1594,6 +1731,8 @@ private fun VelthyApp(
                     onOpenSources = { showSources = true },
                     onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                     onTranslationLanguage = { showTranslationLanguage = true },
+                    category = settingsCategory,
+                    onCategoryChange = { settingsCategory = it },
                     onOpenReplay = {
                         showSettings = false
                         showReplay = true
@@ -1891,7 +2030,7 @@ private fun VelthyApp(
                 showSources -> "Sources"
                 showSpotifyCanvasAuth -> "Spotify Canvas"
                 showListenTogether -> "Listen Together"
-                showSettings -> "Settings"
+                showSettings -> settingsCategory?.title ?: "Settings"
                 showNotifications -> "Notifications"
                 localDrillDownLabel != null -> localDrillDownLabel ?: ""
                 detail != null -> detail.title
@@ -1936,7 +2075,12 @@ private fun VelthyApp(
                 showSources -> ({ showSources = false })
                 showSpotifyCanvasAuth -> ({ showSpotifyCanvasAuth = false })
                 showListenTogether -> ({ showListenTogether = false })
-                showSettings -> ({ showSettings = false })
+                showSettings -> ({
+                    // Inside a category the first back returns to the index;
+                    // only the next one leaves Settings.
+                    if (settingsCategory != null) settingsCategory = null
+                    else showSettings = false
+                })
                 showNotifications -> ({ showNotifications = false })
                 localDrillDownLabel != null -> ({ localDrillDownLabel = null })
                 detail != null -> ({
@@ -2242,7 +2386,7 @@ private fun VelthyApp(
                     // stop(), no coroutine, nothing that could reach the host's
                     // own animation — see [pullProgress].
                     onPull = { progress -> pullProgress = progress },
-                    onPullEnd = {
+                    onPullEnd = { velocity ->
                         // Read once: the finger's value only stands in for the
                         // animatable while it is down, and it is handed over in
                         // the same coroutine that starts the animation, so
@@ -2257,10 +2401,22 @@ private fun VelthyApp(
                                 // — clearing it first would flash the morph back
                                 // to the animatable's stale value.
                                 pullProgress = null
-                                if (released < 0.5f) {
+                                // A flick decides on speed, not only on where it
+                                // happened to stop. Half a point of progress at
+                                // three points a second is a decisive close;
+                                // the same half at a crawl is someone who
+                                // changed their mind. Both are read here rather
+                                // than inside the gesture so the threshold can
+                                // be reasoned about next to the spec it starts.
+                                val target = if (released + velocity * 0.5f >= 0.5f) 1f else 0f
+                                if (target == 0f) {
                                     // Handed to the effect that owns every other
                                     // close, so it glides home from wherever the
-                                    // finger left it instead of vanishing.
+                                    // finger left it instead of vanishing — and
+                                    // told how fast the finger was going, so a
+                                    // throw keeps its momentum through the
+                                    // handover.
+                                    closeVelocity = velocity
                                     showNowPlaying = false
                                 } else {
                                     // A drag can catch a close that was already
@@ -2269,9 +2425,17 @@ private fun VelthyApp(
                                     // leaves a player that is already on screen
                                     // alone rather than restarting it from zero.
                                     showNowPlaying = true
+                                    // The finger's own speed carries into the
+                                    // spring, so a flick that was thrown open
+                                    // keeps going rather than arriving at a
+                                    // standstill and then being animated from
+                                    // rest — which is the seam that made a
+                                    // thrown player feel like it had been
+                                    // caught and put down.
                                     playerProgress.animateTo(
                                         targetValue = 1f,
                                         animationSpec = PLAYER_OPEN_SPEC,
+                                        initialVelocity = velocity,
                                     )
                                 }
                             }
@@ -2428,7 +2592,7 @@ private fun VelthyApp(
                 if (!coverSettled) {
                     CoverMorphOverlay(
                         song = song,
-                        mini = miniBounds,
+                        mini = liveMiniBounds,
                         target = coverTarget,
                         morph = morph,
                         overlayOrigin = overlayOrigin,

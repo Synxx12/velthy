@@ -132,15 +132,15 @@ jobs:
           if [ -n "${LASTFM_SECRET}" ]; then
             echo "LASTFM_SECRET=${LASTFM_SECRET}" >> local.properties
           fi
-          # Listen Together's server. Baked in at build time so a released app
-          # can join a party with nothing to configure; empty is fine and the
-          # app then asks for an address on the party screen. A secret is the
-          # override; the checked-in default in app/build.gradle.kts is this
-          # project's own hostname.
-          if [ -n "${PARTY_SERVER_URL}" ]; then
-            echo "PARTY_SERVER_URL=${PARTY_SERVER_URL}" >> local.properties
-          fi
+          # Listen Together's server. Written every time, never conditionally:
+          # a build with no party server is a broken feature rather than a
+          # conservative default, so the release carries this project's own
+          # deployment unless a secret says otherwise.
+          PARTY_URL="${PARTY_SERVER_URL:-https://api.velthy.my.id}"
+          echo "PARTY_SERVER_URL=${PARTY_URL}" >> local.properties
+          echo "✅ Party server: ${PARTY_URL}"
           echo "MODULE_INDEX_URL=${MOD_URL}" >> $GITHUB_ENV
+          echo "PARTY_SERVER_URL=${PARTY_URL}" >> $GITHUB_ENV
           echo "✅ Properties configured securely"
 
       # ── 6. BUILD PRODUCTION APK RELEASE ──
@@ -149,13 +149,25 @@ jobs:
           MODULE_INDEX_URL: ${{ env.MODULE_INDEX_URL }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
-          PARTY_SERVER_URL: ${{ secrets.PARTY_SERVER_URL }}
+          PARTY_SERVER_URL: ${{ env.PARTY_SERVER_URL }}
         run: |
           ./gradlew assembleProdRelease \
             -Pvelthy.versionName="${DISPLAY_VERSION}" \
             -Pvelthy.versionCode="${VERSION_CODE}" \
             --stacktrace
-          
+
+          # The address the APK was actually built against, read back out of the
+          # generated BuildConfig. A silent fallback is the failure mode here —
+          # the app just reports having no party server — so the value the
+          # compiler saw is printed rather than assumed.
+          BUILT=$(grep -RhoP 'PARTY_SERVER_URL = "\K[^"]*' \
+            app/build/generated/source/buildConfig/prod/release/ 2>/dev/null | head -n 1 || true)
+          echo "Built-in party server: ${BUILT:-<none>}"
+          if [ -z "${BUILT}" ]; then
+            echo "::error::PARTY_SERVER_URL is empty in the built APK; Listen Together would ship with no server."
+            exit 1
+          fi
+
           mkdir -p release_assets
           
           ARM64=$(find app/build/outputs/apk/prod/release/ -name "*arm64-v8a*.apk" 2>/dev/null | head -n 1)

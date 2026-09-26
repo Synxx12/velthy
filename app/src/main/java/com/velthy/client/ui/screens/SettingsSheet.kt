@@ -78,7 +78,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import com.velthy.client.data.AppUpdateChecker
@@ -117,7 +116,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
@@ -132,9 +130,6 @@ import com.velthy.client.data.stats.Backup
 import com.velthy.client.data.model.Account
 import com.velthy.client.BuildConfig
 import com.velthy.client.R
-import com.velthy.client.data.scrobbling.LastFM
-import com.velthy.client.data.scrobbling.ListenBrainzManager
-import com.velthy.client.ui.components.AlertErrorBanner
 import com.velthy.client.ui.components.isGlassSupported
 import com.velthy.client.ui.performance.resolvePerformanceRefreshRate
 import com.velthy.client.ui.performance.supportedPerformanceRefreshRates
@@ -151,8 +146,6 @@ import com.velthy.client.playback.AudioCache
 import com.velthy.client.playback.AudioDeviceHelper
 import com.velthy.client.playback.AudioDeviceType
 import com.velthy.client.playback.rememberActiveAudioDevice
-import com.velthy.client.ui.haptics.Haptic
-import com.velthy.client.ui.haptics.rememberHaptics
 import com.velthy.client.ui.player.fullBleedArtworkAvailable
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -175,6 +168,13 @@ fun SettingsScreen(
     onLyricsSources: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
+    /**
+     * Which category page is open, or null for the index. Hoisted to the app
+     * layer because the top bar draws the page's title and the one back
+     * affordance for it — see [FrostedTopBar].
+     */
+    category: SettingsCategory? = null,
+    onCategoryChange: (SettingsCategory?) -> Unit = {},
     onOpenReplay: () -> Unit = {},
     /**
      * Opens the Sources screen — the module and custom-index list behind
@@ -211,7 +211,6 @@ fun SettingsScreen(
         ActivityResultContracts.StartActivityForResult(),
     ) { showPerformanceConfirmation = true }
     var updateModalInfo by remember { mutableStateOf<AppUpdateChecker.UpdateInfo?>(null) }
-    val haptics = rememberHaptics()
 
     val wifiQuality by AppSettings.audioQualityWifi.collectAsStateWithLifecycle()
     val cellularQuality by AppSettings.audioQualityCellular.collectAsStateWithLifecycle()
@@ -342,1015 +341,1116 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(contentPadding),
     ) {
-        Text(
-            text = "Settings",
-            style = MaterialTheme.typography.displayLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp),
-        )
+        val page = category
 
-        SettingsGroup {
-            SettingsRow(
-                icon = Icons.Rounded.Person,
-                title = "Account & integrations",
-                subtitle = account?.email?.takeIf { it.isNotBlank() }
-                    ?: if (signedIn) "Signed in" else "Not signed in",
-                onClick = onAccountScrobbling,
+        if (page == null) {
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.displayLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp),
             )
-        }
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.Rounded.Person,
+                    title = "Account & integrations",
+                    subtitle = account?.email?.takeIf { it.isNotBlank() }
+                        ?: if (signedIn) "Signed in" else "Not signed in",
+                    onClick = onAccountScrobbling,
+                )
+            }
 
-        SettingsGroup(
-            header = "Audio quality",
-            footer = "Each connection keeps its own ceiling, so Wi-Fi can stay on " +
-                "Lossless while mobile data is capped. High costs about " +
-                "${AudioQuality.HIGH.hourly} of data, Lossless about " +
-                "${AudioQuality.LOSSLESS.hourly}. The ceiling applies to every source.",
-        ) {
-            SettingsRow(
-                icon = Icons.Rounded.Extension,
-                title = "Sources",
-                subtitle = "Where audio comes from and the order used",
-                onClick = onOpenSources,
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.Wifi,
-                title = "On Wi-Fi",
-                badge = "In use".takeIf { metered == false },
-                value = wifiQuality.label,
-                onClick = { picking = QualityTarget.WIFI },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.SignalCellularAlt,
-                title = "On mobile data",
-                badge = "In use".takeIf { metered == true },
-                value = cellularQuality.label,
-                onClick = { picking = QualityTarget.CELLULAR },
-            )
-            RowDivider()
-            // Last row of this group, which is where it belongs: a preference
-            // about the *source* — whether a module may hand over an Atmos
-            // rendition — so it sits with where audio comes from, not with what
-            // the player does with it, and not with downloads. Off by choice is
-            // a real preference: Atmos is E-AC-3, which is lossy, and the same
-            // track is often also held as a bit-exact stereo copy.
-            SettingsRow(
-                iconPainter = painterResource(R.drawable.ic_dolby_atmos),
-                title = "Dolby Atmos",
-                subtitle = if (atmosCodecSupported) {
-                    "Play the more immersive, surround version of a song when there is one"
-                } else {
-                    "This device can't play Atmos, so these songs play in their usual version"
-                },
-                enabled = atmosCodecSupported,
-                trailing = {
-                    Switch(
-                        checked = dolbyAtmos && atmosCodecSupported,
-                        onCheckedChange = AppSettings::setDolbyAtmos,
-                        enabled = atmosCodecSupported,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setDolbyAtmos(!dolbyAtmos) },
-            )
-        }
-
-        SettingsGroup(header = "Downloads") {
-            SettingsRow(
-                icon = Icons.Rounded.Download,
-                title = "Download quality",
-                subtitle = "${downloadQuality.perTrack} per track, whatever the connection",
-                value = downloadQuality.label,
-                onClick = { pickingDownloadQuality = true },
-            )
-            SettingsSubRow(
-                title = "Download over Wi-Fi only",
-                checked = wifiOnlyDownloads,
-                onCheckedChange = AppSettings::setWifiOnlyDownloads,
-                badge = "Blocking".takeIf { wifiOnlyDownloads && metered == true },
-            )
-            // A sub-row, not a row of its own: it reads as part of the download
-            // settings above it. The folder it writes to is its own badge — the
-            // answer to "where do I point another player at?", which is the only
-            // reason the setting exists.
-            SettingsSubRow(
-                title = "Export compatible downloads",
-                checked = exportDownloads,
-                onCheckedChange = { wanted ->
-                    AppSettings.setExportDownloads(wanted)
-                    // Turning it on sweeps up what is already on the device.
-                    // Turning it off leaves those copies alone: they are the
-                    // listener's files, and a switch about future downloads is
-                    // not a licence to delete them.
-                    if (wanted) {
-                        scrobbleScope.launch {
-                            com.velthy.client.download.Downloads
-                                .exportAllToMusicFolder(context)
-                        }
-                    }
-                },
-                badge = "Music/Velthy".takeIf { exportDownloads },
-            )
-        }
-
-        SettingsGroup(header = "Playback") {
-            // The two rows BitChord leads this group with, in its order: what
-            // the output is opened as, then which route it leaves by.
-            SettingsRow(
-                icon = Icons.Rounded.GraphicEq,
-                title = "Output precision",
-                subtitle = "What the app asks Android to open the output as",
-            )
-            // The two rungs are a segmented control rather than a picker
-            // dialog: there are only two, they are mutually exclusive, and the
-            // choice is worth seeing at a glance instead of behind a tap —
-            // the same treatment BitChord gives them.
-            SegmentedControl(
-                options = OutputPcmMode.entries.map { it.label },
-                selectedIndex = OutputPcmMode.entries.indexOf(outputPcmMode),
-                onSelect = { AppSettings.setOutputPcmMode(OutputPcmMode.entries[it]) },
-                modifier = Modifier.padding(start = TEXT_INSET, end = ROW_INSET, bottom = 14.dp),
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.Tune,
-                title = "Prefer USB DAC",
-                subtitle = "Send playback to an attached USB DAC when one is connected",
-                badge = "Connected".takeIf { audioDevice.type == AudioDeviceType.USB_DAC },
-                trailing = {
-                    Switch(
-                        checked = preferUsbDac,
-                        onCheckedChange = { wanted ->
-                            AppSettings.setPreferUsbDac(wanted)
-                            // Applied on the spot rather than waiting for the
-                            // next route change — the DAC is already attached,
-                            // and that is the whole point of the switch.
-                            if (wanted) AudioDeviceHelper.applyUsbDacPreference(context)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = {
-                    val wanted = !preferUsbDac
-                    AppSettings.setPreferUsbDac(wanted)
-                    if (wanted) AudioDeviceHelper.applyUsbDacPreference(context)
-                },
-            )
-            RowDivider()
-            // Smart Fade decides its own length from each pair of tracks —
-            // tempo, key, structure — so it replaces the manual slider rather
-            // than needing it set to anything first.
-            if (!smartFade) {
-                SliderRow(
-                    icon = Icons.Rounded.Waves,
-                    title = "Crossfade",
-                    subtitle = "Blends one track into the next",
-                    value = if (crossfade == 0) "Off" else "${crossfade}s",
-                    sliderValue = crossfade.toFloat(),
-                    onSliderValue = { AppSettings.setCrossfadeSeconds(it.roundToInt()) },
-                    valueRange = 0f..12f,
-                    steps = 11,
+            SettingsGroup(header = "Music") {
+                SettingsRow(
+                    icon = Icons.Rounded.GraphicEq,
+                    title = "Playback",
+                    subtitle = "Crossfade, speed, silence and spatial audio",
+                    onClick = { onCategoryChange(SettingsCategory.PLAYBACK) },
                 )
                 RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Wifi,
+                    title = "Audio quality",
+                    subtitle = "Streaming ceiling, output and sources",
+                    value = wifiQuality.label,
+                    onClick = { onCategoryChange(SettingsCategory.AUDIO) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Download,
+                    title = "Downloads",
+                    subtitle = "Quality, Wi-Fi only and exports",
+                    value = downloadQuality.label,
+                    onClick = { onCategoryChange(SettingsCategory.DOWNLOADS) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.SmartDisplay,
+                    title = "Now playing",
+                    subtitle = "Cover art, motion covers and the player's look",
+                    onClick = { onCategoryChange(SettingsCategory.NOW_PLAYING) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.AutoMirrored.Rounded.Notes,
+                    title = "Lyrics",
+                    subtitle = "Synced lyrics, sources and translation",
+                    onClick = { onCategoryChange(SettingsCategory.LYRICS) },
+                )
             }
-            SettingsRow(
-                icon = Icons.Rounded.AutoAwesome,
-                title = "Smart Fade",
-                subtitle = if (smartFade) {
-                    "Blends every transition, timed automatically from each track"
-                } else {
-                    "Times and blends transitions automatically, no slider needed"
-                },
-                trailing = {
-                    Switch(
-                        checked = smartFade,
-                        onCheckedChange = AppSettings::setSmartFadeEnabled,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
+
+            SettingsGroup(header = "App") {
+                SettingsRow(
+                    icon = Icons.Rounded.Brightness4,
+                    title = "Appearance",
+                    subtitle = "Theme, language and motion",
+                    value = theme.label,
+                    onClick = { onCategoryChange(SettingsCategory.APPEARANCE) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Speed,
+                    title = "Performance",
+                    subtitle = "Refresh rate and animation budget",
+                    onClick = { onCategoryChange(SettingsCategory.PERFORMANCE) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Storage,
+                    title = "Storage",
+                    subtitle = "Cache limit and what stays on disk",
+                    onClick = { onCategoryChange(SettingsCategory.STORAGE) },
+                )
+            }
+
+            SettingsGroup(header = "Data & about") {
+                SettingsRow(
+                    icon = Icons.Rounded.BarChart,
+                    title = "Your data",
+                    subtitle = "Replay, genre lookups and backups",
+                    onClick = { onCategoryChange(SettingsCategory.DATA) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Vibration,
+                    title = "Miscellaneous",
+                    subtitle = "Haptics, swipes and queue behaviour",
+                    onClick = { onCategoryChange(SettingsCategory.MISC) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.SystemUpdate,
+                    title = "About & updates",
+                    subtitle = "Version, release notes and the website",
+                    value = "v$version",
+                    onClick = { onCategoryChange(SettingsCategory.ABOUT) },
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = buildAnnotatedString {
+                    append("Velthy v$version\n")
+                    append("100% Client-Side Engine · Built with Jetpack Compose\n")
+                    val linkStyles = TextLinkStyles(
+                        style = SpanStyle(
+                            color = MaterialTheme.colorScheme.primary,
+                            textDecoration = TextDecoration.Underline,
                         ),
                     )
+                    withLink(LinkAnnotation.Url("https://velthy.my.id", linkStyles)) {
+                        append("Website")
+                    }
+                    append(" · ")
+                    withLink(LinkAnnotation.Url("https://github.com/Synxx12/velthy", linkStyles)) {
+                        append("GitHub")
+                    }
+                    append(" · ")
+                    withLink(LinkAnnotation.Url("https://github.com/Synxx12", linkStyles)) {
+                        append("Developer")
+                    }
                 },
-                onClick = { AppSettings.setSmartFadeEnabled(!smartFade) },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 28.dp),
             )
-            RowDivider()
-            SliderRow(
-                icon = Icons.Rounded.Speed,
-                title = "Playback speed",
-                value = "${"%.2f".format(speed)}×",
-                sliderValue = speed,
-                onSliderValue = { AppSettings.setPlaybackSpeed((it * 20).roundToInt() / 20f) },
-                valueRange = 0.5f..2.0f,
-                steps = 29,
-            )
-            RowDivider()
-            // Sits directly above Skip silence, where BitChord keeps it: the CPU
-            // the two analysis models may take is a playback setting like any
-            // other, not something buried under Automix's own switch.
-            SettingsRow(
-                icon = Icons.Rounded.Tune,
-                title = "Automix performance",
-                subtitle = "How much CPU the transition analysis may use",
-                value = automixPerformance.label,
-                onClick = { pickingAutomixPerformance = true },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.AutoMirrored.Rounded.VolumeOff,
-                title = "Skip silence",
-                subtitle = "Trim gaps longer than a second",
-                trailing = {
-                    Switch(
-                        checked = skipSilence,
-                        onCheckedChange = AppSettings::setSkipSilence,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setSkipSilence(!skipSilence) },
-            )
-            RowDivider()
-            // A plain preference, and deliberately not tied to the device's own
-            // Atmos switch. This widens what is already playing — it is not
-            // object-based audio, and YouTube only ever hands over a stereo
-            // stream to widen — so whether it is on is the listener's call
-            // alone, the same call BitChord leaves to them.
-            SettingsRow(
-                icon = Icons.Rounded.SurroundSound,
-                title = "Spatial audio",
-                subtitle = "Widens stereo tracks for a more immersive feel",
-                trailing = {
-                    Switch(
-                        checked = spatialAudio,
-                        onCheckedChange = AppSettings::setSpatialAudio,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.Tune,
-                title = "Equalizer",
-                subtitle = "Your device's system panel",
-                onClick = { openEqualizer(context, sessionId) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.GraphicEq,
-                title = "Show stats for nerds",
-                subtitle = "Codec, bitrate and sample rate on the player",
-                trailing = {
-                    Switch(
-                        checked = nerdStats,
-                        onCheckedChange = AppSettings::setShowNerdStats,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setShowNerdStats(!nerdStats) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.SmartDisplay,
-                title = "Stop converting video songs to audio version",
-                subtitle = "Plays a music-video upload as itself instead of swapping it for its catalogue audio release",
-                trailing = {
-                    Switch(
-                        checked = !convertVideoToAudio,
-                        onCheckedChange = { AppSettings.setConvertVideoToAudio(!it) },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setConvertVideoToAudio(!convertVideoToAudio) },
-            )
+        } else {
+            Spacer(Modifier.height(6.dp))
         }
 
-        SettingsGroup(header = "Appearance") {
-                        val currentLanguage = remember {
-                val currentTag = AppCompatDelegate.getApplicationLocales().toLanguageTags()
-                SUPPORTED_LANGUAGES.firstOrNull { it.tag == currentTag } ?: SUPPORTED_LANGUAGES.first()
-            }
-            SettingsRow(
-                icon = Icons.Rounded.Language,
-                title = "App language",
-                value = androidx.compose.ui.res.stringResource(currentLanguage.nameRes),
-                trailing = { Chevron() },
-                onClick = { showAppLanguageDialog = true },
-            )
-            RowDivider()
-            SettingsRow(icon = Icons.Rounded.Brightness4, title = "Theme")
-            SegmentedControl(
-                options = ThemeMode.entries.map { it.label },
-                selectedIndex = ThemeMode.entries.indexOf(theme),
-                onSelect = { AppSettings.setThemeMode(ThemeMode.entries[it]) },
-                modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.MotionPhotosOff,
-                title = "Reduce animation",
-                subtitle = "Freezes the main player's gradient instead of drifting",
-                trailing = {
-                    Switch(
-                        checked = reduceAnimation,
-                        onCheckedChange = AppSettings::setReduceAnimation,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
+        if (page == SettingsCategory.PLAYBACK) {
+            SettingsGroup {
+                // Smart Fade decides its own length from each pair of tracks —
+                // tempo, key, structure — so it replaces the manual slider rather
+                // than needing it set to anything first.
+                if (!smartFade) {
+                    SliderRow(
+                        icon = Icons.Rounded.Waves,
+                        title = "Crossfade",
+                        subtitle = "Blends one track into the next",
+                        value = if (crossfade == 0) "Off" else "${crossfade}s",
+                        sliderValue = crossfade.toFloat(),
+                        onSliderValue = { AppSettings.setCrossfadeSeconds(it.roundToInt()) },
+                        valueRange = 0f..12f,
+                        steps = 11,
                     )
-                },
-                onClick = { AppSettings.setReduceAnimation(!reduceAnimation) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.BlurOff,
-                title = "Reduce dynamic blur",
-                subtitle = "Swaps frosted glass for solid fills across the app",
-                trailing = {
-                    Switch(
-                        checked = reduceDynamicBlur,
-                        onCheckedChange = AppSettings::setReduceDynamicBlur,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setReduceDynamicBlur(!reduceDynamicBlur) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.AutoAwesome,
-                title = "Liquid Glass",
-                subtitle = if (liquidGlassSupported) {
-                    "Real backdrop glass on the navigation bar — blur and refraction"
-                } else {
-                    "Needs Android 12 or newer"
-                },
-                enabled = liquidGlassSupported,
-                trailing = {
-                    Switch(
-                        checked = liquidGlass,
-                        onCheckedChange = AppSettings::setLiquidGlass,
-                        enabled = liquidGlassSupported,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setLiquidGlass(!liquidGlass) },
-            )
-            RowDivider()
-            if (fullBleedArtworkAvailable()) {
+                    RowDivider()
+                }
                 SettingsRow(
-                    icon = Icons.Rounded.Fullscreen,
-                    title = "Full-screen cover art",
-                    subtitle = "Runs the cover to the edges of the player " +
-                        "instead of a square sleeve",
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "Smart Fade",
+                    subtitle = if (smartFade) {
+                        "Blends every transition, timed automatically from each track"
+                    } else {
+                        "Times and blends transitions automatically, no slider needed"
+                    },
                     trailing = {
                         Switch(
-                            checked = fullBleedArtwork,
-                            onCheckedChange = AppSettings::setFullBleedArtwork,
+                            checked = smartFade,
+                            onCheckedChange = AppSettings::setSmartFadeEnabled,
                             colors = SwitchDefaults.colors(
                                 checkedTrackColor = MaterialTheme.colorScheme.primary,
                                 checkedBorderColor = MaterialTheme.colorScheme.primary,
                             ),
                         )
                     },
-                    onClick = { AppSettings.setFullBleedArtwork(!fullBleedArtwork) },
+                    onClick = { AppSettings.setSmartFadeEnabled(!smartFade) },
                 )
                 RowDivider()
-            }
-            SettingsRow(
-                icon = Icons.Rounded.Gradient,
-                title = "Legacy mesh gradient",
-                subtitle = "Brings back the drifting colour blobs behind the player " +
-                    "from v1.5, instead of the artwork's own colours",
-                trailing = {
-                    Switch(
-                        checked = legacyMeshGradient,
-                        onCheckedChange = AppSettings::setLegacyMeshGradient,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setLegacyMeshGradient(!legacyMeshGradient) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.Animation,
-                title = "Animated cover art",
-                subtitle = "Plays the looping video some releases ship instead " +
-                    "of a still sleeve",
-                trailing = {
-                    Switch(
-                        checked = animatedCanvas,
-                        onCheckedChange = AppSettings::setAnimatedCanvas,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setAnimatedCanvas(!animatedCanvas) },
-            )
-            if (animatedCanvas) {
-                SettingsSubRow(
-                    title = "Play animated cover over cellular",
-                    checked = canvasOverCellular,
-                    onCheckedChange = AppSettings::setCanvasOverCellular,
+                SliderRow(
+                    icon = Icons.Rounded.Speed,
+                    title = "Playback speed",
+                    value = "${"%.2f".format(speed)}×",
+                    sliderValue = speed,
+                    onSliderValue = { AppSettings.setPlaybackSpeed((it * 20).roundToInt() / 20f) },
+                    valueRange = 0.5f..2.0f,
+                    steps = 29,
                 )
                 RowDivider()
-                // Only offered while animated covers are on: this is the door
-                // to the original Spotify Canvas, and there is nothing to open
-                // it for when the whole feature is switched off.
+                // Sits directly above Skip silence, where BitChord keeps it: the CPU
+                // the two analysis models may take is a playback setting like any
+                // other, not something buried under Automix's own switch.
+                SettingsRow(
+                    icon = Icons.Rounded.Tune,
+                    title = "Automix performance",
+                    subtitle = "How much CPU the transition analysis may use",
+                    value = automixPerformance.label,
+                    onClick = { pickingAutomixPerformance = true },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.AutoMirrored.Rounded.VolumeOff,
+                    title = "Skip silence",
+                    subtitle = "Trim gaps longer than a second",
+                    trailing = {
+                        Switch(
+                            checked = skipSilence,
+                            onCheckedChange = AppSettings::setSkipSilence,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setSkipSilence(!skipSilence) },
+                )
+                RowDivider()
+                // A plain preference, and deliberately not tied to the device's own
+                // Atmos switch. This widens what is already playing — it is not
+                // object-based audio, and YouTube only ever hands over a stereo
+                // stream to widen — so whether it is on is the listener's call
+                // alone, the same call BitChord leaves to them.
+                SettingsRow(
+                    icon = Icons.Rounded.SurroundSound,
+                    title = "Spatial audio",
+                    subtitle = "Widens stereo tracks for a more immersive feel",
+                    trailing = {
+                        Switch(
+                            checked = spatialAudio,
+                            onCheckedChange = AppSettings::setSpatialAudio,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Tune,
+                    title = "Equalizer",
+                    subtitle = "Your device's system panel",
+                    onClick = { openEqualizer(context, sessionId) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.GraphicEq,
+                    title = "Show stats for nerds",
+                    subtitle = "Codec, bitrate and sample rate on the player",
+                    trailing = {
+                        Switch(
+                            checked = nerdStats,
+                            onCheckedChange = AppSettings::setShowNerdStats,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setShowNerdStats(!nerdStats) },
+                )
+                RowDivider()
                 SettingsRow(
                     icon = Icons.Rounded.SmartDisplay,
-                    title = "Set up Spotify Canvas",
-                    subtitle = "Connect a Spotify session to reach the original motion covers",
-                    onClick = onSpotifyCanvasAuth,
-                )
-            }
-            RowDivider()
-            SettingsRow(
-                icon = Icons.AutoMirrored.Rounded.Notes,
-                title = "Synced lyrics",
-                subtitle = "Lights up the words on the player as they're sung",
-                trailing = {
-                    Switch(
-                        checked = syncedLyrics,
-                        onCheckedChange = AppSettings::setSyncedLyrics,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setSyncedLyrics(!syncedLyrics) },
-            )
-            // Nothing to choose between while the feature is off, and the
-            // sources are third-party services being reached on the user's
-            // connection — which is the part worth being able to narrow.
-            if (syncedLyrics) {
-                RowDivider()
-                SettingsRow(
-                    icon = Icons.Rounded.BlurOn,
-                    title = "Blur unfocused lyrics",
-                    subtitle = "Keeps the spotlight on the current line",
+                    title = "Stop converting video songs to audio version",
+                    subtitle = "Plays a music-video upload as itself instead of swapping it for its catalogue audio release",
                     trailing = {
                         Switch(
-                            checked = lyricsBlur,
-                            onCheckedChange = AppSettings::setLyricsBlur,
+                            checked = !convertVideoToAudio,
+                            onCheckedChange = { AppSettings.setConvertVideoToAudio(!it) },
                             colors = SwitchDefaults.colors(
                                 checkedTrackColor = MaterialTheme.colorScheme.primary,
                                 checkedBorderColor = MaterialTheme.colorScheme.primary,
                             ),
                         )
                     },
-                    onClick = { AppSettings.setLyricsBlur(!lyricsBlur) },
+                    onClick = { AppSettings.setConvertVideoToAudio(!convertVideoToAudio) },
+                )
+            }
+
+            if (pickingAutomixPerformance) {
+                ModalBottomSheet(
+                    onDismissRequest = { pickingAutomixPerformance = false },
+                    containerColor = MaterialTheme.colorScheme.background,
+                ) {
+                    AutomixPerformanceSheet(
+                        selected = automixPerformance,
+                        onSelect = { mode ->
+                            AppSettings.setAutomixPerformanceMode(mode)
+                            pickingAutomixPerformance = false
+                        },
+                    )
+                }
+            }
+
+        }
+
+        if (page == SettingsCategory.AUDIO) {
+            SettingsGroup(
+                footer = "Each connection keeps its own ceiling, so Wi-Fi can stay on " +
+                    "Lossless while mobile data is capped. High costs about " +
+                    "${AudioQuality.HIGH.hourly} of data, Lossless about " +
+                    "${AudioQuality.LOSSLESS.hourly}. The ceiling applies to every source.",
+            ) {
+                SettingsRow(
+                    icon = Icons.Rounded.Extension,
+                    title = "Sources",
+                    subtitle = "Where audio comes from and the order used",
+                    onClick = onOpenSources,
                 )
                 RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Wifi,
+                    title = "On Wi-Fi",
+                    badge = "In use".takeIf { metered == false },
+                    value = wifiQuality.label,
+                    onClick = { picking = QualityTarget.WIFI },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.SignalCellularAlt,
+                    title = "On mobile data",
+                    badge = "In use".takeIf { metered == true },
+                    value = cellularQuality.label,
+                    onClick = { picking = QualityTarget.CELLULAR },
+                )
+                RowDivider()
+                // Last row of this group, which is where it belongs: a preference
+                // about the *source* — whether a module may hand over an Atmos
+                // rendition — so it sits with where audio comes from, not with what
+                // the player does with it, and not with downloads. Off by choice is
+                // a real preference: Atmos is E-AC-3, which is lossy, and the same
+                // track is often also held as a bit-exact stereo copy.
+                SettingsRow(
+                    iconPainter = painterResource(R.drawable.ic_dolby_atmos),
+                    title = "Dolby Atmos",
+                    subtitle = if (atmosCodecSupported) {
+                        "Play the more immersive, surround version of a song when there is one"
+                    } else {
+                        "This device can't play Atmos, so these songs play in their usual version"
+                    },
+                    enabled = atmosCodecSupported,
+                    trailing = {
+                        Switch(
+                            checked = dolbyAtmos && atmosCodecSupported,
+                            onCheckedChange = AppSettings::setDolbyAtmos,
+                            enabled = atmosCodecSupported,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setDolbyAtmos(!dolbyAtmos) },
+                )
+            }
+
+            SettingsGroup(header = "Output") {
+                SettingsRow(
+                    icon = Icons.Rounded.GraphicEq,
+                    title = "Output precision",
+                    subtitle = "What the app asks Android to open the output as",
+                )
+                // The two rungs are a segmented control rather than a picker
+                // dialog: there are only two, they are mutually exclusive, and the
+                // choice is worth seeing at a glance instead of behind a tap.
+                SegmentedControl(
+                    options = OutputPcmMode.entries.map { it.label },
+                    selectedIndex = OutputPcmMode.entries.indexOf(outputPcmMode),
+                    onSelect = { AppSettings.setOutputPcmMode(OutputPcmMode.entries[it]) },
+                    modifier = Modifier.padding(start = TEXT_INSET, end = ROW_INSET, bottom = 14.dp),
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Tune,
+                    title = "Prefer USB DAC",
+                    subtitle = "Send playback to an attached USB DAC when one is connected",
+                    badge = "Connected".takeIf { audioDevice.type == AudioDeviceType.USB_DAC },
+                    trailing = {
+                        Switch(
+                            checked = preferUsbDac,
+                            onCheckedChange = { wanted ->
+                                AppSettings.setPreferUsbDac(wanted)
+                                // Applied on the spot rather than waiting for the
+                                // next route change — the DAC is already attached,
+                                // and that is the whole point of the switch.
+                                if (wanted) AudioDeviceHelper.applyUsbDacPreference(context)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = {
+                        val wanted = !preferUsbDac
+                        AppSettings.setPreferUsbDac(wanted)
+                        if (wanted) AudioDeviceHelper.applyUsbDacPreference(context)
+                    },
+                )
+            }
+
+        }
+
+        if (page == SettingsCategory.DOWNLOADS) {
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.Rounded.Download,
+                    title = "Download quality",
+                    subtitle = "${downloadQuality.perTrack} per track, whatever the connection",
+                    value = downloadQuality.label,
+                    onClick = { pickingDownloadQuality = true },
+                )
+                SettingsSubRow(
+                    title = "Download over Wi-Fi only",
+                    checked = wifiOnlyDownloads,
+                    onCheckedChange = AppSettings::setWifiOnlyDownloads,
+                    badge = "Blocking".takeIf { wifiOnlyDownloads && metered == true },
+                )
+                // A sub-row, not a row of its own: it reads as part of the download
+                // settings above it. The folder it writes to is its own badge — the
+                // answer to "where do I point another player at?", which is the only
+                // reason the setting exists.
+                SettingsSubRow(
+                    title = "Export compatible downloads",
+                    checked = exportDownloads,
+                    onCheckedChange = { wanted ->
+                        AppSettings.setExportDownloads(wanted)
+                        // Turning it on sweeps up what is already on the device.
+                        // Turning it off leaves those copies alone: they are the
+                        // listener's files, and a switch about future downloads is
+                        // not a licence to delete them.
+                        if (wanted) {
+                            scrobbleScope.launch {
+                                com.velthy.client.download.Downloads
+                                    .exportAllToMusicFolder(context)
+                            }
+                        }
+                    },
+                    badge = "Music/Velthy".takeIf { exportDownloads },
+                )
+            }
+
+            SettingsGroup(header = "Local music") {
+                SettingsRow(
+                    icon = Icons.Rounded.FilterAlt,
+                    title = "Filter non-music audio",
+                    subtitle = "Keeps clips, ringtones and voice notes out of the " +
+                        "on-device library",
+                    trailing = {
+                        Switch(
+                            checked = filterNonMusicAudio,
+                            onCheckedChange = AppSettings::setFilterNonMusicAudio,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setFilterNonMusicAudio(!filterNonMusicAudio) },
+                )
+            }
+
+        }
+
+        if (page == SettingsCategory.NOW_PLAYING) {
+            SettingsGroup {
+                if (fullBleedArtworkAvailable()) {
+                    SettingsRow(
+                        icon = Icons.Rounded.Fullscreen,
+                        title = "Full-screen cover art",
+                        subtitle = "Runs the cover to the edges of the player " +
+                            "instead of a square sleeve",
+                        trailing = {
+                            Switch(
+                                checked = fullBleedArtwork,
+                                onCheckedChange = AppSettings::setFullBleedArtwork,
+                                colors = SwitchDefaults.colors(
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                    checkedBorderColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            )
+                        },
+                        onClick = { AppSettings.setFullBleedArtwork(!fullBleedArtwork) },
+                    )
+                    RowDivider()
+                }
+                SettingsRow(
+                    icon = Icons.Rounded.Gradient,
+                    title = "Legacy mesh gradient",
+                    subtitle = "Brings back the drifting colour blobs behind the player " +
+                        "from v1.5, instead of the artwork's own colours",
+                    trailing = {
+                        Switch(
+                            checked = legacyMeshGradient,
+                            onCheckedChange = AppSettings::setLegacyMeshGradient,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setLegacyMeshGradient(!legacyMeshGradient) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Animation,
+                    title = "Animated cover art",
+                    subtitle = "Plays the looping video some releases ship instead " +
+                        "of a still sleeve",
+                    trailing = {
+                        Switch(
+                            checked = animatedCanvas,
+                            onCheckedChange = AppSettings::setAnimatedCanvas,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setAnimatedCanvas(!animatedCanvas) },
+                )
+                if (animatedCanvas) {
+                    SettingsSubRow(
+                        title = "Play animated cover over cellular",
+                        checked = canvasOverCellular,
+                        onCheckedChange = AppSettings::setCanvasOverCellular,
+                    )
+                    RowDivider()
+                    // Only offered while animated covers are on: this is the door
+                    // to the original Spotify Canvas, and there is nothing to open
+                    // it for when the whole feature is switched off.
+                    SettingsRow(
+                        icon = Icons.Rounded.SmartDisplay,
+                        title = "Set up Spotify Canvas",
+                        subtitle = "Connect a Spotify session to reach the original motion covers",
+                        onClick = onSpotifyCanvasAuth,
+                    )
+                }
+
+            }
+
+        }
+
+        if (page == SettingsCategory.LYRICS) {
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.AutoMirrored.Rounded.Notes,
+                    title = "Synced lyrics",
+                    subtitle = "Lights up the words on the player as they're sung",
+                    trailing = {
+                        Switch(
+                            checked = syncedLyrics,
+                            onCheckedChange = AppSettings::setSyncedLyrics,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setSyncedLyrics(!syncedLyrics) },
+                )
+                // Nothing to choose between while the feature is off, and the
+                // sources are third-party services being reached on the user's
+                // connection — which is the part worth being able to narrow.
+                if (syncedLyrics) {
+                    RowDivider()
+                    SettingsRow(
+                        icon = Icons.Rounded.BlurOn,
+                        title = "Blur unfocused lyrics",
+                        subtitle = "Keeps the spotlight on the current line",
+                        trailing = {
+                            Switch(
+                                checked = lyricsBlur,
+                                onCheckedChange = AppSettings::setLyricsBlur,
+                                colors = SwitchDefaults.colors(
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                    checkedBorderColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            )
+                        },
+                        onClick = { AppSettings.setLyricsBlur(!lyricsBlur) },
+                    )
+                    RowDivider()
+                    SettingsRow(
+                        icon = Icons.Rounded.Language,
+                        title = "Lyrics sources",
+                        subtitle = lyricsSources
+                            .sortedBy { it.ordinal }
+                            .joinToString(", ") { it.label }
+                            .ifEmpty { "None — no lyrics will be fetched" },
+                        trailing = { Chevron() },
+                        onClick = onLyricsSources,
+                    )
+                    RowDivider()
+                    SettingsRow(
+                        icon = Icons.Rounded.Translate,
+                        title = "Translation language",
+                        subtitle = if (translationLanguage.isBlank()) {
+                            "App language"
+                        } else {
+                            translationLanguageName(
+                                translationLanguage,
+                                java.util.Locale.getDefault(),
+                            )
+                        },
+                        trailing = { Chevron() },
+                        onClick = onTranslationLanguage,
+                    )
+                }
+            }
+
+        }
+
+        if (page == SettingsCategory.APPEARANCE) {
+            SettingsGroup {
+                            val currentLanguage = remember {
+                    val currentTag = AppCompatDelegate.getApplicationLocales().toLanguageTags()
+                    SUPPORTED_LANGUAGES.firstOrNull { it.tag == currentTag } ?: SUPPORTED_LANGUAGES.first()
+                }
                 SettingsRow(
                     icon = Icons.Rounded.Language,
-                    title = "Lyrics sources",
-                    subtitle = lyricsSources
-                        .sortedBy { it.ordinal }
-                        .joinToString(", ") { it.label }
-                        .ifEmpty { "None — no lyrics will be fetched" },
+                    title = "App language",
+                    value = androidx.compose.ui.res.stringResource(currentLanguage.nameRes),
                     trailing = { Chevron() },
-                    onClick = onLyricsSources,
+                    onClick = { showAppLanguageDialog = true },
+                )
+                RowDivider()
+                SettingsRow(icon = Icons.Rounded.Brightness4, title = "Theme")
+                SegmentedControl(
+                    options = ThemeMode.entries.map { it.label },
+                    selectedIndex = ThemeMode.entries.indexOf(theme),
+                    onSelect = { AppSettings.setThemeMode(ThemeMode.entries[it]) },
+                    modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
                 )
                 RowDivider()
                 SettingsRow(
-                    icon = Icons.Rounded.Translate,
-                    title = "Translation language",
-                    subtitle = if (translationLanguage.isBlank()) {
-                        "App language"
-                    } else {
-                        translationLanguageName(
-                            translationLanguage,
-                            java.util.Locale.getDefault(),
+                    icon = Icons.Rounded.MotionPhotosOff,
+                    title = "Reduce animation",
+                    subtitle = "Freezes the main player's gradient instead of drifting",
+                    trailing = {
+                        Switch(
+                            checked = reduceAnimation,
+                            onCheckedChange = AppSettings::setReduceAnimation,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
                         )
                     },
-                    trailing = { Chevron() },
-                    onClick = onTranslationLanguage,
+                    onClick = { AppSettings.setReduceAnimation(!reduceAnimation) },
                 )
-            }
-        }
-
-        val cacheLimitMb = (cacheLimitBytes / (1024 * 1024)).toInt()
-        SettingsGroup(header = "Performance") {
-            SettingsRow(
-                icon = Icons.Rounded.Speed,
-                title = "High performance mode",
-                subtitle = if (highPerformanceMode) {
-                    "$selectedPerformanceRefreshRate Hz requested. Android may lower it when needed."
-                } else {
-                    "Uses full animations and blur, and requests a higher " +
-                        "display refresh rate"
-                },
-                badge = "Beta",
-                trailing = {
-                    Switch(
-                        checked = highPerformanceMode,
-                        onCheckedChange = { enabled ->
-                            if (enabled) showPerformanceWarning = true
-                            else AppSettings.setHighPerformanceMode(false)
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = {
-                    if (highPerformanceMode) {
-                        AppSettings.setHighPerformanceMode(false)
-                    } else {
-                        showPerformanceWarning = true
-                    }
-                },
-            )
-            if (highPerformanceMode) {
                 RowDivider()
-                SettingsRow(icon = Icons.Rounded.Refresh, title = "Refresh rate")
-                SegmentedControl(
-                    options = supportedRefreshRates.map { "$it Hz" },
-                    selectedIndex = supportedRefreshRates.indexOf(selectedPerformanceRefreshRate),
-                    onSelect = { index ->
-                        AppSettings.setPerformanceRefreshRate(supportedRefreshRates[index])
-                    },
-                    modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
-                )
-            }
-        }
-
-        if (showPerformanceWarning) {
-            AlertDialog(
-                onDismissRequest = { showPerformanceWarning = false },
-                title = { Text("Before enabling") },
-                text = {
-                    Text(
-                        "First set Velthy's battery usage to Unrestricted. Higher refresh " +
-                            "rates use more battery, CPU and GPU, and may warm your device.",
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showPerformanceWarning = false
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                .apply {
-                                    data = Uri.fromParts("package", context.packageName, null)
-                                }
-                            val settingsIntent = intent.takeIf {
-                                it.resolveActivity(context.packageManager) != null
-                            } ?: Intent(Settings.ACTION_SETTINGS)
-                            batterySettingsLauncher.launch(settingsIntent)
-                        },
-                    ) { Text("Open battery settings") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showPerformanceWarning = false }) { Text("Cancel") }
-                },
-            )
-        }
-
-        if (showPerformanceConfirmation) {
-            AlertDialog(
-                onDismissRequest = { showPerformanceConfirmation = false },
-                title = { Text("Enable high performance mode?") },
-                text = {
-                    Text(
-                        "Enable only if Velthy's battery use is set to Unrestricted. " +
-                            "Android can still limit the refresh rate when the device " +
-                            "is hot or low on power.",
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showPerformanceConfirmation = false
-                            AppSettings.setHighPerformanceMode(true)
-                        },
-                    ) { Text("Enable") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showPerformanceConfirmation = false }) { Text("Not yet") }
-                },
-            )
-        }
-
-        SettingsGroup(header = "Local music") {
-            SettingsRow(
-                icon = Icons.Rounded.FilterAlt,
-                title = "Filter non-music audio",
-                subtitle = "Keeps clips, ringtones and voice notes out of the " +
-                    "on-device library",
-                trailing = {
-                    Switch(
-                        checked = filterNonMusicAudio,
-                        onCheckedChange = AppSettings::setFilterNonMusicAudio,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setFilterNonMusicAudio(!filterNonMusicAudio) },
-            )
-        }
-
-        if (pickingAutomixPerformance) {
-            ModalBottomSheet(
-                onDismissRequest = { pickingAutomixPerformance = false },
-                containerColor = MaterialTheme.colorScheme.background,
-            ) {
-                AutomixPerformanceSheet(
-                    selected = automixPerformance,
-                    onSelect = { mode ->
-                        AppSettings.setAutomixPerformanceMode(mode)
-                        pickingAutomixPerformance = false
-                    },
-                )
-            }
-        }
-
-        SettingsGroup(header = "Storage") {
-            SettingsRow(
-                icon = Icons.Rounded.PieChart,
-                title = "Storage & Cache Management",
-                subtitle = "Download format, storage location, and cache analysis",
-                trailing = {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowForwardIos,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    )
-                },
-                onClick = { showStorageSettingsSheet = true },
-            )
-            RowDivider()
-            SliderRow(
-                icon = Icons.Rounded.Storage,
-                title = "Song cache limit",
-                subtitle = if (cacheLimitMb > CACHE_WARNING_MB) {
-                    "Up to ${formatCacheSize(cacheLimitMb)} of downloaded audio kept on " +
-                        "disk — that's a real chunk of most phones' free storage."
-                } else {
-                    "Downloaded audio kept on disk for instant seeking and replays"
-                },
-                value = formatCacheSize(cacheLimitMb),
-                sliderValue = cacheLimitMb.toFloat(),
-                onSliderValue = {
-                    AppSettings.setAudioCacheLimitBytes(it.roundToInt().toLong() * 1024 * 1024)
-                },
-                valueRange = (AppSettings.DEFAULT_CACHE_LIMIT_BYTES / (1024 * 1024)).toFloat()..
-                    (AppSettings.MAX_CACHE_LIMIT_BYTES / (1024 * 1024)).toFloat(),
-                steps = 18,
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.DeleteSweep,
-                title = "Clear song cache",
-                subtitle = "Frees space used by downloaded audio",
-                onClick = {
-                    AudioCache.clear {
-                        Toast.makeText(context, "Song cache cleared", Toast.LENGTH_SHORT).show()
-                    }
-                },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.DeleteSweep,
-                title = "Clear image cache",
-                subtitle = "Frees space used by album artwork",
-                onClick = {
-                    val loader = SingletonImageLoader.get(context)
-                    loader.memoryCache?.clear()
-                    loader.diskCache?.clear()
-                    Toast.makeText(context, "Image cache cleared", Toast.LENGTH_SHORT).show()
-                },
-            )
-        }
-
-        SettingsGroup(header = "Your data") {
-            SettingsRow(
-                icon = Icons.Rounded.BarChart,
-                title = "Replay",
-                subtitle = "Your top songs, artists, albums and genres",
-                onClick = onOpenReplay,
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.LocalOffer,
-                title = "Work out genres",
-                subtitle = if (replayGenres) {
-                    "Asks Last.fm what an artist plays — their name is sent, nothing else"
-                } else {
-                    "Replay's genre chart is hidden while this is off"
-                },
-                trailing = {
-                    Switch(
-                        checked = replayGenres,
-                        onCheckedChange = AppSettings::setReplayGenres,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setReplayGenres(!replayGenres) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.FileUpload,
-                title = "Export data",
-                subtitle = exportStatus ?: "Settings and listening history, as one JSON file",
-                onClick = { exportPicker.launch(Backup.suggestedName()) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.FileDownload,
-                title = "Import data",
-                subtitle = importStatus ?: "Replaces the settings and history on this device",
-                onClick = { confirmImport = true },
-            )
-        }
-
-        if (confirmImport) {
-            AlertDialog(
-                onDismissRequest = { confirmImport = false },
-                title = { Text("Import settings and history?") },
-                text = {
-                    Text("This will replace your current settings, saved listening history and search terms with the backup file.")
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            confirmImport = false
-                            importPicker.launch(arrayOf("application/json", "*/*"))
-                        },
-                    ) {
-                        Text("Choose file")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { confirmImport = false }) {
-                        Text("Cancel")
-                    }
-                },
-            )
-        }
-
-        SettingsGroup(
-            header = "Miscellaneous",
-            footer = "When enabled, closing the app from the recent apps screen will also stop music playback.",
-        ) {
-            SettingsRow(
-                icon = Icons.Rounded.Vibration,
-                title = "Haptic feedback",
-                subtitle = if (hapticFeedback) {
-                    "Vibrates on button taps, player gestures, and tab navigation"
-                } else {
-                    "Haptic feedback disabled"
-                },
-                trailing = {
-                    Switch(
-                        checked = hapticFeedback,
-                        onCheckedChange = AppSettings::setHapticFeedback,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setHapticFeedback(!hapticFeedback) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.PlaylistPlay,
-                title = "Play next on swipe",
-                subtitle = if (swipeToPlayNext) {
-                    "Swiping a song plays it next"
-                } else {
-                    "Swiping a song adds it to the end of the queue when disabled"
-                },
-                trailing = {
-                    Switch(
-                        checked = swipeToPlayNext,
-                        onCheckedChange = AppSettings::setSwipeToPlayNext,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setSwipeToPlayNext(!swipeToPlayNext) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.History,
-                title = "Don't repeat songs in current session",
-                subtitle = "Keeps a song already played this session out of what " +
-                    "comes next",
-                trailing = {
-                    Switch(
-                        checked = dontRepeatSuggestions,
-                        onCheckedChange = AppSettings::setDontRepeatSuggestions,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setDontRepeatSuggestions(!dontRepeatSuggestions) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.MusicOff,
-                title = "Stop music on close from recents",
-                subtitle = "Stops playback when swiped away from recent apps",
-                trailing = {
-                    Switch(
-                        checked = stopOnTaskRemoved,
-                        onCheckedChange = AppSettings::setStopOnTaskRemoved,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setStopOnTaskRemoved(!stopOnTaskRemoved) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.VolumeOff,
-                title = "Hide volume bar",
-                subtitle = "Removes the volume slider from the main player",
-                trailing = {
-                    Switch(
-                        checked = hideVolumeBar,
-                        onCheckedChange = AppSettings::setHideVolumeBar,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setHideVolumeBar(!hideVolumeBar) },
-            )
-        }
-
-        SettingsGroup(header = "About & Updates") {
-            SettingsRow(
-                icon = Icons.Rounded.SystemUpdate,
-                title = "Check for updates",
-                subtitle = updateStatusText ?: "Current version: v$version",
-                trailing = {
-                    if (checkingUpdate) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
+                SettingsRow(
+                    icon = Icons.Rounded.BlurOff,
+                    title = "Reduce dynamic blur",
+                    subtitle = "Swaps frosted glass for solid fills across the app",
+                    trailing = {
+                        Switch(
+                            checked = reduceDynamicBlur,
+                            onCheckedChange = AppSettings::setReduceDynamicBlur,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
                         )
+                    },
+                    onClick = { AppSettings.setReduceDynamicBlur(!reduceDynamicBlur) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "Liquid Glass",
+                    subtitle = if (liquidGlassSupported) {
+                        "Real backdrop glass on the navigation bar — blur and refraction"
                     } else {
+                        "Needs Android 12 or newer"
+                    },
+                    enabled = liquidGlassSupported,
+                    trailing = {
+                        Switch(
+                            checked = liquidGlass,
+                            onCheckedChange = AppSettings::setLiquidGlass,
+                            enabled = liquidGlassSupported,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setLiquidGlass(!liquidGlass) },
+                )
+
+            }
+
+        }
+
+        if (page == SettingsCategory.PERFORMANCE) {
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.Rounded.Speed,
+                    title = "High performance mode",                    subtitle = if (highPerformanceMode) {
+                        "$selectedPerformanceRefreshRate Hz requested. Android may lower it when needed."
+                    } else {
+                        "Uses full animations and blur, and requests a higher " +
+                            "display refresh rate"
+                    },
+                    badge = "Beta",
+                    trailing = {
+                        Switch(
+                            checked = highPerformanceMode,
+                            onCheckedChange = { enabled ->
+                                if (enabled) showPerformanceWarning = true
+                                else AppSettings.setHighPerformanceMode(false)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = {
+                        if (highPerformanceMode) {
+                            AppSettings.setHighPerformanceMode(false)
+                        } else {
+                            showPerformanceWarning = true
+                        }
+                    },
+                )
+                if (highPerformanceMode) {
+                    RowDivider()
+                    SettingsRow(icon = Icons.Rounded.Refresh, title = "Refresh rate")
+                    SegmentedControl(
+                        options = supportedRefreshRates.map { "$it Hz" },
+                        selectedIndex = supportedRefreshRates.indexOf(selectedPerformanceRefreshRate),
+                        onSelect = { index ->
+                            AppSettings.setPerformanceRefreshRate(supportedRefreshRates[index])
+                        },
+                        modifier = Modifier.padding(start = ROW_INSET, end = ROW_INSET, bottom = 14.dp),
+                    )
+                }
+            }
+
+            if (showPerformanceWarning) {
+                AlertDialog(
+                    onDismissRequest = { showPerformanceWarning = false },
+                    title = { Text("Before enabling") },
+                    text = {
+                        Text(
+                            "First set Velthy's battery usage to Unrestricted. Higher refresh " +
+                                "rates use more battery, CPU and GPU, and may warm your device.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showPerformanceWarning = false
+                                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                    .apply {
+                                        data = Uri.fromParts("package", context.packageName, null)
+                                    }
+                                val settingsIntent = intent.takeIf {
+                                    it.resolveActivity(context.packageManager) != null
+                                } ?: Intent(Settings.ACTION_SETTINGS)
+                                batterySettingsLauncher.launch(settingsIntent)
+                            },
+                        ) { Text("Open battery settings") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showPerformanceWarning = false }) { Text("Cancel") }
+                    },
+                )
+            }
+
+            if (showPerformanceConfirmation) {
+                AlertDialog(
+                    onDismissRequest = { showPerformanceConfirmation = false },
+                    title = { Text("Enable high performance mode?") },
+                    text = {
+                        Text(
+                            "Enable only if Velthy's battery use is set to Unrestricted. " +
+                                "Android can still limit the refresh rate when the device " +
+                                "is hot or low on power.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showPerformanceConfirmation = false
+                                AppSettings.setHighPerformanceMode(true)
+                            },
+                        ) { Text("Enable") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showPerformanceConfirmation = false }) { Text("Not yet") }
+                    },
+                )
+            }
+        }
+
+        if (page == SettingsCategory.STORAGE) {
+            val cacheLimitMb = (cacheLimitBytes / (1024 * 1024)).toInt()
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.Rounded.PieChart,
+                    title = "Storage & Cache Management",
+                    subtitle = "Download format, storage location, and cache analysis",
+                    trailing = {
                         Icon(
                             Icons.AutoMirrored.Rounded.ArrowForwardIos,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                         )
-                    }
-                },
-                onClick = {
-                    if (!checkingUpdate) {
-                        checkingUpdate = true
-                        updateStatusText = "Checking latest version..."
-                        scope.launch {
-                            // checkAndNotify, not check: a manual check is also a
-                            // request to be told, and it updates the same
-                            // once-per-version record the background worker uses.
-                            val update = AppUpdateChecker.checkAndNotify(context)
-                            checkingUpdate = false
-                            updateModalInfo = update
-                            showUpdateSheet = true
-                            updateStatusText = if (update != null) {
-                                "Update available: v${update.version}"
-                            } else {
-                                "You are on the latest version (v$version)"
-                            }
+                    },
+                    onClick = { showStorageSettingsSheet = true },
+                )
+                RowDivider()
+                SliderRow(
+                    icon = Icons.Rounded.Storage,
+                    title = "Song cache limit",
+                    subtitle = if (cacheLimitMb > CACHE_WARNING_MB) {
+                        "Up to ${formatCacheSize(cacheLimitMb)} of downloaded audio kept on " +
+                            "disk — that's a real chunk of most phones' free storage."
+                    } else {
+                        "Downloaded audio kept on disk for instant seeking and replays"
+                    },
+                    value = formatCacheSize(cacheLimitMb),
+                    sliderValue = cacheLimitMb.toFloat(),
+                    onSliderValue = {
+                        AppSettings.setAudioCacheLimitBytes(it.roundToInt().toLong() * 1024 * 1024)
+                    },
+                    valueRange = (AppSettings.DEFAULT_CACHE_LIMIT_BYTES / (1024 * 1024)).toFloat()..
+                        (AppSettings.MAX_CACHE_LIMIT_BYTES / (1024 * 1024)).toFloat(),
+                    steps = 18,
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.DeleteSweep,
+                    title = "Clear song cache",
+                    subtitle = "Frees space used by downloaded audio",
+                    onClick = {
+                        AudioCache.clear {
+                            Toast.makeText(context, "Song cache cleared", Toast.LENGTH_SHORT).show()
                         }
-                    }
-                },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.NotificationsActive,
-                title = "Notify me about new versions",
-                subtitle = "Posts a notification when a new release is available, " +
-                    "including in the background",
-                trailing = {
-                    Switch(
-                        checked = updateNotifications,
-                        onCheckedChange = AppSettings::setUpdateNotifications,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary,
-                            checkedBorderColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    )
-                },
-                onClick = { AppSettings.setUpdateNotifications(!updateNotifications) },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.Language,
-                title = "Official Website & Releases",
-                subtitle = "velthy.my.id",
-                trailing = {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowForwardIos,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    )
-                },
-                onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://velthy.my.id")))
-                },
-            )
-            RowDivider()
-            SettingsRow(
-                icon = Icons.Rounded.AutoAwesome,
-                title = "Setup Wizard & Onboarding",
-                subtitle = "Replay first-launch welcome and personalization guide",
-                trailing = {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowForwardIos,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    )
-                },
-                onClick = {
-                    AppSettings.setHasCompletedOnboarding(false)
-                },
-            )
+                    },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.DeleteSweep,
+                    title = "Clear image cache",
+                    subtitle = "Frees space used by album artwork",
+                    onClick = {
+                        val loader = SingletonImageLoader.get(context)
+                        loader.memoryCache?.clear()
+                        loader.diskCache?.clear()
+                        Toast.makeText(context, "Image cache cleared", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
+
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text(
-            text = buildAnnotatedString {
-                append("Velthy v$version\n")
-                append("100% Client-Side Engine · Built with Jetpack Compose\n")
-                val linkStyles = TextLinkStyles(
-                    style = SpanStyle(
-                        color = MaterialTheme.colorScheme.primary,
-                        textDecoration = TextDecoration.Underline,
-                    ),
+        if (page == SettingsCategory.DATA) {
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.Rounded.BarChart,
+                    title = "Replay",
+                    subtitle = "Your top songs, artists, albums and genres",
+                    onClick = onOpenReplay,
                 )
-                withLink(LinkAnnotation.Url("https://velthy.my.id", linkStyles)) {
-                    append("Website")
-                }
-                append(" · ")
-                withLink(LinkAnnotation.Url("https://github.com/Synxx12/velthy", linkStyles)) {
-                    append("GitHub")
-                }
-                append(" · ")
-                withLink(LinkAnnotation.Url("https://github.com/Synxx12", linkStyles)) {
-                    append("Developer")
-                }
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp, bottom = 28.dp),
-        )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.LocalOffer,
+                    title = "Work out genres",
+                    subtitle = if (replayGenres) {
+                        "Asks Last.fm what an artist plays — their name is sent, nothing else"
+                    } else {
+                        "Replay's genre chart is hidden while this is off"
+                    },
+                    trailing = {
+                        Switch(
+                            checked = replayGenres,
+                            onCheckedChange = AppSettings::setReplayGenres,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setReplayGenres(!replayGenres) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.FileUpload,
+                    title = "Export data",
+                    subtitle = exportStatus ?: "Settings and listening history, as one JSON file",
+                    onClick = { exportPicker.launch(Backup.suggestedName()) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.FileDownload,
+                    title = "Import data",
+                    subtitle = importStatus ?: "Replaces the settings and history on this device",
+                    onClick = { confirmImport = true },
+                )
+            }
+
+        }
+
+        if (page == SettingsCategory.MISC) {
+            SettingsGroup(
+                footer = "When enabled, closing the app from the recent apps screen will also stop music playback.",
+            ) {
+                SettingsRow(
+                    icon = Icons.Rounded.Vibration,
+                    title = "Haptic feedback",
+                    subtitle = if (hapticFeedback) {
+                        "Vibrates on button taps, player gestures, and tab navigation"
+                    } else {
+                        "Haptic feedback disabled"
+                    },
+                    trailing = {
+                        Switch(
+                            checked = hapticFeedback,
+                            onCheckedChange = AppSettings::setHapticFeedback,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setHapticFeedback(!hapticFeedback) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.PlaylistPlay,
+                    title = "Play next on swipe",
+                    subtitle = if (swipeToPlayNext) {
+                        "Swiping a song plays it next"
+                    } else {
+                        "Swiping a song adds it to the end of the queue when disabled"
+                    },
+                    trailing = {
+                        Switch(
+                            checked = swipeToPlayNext,
+                            onCheckedChange = AppSettings::setSwipeToPlayNext,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setSwipeToPlayNext(!swipeToPlayNext) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.History,
+                    title = "Don't repeat songs in current session",
+                    subtitle = "Keeps a song already played this session out of what " +
+                        "comes next",
+                    trailing = {
+                        Switch(
+                            checked = dontRepeatSuggestions,
+                            onCheckedChange = AppSettings::setDontRepeatSuggestions,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setDontRepeatSuggestions(!dontRepeatSuggestions) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.MusicOff,
+                    title = "Stop music on close from recents",
+                    subtitle = "Stops playback when swiped away from recent apps",
+                    trailing = {
+                        Switch(
+                            checked = stopOnTaskRemoved,
+                            onCheckedChange = AppSettings::setStopOnTaskRemoved,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setStopOnTaskRemoved(!stopOnTaskRemoved) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.VolumeOff,
+                    title = "Hide volume bar",
+                    subtitle = "Removes the volume slider from the main player",
+                    trailing = {
+                        Switch(
+                            checked = hideVolumeBar,
+                            onCheckedChange = AppSettings::setHideVolumeBar,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setHideVolumeBar(!hideVolumeBar) },
+                )
+            }
+
+        }
+
+        if (page == SettingsCategory.ABOUT) {
+            SettingsGroup {
+                SettingsRow(
+                    icon = Icons.Rounded.SystemUpdate,
+                    title = "Check for updates",
+                    subtitle = updateStatusText ?: "Current version: v$version",
+                    trailing = {
+                        if (checkingUpdate) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            )
+                        }
+                    },
+                    onClick = {
+                        if (!checkingUpdate) {
+                            checkingUpdate = true
+                            updateStatusText = "Checking latest version..."
+                            scope.launch {
+                                // checkAndNotify, not check: a manual check is also a
+                                // request to be told, and it updates the same
+                                // once-per-version record the background worker uses.
+                                val update = AppUpdateChecker.checkAndNotify(context)
+                                checkingUpdate = false
+                                updateModalInfo = update
+                                showUpdateSheet = true
+                                updateStatusText = if (update != null) {
+                                    "Update available: v${update.version}"
+                                } else {
+                                    "You are on the latest version (v$version)"
+                                }
+                            }
+                        }
+                    },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.NotificationsActive,
+                    title = "Notify me about new versions",
+                    subtitle = "Posts a notification when a new release is available, " +
+                        "including in the background",
+                    trailing = {
+                        Switch(
+                            checked = updateNotifications,
+                            onCheckedChange = AppSettings::setUpdateNotifications,
+                            colors = SwitchDefaults.colors(
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                checkedBorderColor = MaterialTheme.colorScheme.primary,
+                            ),
+                        )
+                    },
+                    onClick = { AppSettings.setUpdateNotifications(!updateNotifications) },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.Language,
+                    title = "Official Website & Releases",
+                    subtitle = "velthy.my.id",
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    },
+                    onClick = {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://velthy.my.id")))
+                    },
+                )
+                RowDivider()
+                SettingsRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "Setup Wizard & Onboarding",
+                    subtitle = "Replay first-launch welcome and personalization guide",
+                    trailing = {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    },
+                    onClick = {
+                        AppSettings.setHasCompletedOnboarding(false)
+                    },
+                )
+            }
+
+        }
+
     }
 
     picking?.let { target ->
@@ -1398,215 +1498,6 @@ fun SettingsScreen(
         )
     }
 
-    if (showListenBrainzTokenDialog) {
-        var tokenInput by remember { mutableStateOf(listenBrainzToken) }
-        var lbError by remember { mutableStateOf<String?>(null) }
-        var lbLoading by remember { mutableStateOf(false) }
-        val haptic = LocalHapticFeedback.current
-        AlertDialog(
-            onDismissRequest = { if (!lbLoading) showListenBrainzTokenDialog = false },
-            title = { Text("ListenBrainz Token") },
-            text = {
-                Column {
-                    if (lbError != null) {
-                        AlertErrorBanner(error = lbError!!, modifier = Modifier.padding(bottom = 10.dp))
-                    }
-                    OutlinedTextField(
-                        value = tokenInput,
-                        onValueChange = {
-                            tokenInput = it
-                            lbError = null
-                        },
-                        label = { Text("API Token") },
-                        singleLine = true,
-                        enabled = !lbLoading,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        lbLoading = true
-                        lbError = null
-                        scrobbleScope.launch {
-                            try {
-                                ListenBrainzManager.validateToken(tokenInput.trim())
-                                    .onSuccess { _ ->
-                                        haptics.play(Haptic.Select)
-                                        AppSettings.setListenBrainzToken(tokenInput.trim())
-                                        showListenBrainzTokenDialog = false
-                                    }
-                                    .onFailure { e ->
-                                        lbError = e.message ?: "Invalid user token. Please check your token."
-                                        haptics.play(Haptic.ToggleOff)
-                                    }
-                            } catch (e: Exception) {
-                                lbError = e.message ?: "Validation failed"
-                                haptics.play(Haptic.ToggleOff)
-                            } finally {
-                                lbLoading = false
-                            }
-                        }
-                    },
-                    enabled = !lbLoading && tokenInput.isNotBlank(),
-                ) {
-                    Text(if (lbLoading) "Validating..." else "Save")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showListenBrainzTokenDialog = false }, enabled = !lbLoading) {
-                    Text("Cancel")
-                }
-            },
-        )
-    }
-
-    if (showLastfmLoginDialog) {
-        var usernameInput by remember { mutableStateOf("") }
-        var passwordInput by remember { mutableStateOf("") }
-        var apiKeyInput by remember { mutableStateOf(AppSettings.lastfmApiKey.value) }
-        var secretInput by remember { mutableStateOf(AppSettings.lastfmSecret.value) }
-        var showAdvanced by remember { mutableStateOf(false) }
-        var lastfmError by remember { mutableStateOf<String?>(null) }
-        var lastfmLoading by remember { mutableStateOf(false) }
-        val context = androidx.compose.ui.platform.LocalContext.current
-        AlertDialog(
-            onDismissRequest = { if (!lastfmLoading) showLastfmLoginDialog = false },
-            title = { Text("Last.fm Login") },
-            text = {
-                Column {
-                    if (lastfmError != null) {
-                        AlertErrorBanner(error = lastfmError!!, modifier = Modifier.padding(bottom = 10.dp))
-                    }
-                    OutlinedTextField(
-                        value = usernameInput,
-                        onValueChange = {
-                            usernameInput = it
-                            lastfmError = null
-                        },
-                        label = { Text("Username") },
-                        singleLine = true,
-                        enabled = !lastfmLoading,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = {
-                            passwordInput = it
-                            lastfmError = null
-                        },
-                        label = { Text("Password") },
-                        singleLine = true,
-                        enabled = !lastfmLoading,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = if (showAdvanced) "Hide API Credentials ▲" else "Custom API Key (Optional) ▼",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable { showAdvanced = !showAdvanced }
-                            .padding(vertical = 4.dp),
-                    )
-                    if (showAdvanced) {
-                        Spacer(Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = apiKeyInput,
-                            onValueChange = {
-                                apiKeyInput = it
-                                lastfmError = null
-                            },
-                            label = { Text("API Key") },
-                            singleLine = true,
-                            enabled = !lastfmLoading,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = secretInput,
-                            onValueChange = {
-                                secretInput = it
-                                lastfmError = null
-                            },
-                            label = { Text("Shared Secret") },
-                            singleLine = true,
-                            enabled = !lastfmLoading,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "Get free API keys at last.fm/api/account/create",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clickable {
-                                    runCatching {
-                                        context.startActivity(
-                                            android.content.Intent(
-                                                android.content.Intent.ACTION_VIEW,
-                                                android.net.Uri.parse("https://www.last.fm/api/account/create"),
-                                            ).apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) },
-                                        )
-                                    }
-                                }
-                                .padding(vertical = 4.dp),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        lastfmLoading = true
-                        lastfmError = null
-                        scrobbleScope.launch {
-                            try {
-                                val activeApiKey = apiKeyInput.trim().ifBlank { LastFM.FALLBACK_COMPAT_API_KEY }
-                                val activeSecret = secretInput.trim().ifBlank { LastFM.FALLBACK_COMPAT_SECRET }
-                                LastFM.initialize(
-                                    apiKey = activeApiKey,
-                                    secret = activeSecret,
-                                )
-                                LastFM.getMobileSession(usernameInput.trim(), passwordInput)
-                                    .onSuccess { auth ->
-                                        haptics.play(Haptic.Select)
-                                        if (apiKeyInput.isNotBlank()) AppSettings.setLastfmApiKey(apiKeyInput.trim())
-                                        if (secretInput.isNotBlank()) AppSettings.setLastfmSecret(secretInput.trim())
-                                        AppSettings.setLastfmSessionKey(auth.session.key)
-                                        AppSettings.setLastfmUsername(auth.session.name)
-                                        AppSettings.setLastfmEnabled(true)
-                                        AppSettings.setLastfmScrobbleEnabled(true)
-                                        showLastfmLoginDialog = false
-                                    }
-                                    .onFailure { e ->
-                                        lastfmError = e.message ?: "Invalid username or password supplied."
-                                        haptics.play(Haptic.ToggleOff)
-                                    }
-                            } catch (e: Exception) {
-                                lastfmError = e.message ?: "Login failed. Please check your connection."
-                                haptics.play(Haptic.ToggleOff)
-                            } finally {
-                                lastfmLoading = false
-                            }
-                        }
-                    },
-                    enabled = !lastfmLoading && usernameInput.isNotBlank() && passwordInput.isNotBlank(),
-                ) {
-                    Text(if (lastfmLoading) "Signing in..." else "Sign in")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showLastfmLoginDialog = false }, enabled = !lastfmLoading) {
-                    Text("Cancel")
-                }
-            },
-        )
-    }
-
-    
     if (showAppLanguageDialog) {
         AppLanguageDialog(
             hazeState = remember { dev.chrisbanes.haze.HazeState() },
@@ -1618,6 +1509,27 @@ fun SettingsScreen(
             onDismissRequest = { showStorageSettingsSheet = false },
         )
     }
+}
+
+/**
+ * One page of Settings, and what the index calls it.
+ *
+ * The split exists because the list had grown past what a single scroll can
+ * hold: eleven cards of rows, most of them for settings a person touches once.
+ * The index keeps what is looked for often, and the pages keep the rest.
+ */
+enum class SettingsCategory(val title: String) {
+    PLAYBACK("Playback"),
+    AUDIO("Audio quality"),
+    DOWNLOADS("Downloads"),
+    NOW_PLAYING("Now playing"),
+    LYRICS("Lyrics"),
+    APPEARANCE("Appearance"),
+    PERFORMANCE("Performance"),
+    STORAGE("Storage"),
+    DATA("Your data"),
+    MISC("Miscellaneous"),
+    ABOUT("About & updates"),
 }
 
 /** Which ceiling the open picker is editing. */

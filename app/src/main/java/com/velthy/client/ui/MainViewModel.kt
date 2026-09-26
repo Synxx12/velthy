@@ -1094,7 +1094,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             emptyList()
         }
-        _suggestions.value = listOf(value) + stale.filterNot { it.equals(value, true) }
+        // Capped here as well as on arrival: the carried-over rows are what is
+        // on screen between two keystrokes, and three typed letters would
+        // otherwise stack three batches of three before the first answer landed.
+        _suggestions.value = (listOf(value) + stale.filterNot { it.equals(value, true) })
+            .take(SUGGESTION_COUNT + 1)
         suggestRequests.tryEmit(value)
         previewRequests.tryEmit(value)
     }
@@ -1295,7 +1299,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Asked again on the way back; the field is live throughout.
                 if (!stillWanted(input)) return@collectLatest
                 _suggestions.value = listOf(input) +
-                    fetched.filterNot { it.equals(input, ignoreCase = true) }
+                    fetched
+                        .filterNot { it.equals(input, ignoreCase = true) }
+                        .take(SUGGESTION_COUNT)
             }
     }
 
@@ -1363,14 +1369,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val SUGGEST_DEBOUNCE_MS = 120L
 
         /**
+         * How many completions are shown, not counting the typed text itself.
+         *
+         * Three, so the whole block — the lead row, these, the "Songs" heading
+         * and its rows — still fits above the keyboard on a phone. YouTube
+         * answers with around ten, and every one of them past the third was a
+         * row that pushed the songs somebody was actually reaching for off the
+         * bottom of the screen.
+         */
+        const val SUGGESTION_COUNT = 3
+
+        /**
          * Long enough that a word typed at speed is one search rather than one
          * per letter, short enough that the preview is up before the reader has
          * finished deciding whether to tap a completion.
          */
         const val PREVIEW_DEBOUNCE_MS = 350L
 
-        /** How many songs the preview shows — a glance, not a results page. */
-        const val PREVIEW_SONG_COUNT = 6
+        /**
+         * How many songs the preview shows — a glance, not a results page.
+         *
+         * Four, so the whole mid-edit block stays a glance: the typed row, up
+         * to three completions, the "Songs" heading and these. Anything past
+         * this is what the results page is for, and it is one tap away.
+         */
+        const val PREVIEW_SONG_COUNT = 4
 
         const val SEARCH_CACHE_ENTRIES = 100
     }

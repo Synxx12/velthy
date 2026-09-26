@@ -236,6 +236,11 @@ fun CoverMorphOverlay(
                     // elevation that grows as the cover does is the honest
                     // reading. 0 at both ends, 1 mid-flight, so the cover lifts
                     // off the bar and sets back down instead of sliding flat.
+                    //
+                    // Read off the eased progress as well, so the peak of the
+                    // lift lands where the cover is moving fastest rather than
+                    // halfway through a curve that is still accelerating out of
+                    // the mini player.
                     val lift = 1f - abs(2f * m - 1f)
                     shadowElevation = (lerpFloat(3f, 14f, m) + 15f * lift).dp.toPx()
                 }

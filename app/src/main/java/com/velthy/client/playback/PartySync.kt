@@ -168,6 +168,18 @@ class PartySync(
     @Volatile
     private var rejoining = false
 
+    /**
+     * A control this device could not put on the wire.
+     *
+     * While it is set, [reconcile] keeps its hands off: the player is where the
+     * user put it, the party has not been told yet, and reconciling against the
+     * party's older state is exactly the "song changes back by itself" that the
+     * hold exists to prevent. Cleared when the socket returns and the control is
+     * finally sent. See [publish].
+     */
+    @Volatile
+    private var publishPending = false
+
     /** Consecutive over-limit readings. See the drift branch of [reconcile]. */
     private var driftStrikes = 0
 
@@ -180,14 +192,38 @@ class PartySync(
                 // A new state, or leaving/joining. Not every field: this exists
                 // to react promptly to a control, and the round-trip counter
                 // changing is not one.
-                .map { Triple(it.playback.seq, it.queue.seq, it.code) }
+                //
+                // [Signal.clockSynced] is in here for the one moment it decides
+                // everything: a device that has just joined. Until the first
+                // pong lands, [reconcile] refuses to act on a playing party —
+                // there is no measured offset to translate its anchor with — so
+                // without this the join waits out the tick below after the clock
+                // is already good, and the track lands a beat late for no reason
+                // anybody could see.
+                .map {
+                    Signal(
+                        seq = it.playback.seq,
+                        queueSeq = it.queue.seq,
+                        code = it.code,
+                        clockSynced = it.clockSynced,
+                        live = it.connection == ListenTogether.Connection.LIVE,
+                    )
+                }
                 .distinctUntilChanged()
-                .collect { (seq, _, _) ->
+                .collect { signal ->
                     // Every control this device sent has come back around, so
                     // the party now describes the world the user made â€” or
                     // somebody else has moved it on past ours, which is equally
                     // a reason to stop holding reconcile off.
-                    if (seq >= awaitSeq) reconcileQuietUntilMs = 0L
+                    if (signal.seq >= awaitSeq) reconcileQuietUntilMs = 0L
+                    // The socket is back, and something this device did while it
+                    // was down never went out. Say it now, before reconcile gets
+                    // a chance to undo it.
+                    if (signal.live && publishPending) {
+                        publishPending = false
+                        publish()
+                        return@collect
+                    }
                     reconcile()
                 }
         }
@@ -205,6 +241,15 @@ class PartySync(
             }
         }
     }
+
+    /** The parts of a party state [start] reacts to promptly. */
+    private data class Signal(
+        val seq: Long,
+        val queueSeq: Long,
+        val code: String?,
+        val clockSynced: Boolean,
+        val live: Boolean,
+    )
 
     fun stop() {
         jobs.forEach(Job::cancel)
@@ -325,6 +370,10 @@ class PartySync(
             rejoining = false
             return
         }
+        // An action of this device's that the party has not been told about
+        // yet. Following the party from here would undo it in front of the
+        // user. See [publishPending].
+        if (publishPending) return
         if (SystemClock.elapsedRealtime() < reconcileQuietUntilMs) return
         // Another app has the audio. Following the party from here means seeking
         // this player into place and pressing play, which takes the audio back
@@ -332,8 +381,21 @@ class PartySync(
         // nothing until its own user asks it to. See [focusLost].
         if (focusLost) return
         val target = party.playback
-        val track = target.track ?: return
         val exo = player() ?: return
+
+        // A party with nothing in it yet. Somebody has to put the first song
+        // on, and until they do every member hears their own separate
+        // playback — which reads as "we joined the same party and are hearing
+        // different things". The device that has something playing seeds the
+        // party with it, so the others join in on that rather than on silence.
+        // Only the *first* one lands: the server's seq settles it, and by the
+        // time the second device's frame arrives the party has a track and
+        // this branch is gone.
+        if (target.track == null) {
+            seedParty(exo)
+            return
+        }
+        val track = target.track ?: return
 
         // Suppressed, not stopped: a notification chime or a short clip holds
         // the audio for a moment and hands it straight back, with `playWhenReady`
@@ -444,6 +506,45 @@ class PartySync(
     }
 
     /**
+     * Puts what this device is playing into an empty party.
+     *
+     * The first person in a party has usually already pressed play on
+     * something — that is often why they started one. Without this their music
+     * stays local, everyone else's stays theirs, and the party looks broken
+     * until somebody picks a song on purpose.
+     *
+     * Nothing is seeded from a device with no track of its own: there would be
+     * nothing to say, and the party would simply stay empty until somebody
+     * played something, which is the correct outcome.
+     */
+    private fun seedParty(exo: Player) {
+        val song = exo.currentMediaItem?.toSong() ?: return
+        // A file on this device cannot be handed to anybody else. See [publish].
+        if (song.isDeviceFile()) return
+        val track = song.toPartyTrack(exo.duration)
+        val position = exo.currentPosition.coerceAtLeast(0L)
+        val playing = exo.playWhenReady
+        val queue = (0 until exo.mediaItemCount)
+            .take(MAX_PUBLISHED_QUEUE)
+            .map { exo.getMediaItemAt(it).toSong() }
+            .filterNot(Song::isDeviceFile)
+            .map { it.toPartyTrack(0L) }
+        Log.i(TAG, "seeding an empty party with ${track.videoId}")
+        // The queue first, for the same reason [publish] sends it first: a
+        // track pointing into a running order nobody has is the bug that
+        // played the wrong song.
+        val sent = if (queue.isNotEmpty()) {
+            ListenTogether.setQueue(queue, queue.indexOfFirst { it.videoId == track.videoId })
+        } else {
+            true
+        } && ListenTogether.setTrack(track, position, playing)
+        if (sent) {
+            reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
+            awaitSeq = ListenTogether.state.value.playback.seq + 2
+        }
+    }
+
+    /**
      * Puts the party's running order on this player and starts at its position.
      *
      * The queue comes across as well as the track so that next and previous
@@ -529,6 +630,7 @@ class PartySync(
         val wantsPlaying = deferredPlayPending || exo.playWhenReady
         val base = party.playback.seq
         var controls = 0
+        var sent = 0
 
         // Compared by id first, which is a plain field read per item. Building
         // the full list is not â€” it parses a metadata bundle per track â€” and
@@ -552,8 +654,8 @@ class PartySync(
                 .map { exo.getMediaItemAt(it).toSong() }
                 .filterNot(Song::isDeviceFile)
                 .map { it.toPartyTrack(0L) }
-            ListenTogether.setQueue(queue, localIds.indexOf(track.videoId))
             controls++
+            if (ListenTogether.setQueue(queue, localIds.indexOf(track.videoId))) sent++
         }
 
         when {
@@ -561,12 +663,17 @@ class PartySync(
                 // After the queue, never before: a track change that arrives
                 // pointing into a running order nobody has yet is the bug that
                 // played the wrong song.
-                ListenTogether.setTrack(track, position, wantsPlaying)
                 controls++
+                if (ListenTogether.setTrack(track, position, wantsPlaying)) sent++
             }
             party.playback.isPlaying != wantsPlaying -> {
-                if (wantsPlaying) ListenTogether.play(position) else ListenTogether.pause(position)
                 controls++
+                val ok = if (wantsPlaying) {
+                    ListenTogether.play(position)
+                } else {
+                    ListenTogether.pause(position)
+                }
+                if (ok) sent++
             }
             // Same track, same playing state â€” so what the user did was move
             // the playhead. Unless it did not move far, in which case this is
@@ -580,10 +687,24 @@ class PartySync(
             else -> {
                 val partyPosition = ListenTogether.partyPositionMs()
                 if (partyPosition == null || abs(position - partyPosition) > SEEK_REPORT_FLOOR_MS) {
-                    ListenTogether.seek(position)
                     controls++
+                    if (ListenTogether.seek(position)) sent++
                 }
             }
+        }
+
+        // A control that never reached the socket is not one to wait for: the
+        // party's seq will not move, so `awaitSeq` would hold [reconcile] off
+        // for the whole quiet window and then haul the player back to the track
+        // the user had just left. That is the song changing back by itself,
+        // with nothing on screen to explain it. So the window is kept open
+        // instead, and the next publish says the whole thing again.
+        if (controls > 0 && sent < controls) {
+            Log.w(TAG, "party socket is down; holding ${controls - sent} of $controls controls")
+            publishPending = true
+            awaitSeq = Long.MAX_VALUE
+            reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
+            return
         }
 
         // The party has caught up with this device once every control sent has

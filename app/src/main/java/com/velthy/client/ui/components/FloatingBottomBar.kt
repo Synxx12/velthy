@@ -72,27 +72,24 @@ data class BottomTab(
 )
 
 /**
- * The pill's two gradients, hoisted out of the draw lambda.
+ * The pill's fill and its rim, built once per theme rather than per frame.
  *
- * They used to be built inline for every frame of every slide — five
- * `Color.copy` calls each, twice over, sixty times a second. Only the
- * gradient's start and end travel with the capsule, so its colours are
- * constants and there is nothing per-frame left to build.
+ * They used to be five-colour gradients rebuilt inline on every frame of every
+ * slide, and the colours ran cyan, violet and peach — a rainbow capsule in an
+ * app that is otherwise one colour, under artwork that is the only thing on
+ * screen meant to be colourful. Both are now two stops of the theme's own
+ * primary: lit at the top, quieter at the bottom, so the pill still reads as a
+ * raised piece of glass rather than a flat cut-out, and no hue appears that
+ * nothing else in the app uses.
  */
-private val PILL_GLASS_COLORS = listOf(
-    Color.White.copy(alpha = 0.16f),
-    Color(0xFF8CE8FF).copy(alpha = 0.14f), // Soft prismatic cyan
-    Color(0xFFE8B5FF).copy(alpha = 0.14f), // Soft prismatic violet
-    Color(0xFFFFC085).copy(alpha = 0.12f), // Soft prismatic peach
-    Color.White.copy(alpha = 0.10f),
+private fun pillFill(primary: Color): List<Color> = listOf(
+    primary.copy(alpha = 0.30f),
+    primary.copy(alpha = 0.16f),
 )
 
-private val PILL_SHEEN_COLORS = listOf(
-    Color.White.copy(alpha = 0.38f),
-    Color(0xFF8CE8FF).copy(alpha = 0.30f), // Prismatic cyan sheen
-    Color(0xFFE8B5FF).copy(alpha = 0.30f), // Prismatic violet sheen
-    Color(0xFFFFD59E).copy(alpha = 0.25f), // Prismatic gold sheen
-    Color.White.copy(alpha = 0.35f),
+private fun pillRim(primary: Color): List<Color> = listOf(
+    primary.copy(alpha = 0.55f),
+    primary.copy(alpha = 0.30f),
 )
 
 /** The hairline the pill is ringed with. */
@@ -143,6 +140,14 @@ fun FloatingBottomBar(
     modifier: Modifier = Modifier,
 ) {
     val container = MaterialTheme.colorScheme.surface
+    // Read here rather than inside the draw lambda: the theme is the same for
+    // the whole bar, and a colour scheme lookup per frame of a slide is a
+    // composition read in a draw pass. The two stops are built alongside it so
+    // the draw pass allocates nothing — that was the point of hoisting the old
+    // five-colour pair out in the first place.
+    val pillColor = MaterialTheme.colorScheme.primary
+    val pillFillColors = remember(pillColor) { pillFill(pillColor) }
+    val pillRimColors = remember(pillColor) { pillRim(pillColor) }
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     // Backdrop-sampled glass, only where it was asked for and can actually be
     // rendered. Falls back to the frosted haze everywhere else.
@@ -340,7 +345,7 @@ fun FloatingBottomBar(
 
                         drawRoundRect(
                             brush = Brush.linearGradient(
-                                colors = PILL_GLASS_COLORS,
+                                colors = pillFillColors,
                                 start = topLeft,
                                 end = end,
                             ),
@@ -350,7 +355,7 @@ fun FloatingBottomBar(
                         )
                         drawRoundRect(
                             brush = Brush.linearGradient(
-                                colors = PILL_SHEEN_COLORS,
+                                colors = pillRimColors,
                                 start = topLeft,
                                 end = end,
                             ),
