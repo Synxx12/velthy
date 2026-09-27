@@ -279,12 +279,72 @@ class PartySync(
         }
         reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
         // Nothing has been published yet, so there is no seq to wait for and
-        // the window must not clear on somebody else's control either â€” it is
+        // the window must not clear on somebody else's control either — it is
         // protecting an action of ours that has not gone out.
         awaitSeq = Long.MAX_VALUE
         publishJob?.cancel()
         publishJob = scope.launch {
             delay(PUBLISH_DEBOUNCE_MS)
+            publish()
+        }
+    }
+
+    /**
+     * The track ended and the player moved on by itself — nobody pressed
+     * anything.
+     *
+     * This is the one advance no other path reports: a tap goes through the
+     * session wrapper and lands in [onLocalIntent], but ExoPlayer advancing at
+     * the end of a track never touches it. Left unreported, the party stays on
+     * the song that just finished while this device is already on the next one,
+     * and the tick below reads that as this device having run ahead: it loads
+     * the party's track, which — being the one that just ended — ends again
+     * immediately, and the two take turns overwriting each other several times
+     * a second. Measured on a device at a flat 640ms period, indefinitely.
+     *
+     * So it is reported, but not blindly. Two devices reaching the end of a
+     * track at the same moment is the ordinary way this happens, and both
+     * would publish a track change for one event. The grace below is the time
+     * for the other one's control to arrive first: if the party has moved by
+     * the time it elapses, that control is the one to follow and this device
+     * says nothing.
+     */
+    fun onAutoAdvance() {
+        val party = ListenTogether.state.value
+        if (!party.inParty) return
+        // A control of ours is already owed to the party, or already on its
+        // way. Either one will publish the state as it stands when it runs, and
+        // that state is this advance — a second publish would be two controls
+        // for one thing.
+        if (publishPending) return
+        if (publishJob?.isActive == true) return
+
+        val beforeSeq = party.playback.seq
+        val beforeTrack = party.playback.track?.videoId
+        // Held from the moment the track ends, not from the moment this device
+        // decides to speak. The grace below is time for another device's
+        // control to arrive, and without this the tick would spend it pulling
+        // the player back onto the track that just finished.
+        reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
+        awaitSeq = Long.MAX_VALUE
+
+        publishJob?.cancel()
+        publishJob = scope.launch {
+            delay(AUTO_ADVANCE_GRACE_MS)
+            val now = ListenTogether.state.value
+            if (!now.inParty) return@launch
+            val movedOn = now.playback.seq != beforeSeq ||
+                now.playback.track?.videoId != beforeTrack
+            if (movedOn) {
+                // Somebody else got there first, so their control is the one to
+                // follow — and this device has nothing outstanding to wait for,
+                // which is what lets the window go immediately rather than
+                // sitting out the rest of it.
+                awaitSeq = now.playback.seq
+                reconcileQuietUntilMs = 0L
+                reconcile()
+                return@launch
+            }
             publish()
         }
     }
@@ -587,7 +647,15 @@ class PartySync(
             // much. Taken beforehand, every track change would start this device
             // a little behind and then be hauled forward by a correcting seek.
             val startAt = ListenTogether.partyPositionMs() ?: party.playback.positionMs
-            exo.setMediaItems(items, startIndex, startAt)
+            // A playhead past the end of the track being loaded is not a
+            // position to start at. It happens when the party is a step behind
+            // this device — its clock has run past the song it still calls
+            // current — and a seek there lands on STATE_ENDED the instant the
+            // item is prepared. The player then reports the track as finished
+            // and advances, which is half of the loop [onAutoAdvance] exists to
+            // break: it must not be reachable from here either.
+            val start = if (track.durationMs?.let { it > 0L && startAt >= it } == true) 0L else startAt
+            exo.setMediaItems(items, startIndex, start)
             exo.prepare()
             // Not started here even when the party is playing: the resume may be
             // scheduled a moment out, and [reconcile] owns that wait. Preparing
@@ -786,6 +854,21 @@ class PartySync(
          * front of the user and it simply not reaching the others.
          */
         const val INTENT_QUIET_MS = 2_500L
+
+        /**
+         * How long an automatic advance waits before claiming the party's next
+         * track for itself — see [onAutoAdvance].
+         *
+         * Two devices reaching the end of a track at the same instant is the
+         * ordinary case, and both will want to publish the change. This is the
+         * window in which the other one's control can arrive first, so the
+         * device that speaks is whichever got there a moment sooner rather than
+         * both of them. Short enough that a party of one — where nothing else is
+         * coming — is not left waiting on a track it has already started, and
+         * longer than the round trip a control takes, measured here at well
+         * under 200ms on a good connection.
+         */
+        const val AUTO_ADVANCE_GRACE_MS = 400L
 
         /** The server's own ceiling; publishing more would only be truncated. */
         const val MAX_PUBLISHED_QUEUE = 500

@@ -6,6 +6,13 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 
 ## 📋 Changelog
 
+### [Unreleased]
+> 📅 2026-09-27
+> ⚠️ **Severity: Important**
+
+#### 🐛 Perbaikan Masalah
+- **Lagu Tidak Lagi Bolak-balik Saat Dengar Bareng**: Ketika sebuah lagu habis sendiri sementara kamu sedang dengar bareng, lagu itu dulu bisa berpindah maju lalu ditarik kembali ke lagu yang baru saja selesai — bolak-balik terus tanpa henti, beberapa kali per detik. Penyebabnya adalah perpindahan otomatis di akhir lagu tidak pernah diberitahukan ke party, sehingga aplikasi mengira perangkatmu berjalan sendiri dan berusaha mengembalikannya ke lagu yang sudah selesai itu. Kini perpindahan itu ikut diberitahukan, dengan jeda singkat lebih dulu supaya dua perangkat yang lagunya habis bersamaan tidak saling menimpa. Kalau perangkat lain sudah memindahkan lagu lebih dulu, perangkatmu cukup mengikuti tanpa mengirim perintah tambahan.
+
 ### [1.4.7] — Mesin Suara Baru & Pemutar Layar Lebar
 > 📅 2026-09-25
 > ⚠️ **Severity: Important**

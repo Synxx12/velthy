@@ -628,6 +628,18 @@ class PlaybackService : MediaSessionService() {
                 autoplayLoadJob = null
                 autoplaySeed = null
                 loadAutoplayForCurrentTrack()
+                // The queue moving on by itself. Nobody pressed anything, but it
+                // is still this device deciding what the party plays next, and no
+                // other path reports it: an automatic advance never passes through
+                // the session wrapper that would have published it. Unreported,
+                // the party stays on the track that just finished while this
+                // device is already on the next one, and [PartySync]'s tick reads
+                // that as this device having run ahead — so it loads the finished
+                // track back, which ends immediately, and the two overwrite each
+                // other several times a second. See [PartySync.onAutoAdvance].
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                    partySync?.onAutoAdvance()
+                }
                 publishWidgetState()
                 mediaSession?.setCustomLayout(notificationButtons())
                 // Cleared rather than re-published. The renderer is still
