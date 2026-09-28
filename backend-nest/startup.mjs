@@ -34,12 +34,205 @@
  *
  * Run:  node startup.mjs
  */
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/** Whether an environment flag reads as "on". Absent, blank and "0" are all off. */
+function flagOn(name) {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
+/**
+ * Run a command to completion, with its output going straight to this process's.
+ *
+ * Synchronous on purpose: every caller here is deciding whether the *next* thing
+ * is safe to do, and a pull that has not finished is a tree that cannot be
+ * built. There is no concurrency to win by doing it in the background.
+ *
+ * @return true when the command exited 0. A missing binary is a false rather
+ *   than a throw, because "git is not installed" is an answer this needs to be
+ *   able to act on, not a crash.
+ */
+function run(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: here,
+    stdio: 'inherit',
+    // Windows resolves `npm` to `npm.cmd` only through a shell; POSIX is
+    // unaffected either way.
+    shell: process.platform === 'win32',
+  });
+  if (result.error) {
+    console.warn(`[startup] could not run ${command}: ${result.error.message}`);
+    return false;
+  }
+  return result.status === 0;
+}
+
+/** Run a command and capture its trimmed stdout, or null if it failed. */
+function capture(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: here,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    shell: process.platform === 'win32',
+  });
+  if (result.error || result.status !== 0) return null;
+  return (result.stdout ?? '').trim();
+}
+
+/**
+ * Rebuild `dist/`, keeping the old one until the new one is known to be good.
+ *
+ * `npm run build` deletes `dist/` before compiling, which is fine on a
+ * workstation and actively harmful here: this runs on a server that is about to
+ * start, and a compile error would leave no `dist/` *and* no source fallback —
+ * `tsx` is a dev dependency and production installs prune it, so the process
+ * would exit with nothing to serve. So the old build is moved aside first and
+ * put back if the new one fails, and the caller is told either way.
+ *
+ * @return true when `dist/` holds a freshly compiled build.
+ */
+function rebuild() {
+  const dist = join(here, 'dist');
+  const aside = join(here, 'dist.stale');
+  const hadDist = existsSync(dist);
+
+  if (hadDist) {
+    rmSync(aside, { recursive: true, force: true });
+    try {
+      renameSync(dist, aside);
+    } catch (error) {
+      console.warn(`[startup] could not set the old build aside: ${error.message}`);
+      return false;
+    }
+  }
+
+  const built = run('npm', ['run', 'build']);
+  if (built) {
+    rmSync(aside, { recursive: true, force: true });
+    return true;
+  }
+
+  console.warn('[startup] the rebuild failed; putting the previous build back.');
+  if (hadDist) {
+    rmSync(dist, { recursive: true, force: true });
+    try {
+      renameSync(aside, dist);
+    } catch (error) {
+      console.warn(`[startup] could not restore the previous build: ${error.message}`);
+    }
+  }
+  return false;
+}
+
+/**
+ * Bring the checkout up to date, then rebuild — before anything is loaded.
+ *
+ * Off by default, and switched on with `GIT_PULL=1`. That is deliberate: this
+ * rewrites the working tree of whatever it is run in, which is the right thing
+ * on a server that exists to follow a branch and the wrong thing on a
+ * workstation somebody is in the middle of editing. A deployment that wants it
+ * sets the flag once.
+ *
+ * Every failure is survivable and every one of them is only a warning. The
+ * server starting on the code it already has is always better than the server
+ * not starting, so a missing `git`, a detached head, a dirty tree, a branch
+ * that has moved on with a conflict — all of them end in "carry on with what is
+ * on disk" rather than an exit.
+ *
+ * Ordering is the whole point of where this is called from: `dist/` is preferred
+ * over `src/` by [loadBootstrap], so pulling without rebuilding would change
+ * nothing at all. The rebuild has to happen here, before that decision is made.
+ */
+function autoUpdate() {
+  if (!flagOn('GIT_PULL')) {
+    console.log('[startup] GIT_PULL not set — using the code on disk as-is.');
+    return;
+  }
+  if (!existsSync(join(here, '.git'))) {
+    console.log(
+      '[startup] GIT_PULL is set but there is no .git here — nothing to pull.\n' +
+        '          Uploaded deployments have no history to follow; clone the\n' +
+        '          repository instead if you want this to work.',
+    );
+    return;
+  }
+  if (!capture('git', ['--version'])) {
+    console.warn('[startup] GIT_PULL is set but git is not available — skipping.');
+    return;
+  }
+
+  const branch = process.env.GIT_BRANCH?.trim() || 'main';
+  const remote = process.env.GIT_REMOTE?.trim() || 'origin';
+
+  // A dirty tree is not an error to report at every boot — it is the normal
+  // state of a server somebody has patched by hand. Pulling into it would
+  // either fail or overwrite their change, so neither is attempted.
+  const dirty = capture('git', ['status', '--porcelain']);
+  if (dirty === null) {
+    console.warn('[startup] could not read the git status — skipping the update.');
+    return;
+  }
+  if (dirty.length > 0) {
+    console.warn(
+      `[startup] the working tree has local changes (${dirty.split('\n').length} file(s));\n` +
+        '          not pulling, because the update would fight them.',
+    );
+    return;
+  }
+
+  if (!run('git', ['fetch', '--prune', remote, branch])) {
+    console.warn('[startup] git fetch failed — starting on the code already here.');
+    return;
+  }
+
+  const behind = capture('git', ['rev-list', '--count', `HEAD..${remote}/${branch}`]);
+  if (behind === null) {
+    console.warn(`[startup] could not compare against ${remote}/${branch} — skipping.`);
+    return;
+  }
+  if (behind === '0') {
+    console.log(`[startup] already up to date with ${remote}/${branch}.`);
+    return;
+  }
+
+  console.log(`[startup] ${behind} new commit(s) on ${remote}/${branch}; updating.`);
+  const lockBefore = existsSync(join(here, 'package-lock.json'))
+    ? readFileSync(join(here, 'package-lock.json'), 'utf8')
+    : '';
+
+  // Fast-forward only. A merge commit on a server nobody is watching is how a
+  // deployment ends up in a state its own history cannot explain, and a
+  // conflict here would leave the tree half-updated.
+  if (!run('git', ['pull', '--ff-only', remote, branch])) {
+    console.warn('[startup] could not fast-forward — starting on the code already here.');
+    return;
+  }
+
+  // Only when the dependency graph actually moved. `npm ci` deletes
+  // node_modules first, so running it on every restart would turn a fast boot
+  // into a slow one for no reason.
+  const lockAfter = existsSync(join(here, 'package-lock.json'))
+    ? readFileSync(join(here, 'package-lock.json'), 'utf8')
+    : '';
+  if (lockAfter !== lockBefore) {
+    console.log('[startup] dependencies changed; installing.');
+    if (!run('npm', ['ci'])) {
+      console.warn('[startup] npm ci failed — the build below may not be usable.');
+    }
+  }
+
+  if (rebuild()) {
+    console.log('[startup] updated and rebuilt.');
+  } else {
+    console.warn('[startup] updated, but the rebuild did not succeed.');
+  }
+}
 
 /**
  * Fold `.env` into the environment, without overwriting what is already set.
@@ -214,6 +407,11 @@ async function startTunnel(port) {
 async function main() {
   loadEnvFile();
 
+  // Before the application is loaded, not after — see [autoUpdate]. `dist/` is
+  // preferred over `src/` by [loadBootstrap], so a pull that is not followed by
+  // a rebuild changes nothing at all.
+  autoUpdate();
+
   let bootstrap;
   try {
     ({ bootstrap } = await loadBootstrap());
@@ -246,11 +444,55 @@ async function main() {
       tunnel.kill();
     }
   };
+
+  /**
+   * How long the app's own drain may take before the process is ended anyway.
+   *
+   * Generous, because what is being waited for is open sockets closing — and a
+   * party member mid-request is the thing this is protecting. The point is only
+   * that it is finite: a drain that hangs must not leave a process a panel
+   * cannot restart.
+   */
+  const SHUTDOWN_GRACE_MS = 10_000;
+
+  let shuttingDown = false;
+
+  /**
+   * Stop the tunnel, then let the application drain — in that order, and
+   * without exiting here.
+   *
+   * The exit used to happen in this handler, and it was the reason the drain
+   * never completed. `bootstrap` registers its own SIGTERM/SIGINT handler that
+   * awaits `app.close()`, and both handlers fire on the same signal in
+   * registration order — but an `await` suspends, so this one ran to its
+   * `process.exit(0)` in the same tick and the process was gone before a single
+   * socket had been closed. The server looked like it shut down cleanly and had
+   * in fact been killed mid-flight.
+   *
+   * So this only arms a deadline. The normal path is the app's own handler
+   * exiting after a clean close, and the watchdog covers the case where it
+   * cannot — which is the one where waiting forever would be worse.
+   */
+  const onSignal = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[startup] ${signal} — shutting down.`);
+    stopTunnel();
+    const watchdog = setTimeout(() => {
+      console.warn(`[startup] the app did not finish closing within ${SHUTDOWN_GRACE_MS}ms; exiting.`);
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    // Deliberately *not* unref'd. The happy path is the app's own handler
+    // exiting 0 the moment `app.close()` resolves, so this never fires — and
+    // the case it exists for is precisely the one where nothing else is left to
+    // keep the process alive. An unref'd timer would let the loop drain and the
+    // process exit 0 on a drain that never happened, which is the failure this
+    // is here to catch.
+    void watchdog;
+  };
+
   for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-      stopTunnel();
-      process.exit(0);
-    });
+    process.on(signal, () => onSignal(signal));
   }
   process.on('exit', stopTunnel);
 }
