@@ -12,14 +12,12 @@ Kamu **tidak punya memori** dari sesi sebelumnya. File ini adalah memorimu. Ikut
 
 1. **Baca seluruh file ini** (§0 sampai §8) sebelum menyentuh apa pun.
 2. **Baca `.agents/AGENTS.md`** — aturan changelog & rilis.
-3. **Cek working tree** — ada perubahan belum di-commit yang **sengaja** dibiarkan:
+3. **Cek working tree** — harus **bersih**, HEAD `73e92bf` atau lebih baru:
    ```cmd
    cd /d "D:\Vs code\Velthy"
    git status --short
    git log --oneline -3
    ```
-   HEAD harus `e416134`. Perubahan di working tree = pekerjaan sesi sebelumnya yang
-   **sudah selesai & build hijau**, menunggu instruksi commit dari user.
 4. **Verifikasi build masih hijau** sebelum menambah apa pun:
    ```cmd
    gradlew.bat compileDevDebugKotlin --console=plain 2>&1 | findstr /R /C:"BUILD SUCCESSFUL" /C:"BUILD FAILED" /C:"^e: "
@@ -28,19 +26,18 @@ Kamu **tidak punya memori** dari sesi sebelumnya. File ini adalah memorimu. Ikut
    §3a sudah ada daftar fitur party v1.7 + blocker-nya).
 6. **JANGAN commit** sampai user bilang. Lihat §0.
 
-**Sudah selesai & belum di-commit** (jangan dikerjakan ulang):
-- Fix lagu bolak-balik saat party (§2)
-- Kurangi jeda party: grace 200ms, defer 900ms, burst ping 6×120ms (§1a, §1b)
-- `startup.mjs` auto-pull + graceful shutdown fix (§1c)
-- **Personal Queue Stash** — file baru `PartyPersonalQueueStash.kt` (§1e)
-- CHANGELOG + `.gitignore`
+**Sudah selesai & sudah di-commit** (jangan dikerjakan ulang):
+- Fix lagu bolak-balik saat party (§2) — `e416134`
+- Kurangi jeda party + Personal Queue Stash (§1a, §1b, §1e) — `7e215f3`
+- `startup.mjs` auto-pull + graceful shutdown fix (§1c) — `36b8fa4`
+- Handoff docs + `.gitignore` — `73e92bf`
 
 **Belum dikerjakan:** §3a (sisa fitur party v1.7), §3b (peningkatan backend).
 **Blocker:** §3a — `QueueTier` tidak ada di Velthy.
 
 ---
 
-Repositori: `D:\Vs code\Velthy` — branch `main`, HEAD `e416134`
+Repositori: `D:\Vs code\Velthy` — branch `main`, HEAD `73e92bf` (party stash + backend + docs)
 Backend: `D:\Vs code\Velthy\backend-nest` (NestJS + `ws`, mandiri)
 Sumber referensi: `D:\Vs code\BitChord-latest` — **tag `v1.7`** (sudah di-checkout)
 
@@ -62,21 +59,16 @@ Sumber referensi: `D:\Vs code\BitChord-latest` — **tag `v1.7`** (sudah di-chec
 
 ---
 
-## 1. STATUS WORKING TREE (belum di-commit — SENGAJA)
+## 1. STATUS WORKING TREE — **BERSIH** (semua sudah di-commit)
 
 ```
- M .gitignore
- M app/src/main/java/com/velthy/client/VelthyApplication.kt
- M app/src/main/java/com/velthy/client/data/listentogether/ListenTogether.kt
- M app/src/main/java/com/velthy/client/playback/PartySync.kt
- M app/src/main/java/com/velthy/client/playback/PlaybackService.kt
- M backend-nest/startup.mjs
- M docs/CHANGELOG.md
-?? app/src/main/java/com/velthy/client/playback/PartyPersonalQueueStash.kt
-?? docs/HANDOFF_PARTY.md
+(e416134..73e92bf)
+7e215f3 feat(party): antrean pribadi pulih setelah dengar bareng + jeda party dipersingkat
+36b8fa4 fix(backend): startup.mjs auto-pull opsional + drain shutdown yang benar
+73e92bf chore: abaikan file Signature* + dokumen handoff party
 ```
 
-Semua sudah **build hijau** dan **backend 16/16 test lulus**. Menunggu instruksi commit.
+Semua sudah **build hijau** dan **backend 16/16 test lulus**.
 
 ### 1a. `PartySync.kt` — jeda & anti-osilasi
 | Perubahan | Nilai |
@@ -109,7 +101,7 @@ Waktu tunggu sync: ~1,2s → ~0,7s.
 ### 1d. `.gitignore`
 Tambah `Signature*` — mencegah file asing (`Signature 2 For Poco f5 ... .xml`) ikut ter-commit.
 
-### 1e. `PartyPersonalQueueStash.kt` — **FILE BARU, SELESAI** ✅
+### 1e. `PartyPersonalQueueStash.kt` — **FILE BARU, SELESAI** ✅ (commit `7e215f3`)
 Antrean pribadi disimpan sebelum masuk party, dikembalikan saat keluar.
 
 | Bagian | Detail |
@@ -220,7 +212,7 @@ Belum ada lingkup konkret. Kandidat dari riset:
 - Host privileges (`hostOnlyControl`, `kick`, `setMaxMembers`)
 - `maxQueueLength` saat ini 500; v1.7 pakai 25 upcoming
 
-### 3c. Auto-update di `startup.mjs` ✅ SELESAI (belum commit)
+### 3c. Auto-update di `startup.mjs` ✅ SELESAI (commit `36b8fa4`)
 Lihat §1c.
 
 ---
@@ -282,13 +274,14 @@ dalam hitungan detik.
 
 ## 7. LANGKAH BERIKUTNYA (urutan yang disarankan)
 
-1. **Tunggu instruksi commit dari user.** Semua perubahan sudah siap.
+1. ~~Tunggu instruksi commit dari user.~~ **Selesai** — commit `7e215f3`, `36b8fa4`, `73e92bf`.
 2. **Uji di perangkat** (`.\dev.ps1`): buat party, mainkan 3–4 lagu **sampai habis otomatis**,
-   baca log, pastikan osilasi hilang.
+   baca log, pastikan osilasi hilang. Sekaligus uji antrean pribadi: susun antrean, masuk party,
+   keluar party → antrean harus kembali utuh (daftar, posisi, status putar).
 3. **Tentukan lingkup 3a (party v1.7)** — ini besar (~2.000+ baris klien + kerja backend).
    Tanyakan ke user mau yang mana dulu:
    - Shared queue 25 (butuh backend)
-   - Personal queue stash (murni klien, mandiri)
+   - ~~Personal queue stash~~ ✅ selesai
    - Activity feed (butuh backend)
    - Host controls (butuh backend)
    - QR + sheets (murni klien, butuh ZXing)
