@@ -49,3 +49,7 @@ screenshots/
 .antigravity/
 .commandcode/
 docs/HANDOFF.md
+
+# Stray files that are not part of this project (e.g. signature files
+# copied in from a phone). Kept out so they cannot be committed by accident.
+Signature*

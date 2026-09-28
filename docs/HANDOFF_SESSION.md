@@ -1,11 +1,15 @@
 # HANDOFF — Sesi Lanjutan (Velthy ↔ BitChord v1.6)
 
+> ⚠️ **SUDAH USANG SEBAGIAN.** File ini ditulis untuk port **v1.6**. Sesi berikutnya
+> (port **v1.7** + party + backend) ada di **`docs/HANDOFF_PARTY.md`** — **baca itu dulu**.
+> File ini tetap berguna untuk riwayat port v1.6 dan perangkap yang masih berlaku.
+>
 > Baca file ini **dulu**, sebelum grep apa pun. Semua temuan di bawah sudah diverifikasi.
 > Tujuan: **tidak ada pengetahuan yang perlu diulang.**
 
 Repositori:
 - **Target**: `D:\Vs code\Velthy` — package `com.velthy.client`, versi `1.4.6.5`
-- **Sumber (up-to-date)**: `D:\Vs code\BitChord-latest` — branch `main`, tag **v1.6** (`7072e7b`)
+- **Sumber (up-to-date)**: `D:\Vs code\BitChord-latest` — sekarang di tag **v1.7** (`c83ff32`)
 - **JANGAN dipakai membandingkan**: `D:\Vs code\BitChord-original` (masih branch lama `pr-5`)
 - Backend party: `D:\Vs code\Velthy\backend-nest` (NestJS, mandiri)
 - Rencana: `D:\Vs code\Velthy\docs\IMPLEMENTATION_PLAN.md`
