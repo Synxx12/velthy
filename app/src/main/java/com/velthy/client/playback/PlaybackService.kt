@@ -170,6 +170,8 @@ class PlaybackService : MediaSessionService() {
         SessionCommand(ACTION_START_STATION, Bundle.EMPTY)
     private val revertCommand =
         SessionCommand(ACTION_REVERT_ORIGINAL, Bundle.EMPTY)
+    private val queueDragCommand =
+        SessionCommand(ACTION_QUEUE_DRAG, Bundle.EMPTY)
 
     private var favoriteActionJob: Job? = null
     private var autoplayLoadJob: Job? = null
@@ -187,6 +189,7 @@ class PlaybackService : MediaSessionService() {
                 .add(shuffleCommand)
                 .add(stationCommand)
                 .add(revertCommand)
+                .add(queueDragCommand)
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
@@ -209,6 +212,16 @@ class PlaybackService : MediaSessionService() {
                 }
                 ACTION_TOGGLE_FAVORITE -> session.player.currentMediaItem?.mediaId?.let {
                     toggleFavoriteFromNotification(it)
+                }
+                ACTION_QUEUE_DRAG -> {
+                    // A row is being dragged, or the drag ended. Nothing is
+                    // published to the party until it lands — see
+                    // [PartySync.beginQueueDrag].
+                    if (args.getBoolean(EXTRA_QUEUE_DRAG_ACTIVE, false)) {
+                        partySync?.beginQueueDrag()
+                    } else {
+                        partySync?.endQueueDrag()
+                    }
                 }
                 else -> return Futures.immediateFuture(
                     SessionResult(SessionError.ERROR_NOT_SUPPORTED),
@@ -834,6 +847,7 @@ class PlaybackService : MediaSessionService() {
                 crossfade = controller,
                 onUserIntent = { partySync?.onLocalIntent() },
                 deferPlayToParty = { partySync?.shouldDeferPlay() == true },
+                handleLockedTransport = { playing -> partySync?.onLockedTransport(playing) == true },
             ),
         )
             .setId(SESSION_ID)
@@ -3144,6 +3158,12 @@ class PlaybackService : MediaSessionService() {
          * instant. See [PartySync.shouldDeferPlay].
          */
         private val deferPlayToParty: () -> Boolean = { false },
+        /**
+         * Whether a play or pause is this listener's own device only, because
+         * the party is locked to its host. True means the press has already been
+         * handled and must not be published. See [PartySync.onLockedTransport].
+         */
+        private val handleLockedTransport: (playing: Boolean) -> Boolean = { false },
     ) : ForwardingPlayer(player) {
 
         override fun seekToPreviousMediaItem() {
@@ -3169,12 +3189,20 @@ class PlaybackService : MediaSessionService() {
             // device starts together. The press is never swallowed: the party's
             // echo starts the player, and a fallback starts it anyway if that
             // echo never arrives. See [PartySync.shouldDeferPlay].
+            //
+            // In a party locked to its host the press is not the party's at all:
+            // it moves this device and nothing else. Checked before the intent,
+            // because publishing it would have the server refuse it and this
+            // device's own state fight the local play. See
+            // [PartySync.onLockedTransport].
+            if (handleLockedTransport(true)) return
             onUserIntent()
             if (deferPlayToParty()) return
             wrappedPlayer.play()
         }
 
         override fun pause() {
+            if (handleLockedTransport(false)) return
             onUserIntent()
             wrappedPlayer.pause()
         }
@@ -3213,6 +3241,16 @@ class PlaybackService : MediaSessionService() {
         const val ACTION_TOGGLE_SHUFFLE = "com.velthy.client.action.TOGGLE_SHUFFLE"
         const val ACTION_START_STATION = "com.velthy.client.action.START_STATION"
         const val ACTION_REVERT_ORIGINAL = "com.velthy.client.action.REVERT_ORIGINAL"
+
+        /**
+         * A queue row started or finished being dragged in the UI.
+         *
+         * Sent through the session rather than reached for directly because the
+         * queue belongs to the player and the UI only ever holds a controller.
+         * See [PartySync.beginQueueDrag] for what the party does with it.
+         */
+        const val ACTION_QUEUE_DRAG = "com.velthy.client.action.QUEUE_DRAG"
+        const val EXTRA_QUEUE_DRAG_ACTIVE = "velthy.queueDragActive"
 
         /** How often played-seconds are sampled off the player. */
         const val PROGRESS_SAMPLE_MS = 1_000L

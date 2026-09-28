@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
-
 /**
  * Makes the player obey the party, and the party obey this player.
  *
@@ -113,6 +112,17 @@ class PartySync(
      */
     private var awaitSeq = Long.MAX_VALUE
 
+    /**
+     * The queue seq at which this device's own queue changes will have landed.
+     *
+     * Separate from [awaitSeq] because the two counters are separate on the
+     * wire: a queue edit moves the running order without moving anybody's
+     * playhead, and the state frame's own seq does not budge for it. Waiting on
+     * the wrong one left the quiet window open for its full length on every
+     * reorder, and held [reconcile] off the queue it was supposed to apply.
+     */
+    private var awaitQueueSeq = Long.MAX_VALUE
+
     /** Guards against re-issuing a load for a track already being loaded. */
     private var loadingVideoId: String? = null
 
@@ -187,6 +197,38 @@ class PartySync(
     private var driftCooldownUntilMs = 0L
 
     /**
+     * A queue row is being dragged in the UI, so reorders are parked rather
+     * than published.
+     *
+     * Dragging a row from position 5 to position 1 crosses four neighbours, and
+     * each crossing is a queue change the player reports — publishing every one
+     * of them would put four controls on the wire for one gesture, and the party
+     * would watch the song jump through the intermediate positions. The
+     * reorder is sent once, when the row lands.
+     */
+    private var queueDragActive = false
+
+    /** Whether a move landed while [queueDragActive], awaiting [endQueueDrag]. */
+    private var queueDragDirty = false
+
+    /**
+     * A listener in a locked party has paused their own device.
+     *
+     * The party plays on without them — that is the whole point of the pause
+     * being local — which puts this device in the one state [reconcile] is built
+     * to eliminate: the party is playing and this player is not. Left alone, the
+     * very next tick would press play again, 700ms after the listener asked for
+     * quiet.
+     *
+     * So while this is set, [reconcile] still follows the party in every respect
+     * that is not audible — the track that is loaded, the queue behind it — and
+     * simply does not start the player or chase the playhead. Cleared by the
+     * listener pressing play, by the lock being lifted, by this device becoming
+     * the host, and by leaving.
+     */
+    private var locallyPaused = false
+
+    /**
      * The party this device was last seen in, so entering and leaving can be
      * told apart from every other change to the state.
      *
@@ -233,8 +275,12 @@ class PartySync(
                     // Every control this device sent has come back around, so
                     // the party now describes the world the user made — or
                     // somebody else has moved it on past ours, which is equally
-                    // a reason to stop holding reconcile off.
-                    if (signal.seq >= awaitSeq) reconcileQuietUntilMs = 0L
+                    // a reason to stop holding reconcile off. Both counters have
+                    // to have landed: a reorder and a resume are two different
+                    // controls and the party is in a torn state between them.
+                    if (signal.seq >= awaitSeq && signal.queueSeq >= awaitQueueSeq) {
+                        reconcileQuietUntilMs = 0L
+                    }
                     // The socket is back, and something this device did while it
                     // was down never went out. Say it now, before reconcile gets
                     // a chance to undo it.
@@ -301,11 +347,87 @@ class PartySync(
         // the window must not clear on somebody else's control either — it is
         // protecting an action of ours that has not gone out.
         awaitSeq = Long.MAX_VALUE
+        awaitQueueSeq = Long.MAX_VALUE
+        // A row being dragged through the queue calls this once per neighbour it
+        // crosses. Parked here rather than published, so the party hears about
+        // the reorder once, when the row lands.
+        if (queueDragActive) {
+            queueDragDirty = true
+            publishJob?.cancel()
+            return
+        }
         publishJob?.cancel()
         publishJob = scope.launch {
             delay(PUBLISH_DEBOUNCE_MS)
             publish()
         }
+    }
+
+    /** A queue row started dragging in the UI. @see onLocalIntent */
+    fun beginQueueDrag() {
+        queueDragActive = true
+    }
+
+    /** The row was dropped, or the drag cancelled. Flushes anything parked. */
+    fun endQueueDrag() {
+        queueDragActive = false
+        if (queueDragDirty) {
+            queueDragDirty = false
+            onLocalIntent()
+        }
+    }
+
+    /**
+     * Play or pause for a listener whose party is locked to its host.
+     *
+     * Returns true when it has handled the press, which it has whenever the
+     * party is locked to somebody else: the press moves this device and nothing
+     * else, publishes nothing, and is never deferred to a party that is not
+     * waiting on this device for anything.
+     *
+     * Resuming rejoins wherever the party has *got to* rather than where this
+     * listener left off — the radio model, and the only thing that makes sense
+     * when the music never stopped for anybody else. That seek is the one this
+     * device performs on its own behalf while locked.
+     */
+    fun onLockedTransport(playing: Boolean): Boolean {
+        val party = ListenTogether.state.value
+        if (!party.controlsLocked) return false
+        val exo = player() ?: return false
+        if (playing) {
+            locallyPaused = false
+            // Nothing to join while the party itself is paused. Starting here
+            // would play alone for the one tick it takes [reconcile] to notice
+            // and pause again — which is what a listener saw as the music
+            // starting and immediately stopping.
+            if (!party.playback.isPlaying) return true
+            ListenTogether.partyPositionMs()
+                ?.takeIf { party.clockSynced }
+                ?.let(exo::seekTo)
+            exo.play()
+        } else {
+            locallyPaused = true
+            exo.pause()
+        }
+        return true
+    }
+
+    /**
+     * Drops a local pause that has stopped meaning anything.
+     *
+     * Only the lock going away does that: the host handing control back, this
+     * device becoming the host, or leaving the party. In each the listener is an
+     * ordinary member again and [reconcile] resumes owning the player. The
+     * player is left exactly as it is either way — the listener asked for quiet,
+     * and only the exemption from [reconcile] is what expires.
+     *
+     * Notably *not* ended by the party pausing. Somebody who muted their own
+     * device does not expect it to come back on because the host paused and
+     * pressed play again; the pause is theirs until they lift it.
+     */
+    private fun clearLocalPauseIfFreed(party: ListenTogether.State) {
+        if (!locallyPaused) return
+        if (!party.controlsLocked) locallyPaused = false
     }
 
     /**
@@ -346,6 +468,7 @@ class PartySync(
         // the player back onto the track that just finished.
         reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
         awaitSeq = Long.MAX_VALUE
+        awaitQueueSeq = Long.MAX_VALUE
 
         publishJob?.cancel()
         publishJob = scope.launch {
@@ -360,6 +483,7 @@ class PartySync(
                 // which is what lets the window go immediately rather than
                 // sitting out the rest of it.
                 awaitSeq = now.playback.seq
+                awaitQueueSeq = now.queue.seq
                 reconcileQuietUntilMs = 0L
                 reconcile()
                 return@launch
@@ -490,8 +614,16 @@ class PartySync(
             loadingVideoId = null
             focusLost = false
             rejoining = false
+            // Nothing is going to schedule a start now, so a resume still
+            // waiting on one is never answered — and the player screen would
+            // draw that wait forever.
+            deferredPlayPending = false
+            locallyPaused = false
             return
         }
+        // Before any of the early returns below, so a local pause cannot
+        // outlive the thing it was held against.
+        clearLocalPauseIfFreed(party)
         // An action of this device's that the party has not been told about
         // yet. Following the party from here would undo it in front of the
         // user. See [publishPending].
@@ -544,6 +676,23 @@ class PartySync(
             return
         }
         loadingVideoId = null
+        // The party's running order, applied to this player's timeline. Only
+        // reached once the current track matches, because before that there is
+        // no index in this player for the party's queue to line up against.
+        reconcileQueue(party, exo)
+
+        // Muted by its own listener while the party plays on. Everything above
+        // this line still applies — the track the party moved to is loaded, the
+        // queue behind it is kept — and everything below it is sound: starting
+        // the player, and chasing a playhead nobody here can hear.
+        if (locallyPaused) {
+            // Nothing below here will start this device while the pause holds,
+            // so a resume still waiting on the party is never going to be
+            // answered — and the transport would draw that wait for as long as
+            // the listener stayed muted.
+            deferredPlayPending = false
+            return
+        }
 
         if (!target.isPlaying) {
             deferredPlayPending = false
@@ -662,7 +811,12 @@ class PartySync(
         } && ListenTogether.setTrack(track, position, playing)
         if (sent) {
             reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
+            // Two playback controls (queue and track) and one queue control. The
+            // queue counter is what the party's queue frame answers to, and
+            // leaving it unarmed here would have the quiet window sit out its
+            // whole length on the one moment a party is being seeded.
             awaitSeq = ListenTogether.state.value.playback.seq + 2
+            awaitQueueSeq = ListenTogether.state.value.queue.seq + 1
         }
     }
 
@@ -759,33 +913,84 @@ class PartySync(
         // the player is doing yet â€” that is the whole point of the deferral.
         val wantsPlaying = deferredPlayPending || exo.playWhenReady
         val base = party.playback.seq
+        val baseQueue = party.queue.seq
         var controls = 0
+        var queueControls = 0
         var sent = 0
 
         // Compared by id first, which is a plain field read per item. Building
-        // the full list is not â€” it parses a metadata bundle per track â€” and
+        // the full list is not — it parses a metadata bundle per track — and
         // this runs on every pause and every seek, on a queue that can be
         // hundreds long.
-        val localIds = (0 until exo.mediaItemCount)
-            .take(MAX_PUBLISHED_QUEUE)
-            .map { exo.getMediaItemAt(it).mediaId }
-            // Device files are dropped rather than sent for everyone else to
-            // fail on, so the index has to be found in what is left, not in the
-            // local list â€” otherwise it points at the wrong row.
-            .filterNot { it.startsWith("content://") || it.startsWith("file://") }
+        //
+        // The player index is carried alongside the id, because the two stop
+        // agreeing the moment a device file is dropped: the filtered list is
+        // shorter than the player's, so a lookup in it is not an index into the
+        // player, and every row after the first local file would be read off
+        // the wrong item.
+        val localItems = (0 until exo.mediaItemCount)
+            .map { index -> index to exo.getMediaItemAt(index).mediaId }
+            .filterNot { (_, id) -> id.startsWith("content://") || id.startsWith("file://") }
+        val localIds = localItems.map { (_, id) -> id }
+        val trackIndex = localIds.indexOf(track.videoId)
+        // What the party is allowed to know about: everything up to the current
+        // track, plus the songs immediately ahead of it. A device that has
+        // played through a long album has a big tail behind it, and the party's
+        // copy is about what is *coming*.
+        val clampedItems = if (trackIndex >= 0) {
+            localItems.subList(0, (trackIndex + 1 + MAX_PARTY_UPCOMING_QUEUE).coerceAtMost(localItems.size))
+        } else {
+            localItems.take(1 + MAX_PARTY_UPCOMING_QUEUE)
+        }
+        val clampedIds = clampedItems.map { (_, id) -> id }
 
-        // Covers the ways a running order changes without the playhead moving â€”
+        /** The songs behind a slice of [localItems], read off the player by index. */
+        fun songsOf(items: List<Pair<Int, String>>): List<PartyTrack> = items
+            .map { (playerIndex, _) -> exo.getMediaItemAt(playerIndex).toSong() }
+            .filterNot(Song::isDeviceFile)
+            .map { it.toPartyTrack(0L) }
+
+        // Covers the ways a running order changes without the playhead moving —
         // Play next, Add to queue, removing a row, dragging one. Before this,
         // none of them reached the party and its copy of the queue silently went
         // stale until the next track change happened to rebuild it.
-        if (localIds != party.queue.items.map(PartyTrack::videoId)) {
-            val queue = (0 until exo.mediaItemCount)
-                .take(MAX_PUBLISHED_QUEUE)
-                .map { exo.getMediaItemAt(it).toSong() }
-                .filterNot(Song::isDeviceFile)
-                .map { it.toPartyTrack(0L) }
-            controls++
-            if (ListenTogether.setQueue(queue, localIds.indexOf(track.videoId))) sent++
+        val partyIds = party.queue.items.map(PartyTrack::videoId)
+        if (clampedIds != partyIds) {
+            // An append — which is what "add to queue", "play next" at the end
+            // and an AutoPlay refill all come to — is sent as an addition rather
+            // than as a whole new queue. The difference is not bytes: the server
+            // *refuses* an addition past its ceiling with a reason, while a
+            // replacement past it is silently truncated. A listener who queued
+            // something has to be told when it did not fit.
+            val appended = clampedIds.startsWith(partyIds) && partyIds.isNotEmpty()
+            if (appended) {
+                queueControls++
+                if (ListenTogether.queueAdd(songsOf(clampedItems.drop(partyIds.size)))) sent++
+            } else {
+                // A reorder that moved exactly one row is sent as a move rather
+                // than as a whole new queue: it is the same list, and replacing
+                // it would have every listener's player rebuild its timeline —
+                // and drop whatever it had prefetched — for a change that moved
+                // one entry.
+                val singleMove = if (
+                    partyIds.size == clampedIds.size &&
+                    trackIndex >= 0 &&
+                    trackIndex < partyIds.size &&
+                    partyIds[trackIndex] == clampedIds[trackIndex]
+                ) {
+                    detectSingleMove(partyIds, clampedIds)
+                } else {
+                    null
+                }
+
+                if (singleMove != null && singleMove.fromIndex > trackIndex && singleMove.toIndex > trackIndex) {
+                    queueControls++
+                    if (ListenTogether.queueMove(singleMove.fromIndex, singleMove.toIndex, singleMove.videoId)) sent++
+                } else {
+                    queueControls++
+                    if (ListenTogether.setQueue(songsOf(clampedItems), trackIndex)) sent++
+                }
+            }
         }
 
         when {
@@ -829,10 +1034,12 @@ class PartySync(
         // the user had just left. That is the song changing back by itself,
         // with nothing on screen to explain it. So the window is kept open
         // instead, and the next publish says the whole thing again.
-        if (controls > 0 && sent < controls) {
-            Log.w(TAG, "party socket is down; holding ${controls - sent} of $controls controls")
+        val total = controls + queueControls
+        if (total > 0 && sent < total) {
+            Log.w(TAG, "party socket is down; holding ${total - sent} of $total controls")
             publishPending = true
             awaitSeq = Long.MAX_VALUE
+            awaitQueueSeq = Long.MAX_VALUE
             reconcileQuietUntilMs = SystemClock.elapsedRealtime() + INTENT_QUIET_MS
             return
         }
@@ -841,7 +1048,8 @@ class PartySync(
         // come back around. Nothing sent means nothing to wait for, and the
         // quiet window should stop holding reconcile off immediately.
         awaitSeq = base + controls
-        if (controls == 0) reconcileQuietUntilMs = 0L
+        awaitQueueSeq = baseQueue + queueControls
+        if (total == 0) reconcileQuietUntilMs = 0L
     }
 
     private companion object {
@@ -947,9 +1155,125 @@ class PartySync(
          */
         const val AUTO_ADVANCE_GRACE_MS = 200L
 
+        /**
+         * How many songs the party is told about ahead of the one playing.
+         *
+         * The same number the server enforces as its own ceiling. Publishing
+         * more would only be truncated, and the part a shared queue is *for* is
+         * what is coming next rather than a hundred songs of history.
+         */
+        const val MAX_PARTY_UPCOMING_QUEUE = 25
+
         /** The server's own ceiling; publishing more would only be truncated. */
-        const val MAX_PUBLISHED_QUEUE = 500
+        const val MAX_PUBLISHED_QUEUE = 1 + MAX_PARTY_UPCOMING_QUEUE
     }
+
+    /**
+     * Brings this player's timeline in line with the party's running order.
+     *
+     * Only the part *after* the current track is touched, and the current item
+     * is deliberately outside every edit below. Replacing the whole timeline
+     * would tear down the active player — the decoder, the audio renderer, the
+     * prefetched next track — for a change that added one song to the end, and
+     * on a slow device that is an audible stall on every edit.
+     *
+     * The three shapes below are the three things a queue edit can be, cheapest
+     * first: something appended, something trimmed off the end, or one row moved
+     * to another place. Anything else is a replacement.
+     */
+    private fun reconcileQueue(party: ListenTogether.State, exo: Player) {
+        val partyQueue = party.queue.items
+        if (partyQueue.isEmpty()) return
+        val currentIndex = exo.currentMediaItemIndex
+        val currentId = exo.currentMediaItem?.mediaId ?: return
+        val partyIndex = partyQueue.indexOfFirst { it.videoId == currentId }
+        // The party's queue does not contain what this device is playing, so
+        // there is no index for it to line up against. Leaving the player alone
+        // is right: [reconcile] will load the party's track on the next pass.
+        if (partyIndex < 0) return
+
+        val desired = partyQueue.subList(partyIndex + 1, partyQueue.size)
+            .take(MAX_PARTY_UPCOMING_QUEUE)
+        val desiredIds = desired.map(PartyTrack::videoId)
+        val localIds = (currentIndex + 1 until exo.mediaItemCount).map {
+            exo.getMediaItemAt(it).mediaId
+        }
+        if (localIds == desiredIds) return
+
+        // Appending is the ordinary case — somebody added a song, or AutoPlay
+        // extended the mix — and it never touches the active item.
+        if (desiredIds.startsWith(localIds)) {
+            exo.addMediaItems(desired.drop(localIds.size).map { it.toSong().toMediaItem() })
+            return
+        }
+        // So does trimming the tail: "clear upcoming" and a shortened queue.
+        if (localIds.startsWith(desiredIds)) {
+            exo.removeMediaItems(currentIndex + 1 + desiredIds.size, exo.mediaItemCount)
+            return
+        }
+
+        val singleMove = if (localIds.size == desiredIds.size) {
+            detectSingleMove(localIds, desiredIds)
+        } else {
+            null
+        }
+        if (singleMove != null) {
+            exo.moveMediaItem(
+                currentIndex + 1 + singleMove.fromIndex,
+                currentIndex + 1 + singleMove.toIndex,
+            )
+            return
+        }
+
+        // One atomic edit rather than a removal followed by an add: the empty
+        // intermediate timeline that two calls leave behind can briefly rebuffer
+        // or interrupt the renderer on some devices.
+        exo.replaceMediaItems(
+            currentIndex + 1,
+            exo.mediaItemCount,
+            desired.map { it.toSong().toMediaItem() },
+        )
+    }
+}
+
+/** Whether this list begins with exactly that one. */
+private fun <T> List<T>.startsWith(prefix: List<T>): Boolean =
+    size >= prefix.size && prefix.indices.all { this[it] == prefix[it] }
+
+/** One row moved from somewhere to somewhere else. */
+internal data class QueueMoveDelta(
+    val fromIndex: Int,
+    val toIndex: Int,
+    val videoId: String,
+)
+
+/**
+ * Whether [newList] is [oldList] with exactly one row moved, and if so which.
+ *
+ * This is what keeps a reorder from being published as a whole new queue: the
+ * two lists hold the same songs in almost the same order, and sending the list
+ * would have every listener's player rebuild its timeline for a change that
+ * moved one entry. Null when the difference cannot be explained by a single
+ * move — an addition, a removal, or several changes at once.
+ */
+internal fun detectSingleMove(oldList: List<String>, newList: List<String>): QueueMoveDelta? {
+    if (oldList.size != newList.size || oldList == newList || oldList.isEmpty()) return null
+    // Same songs, or it is not a move: this also rules out a duplicate id
+    // changing hands, which the loop below would otherwise report as one.
+    if (oldList.groupingBy { it }.eachCount() != newList.groupingBy { it }.eachCount()) return null
+
+    for (from in oldList.indices) {
+        val item = oldList[from]
+        val without = oldList.toMutableList().apply { removeAt(from) }
+        for (to in oldList.indices) {
+            if (from == to) continue
+            val simulated = without.toMutableList().apply { add(to, item) }
+            if (simulated == newList) {
+                return QueueMoveDelta(fromIndex = from, toIndex = to, videoId = item)
+            }
+        }
+    }
+    return null
 }
 
 /**
@@ -981,6 +1305,11 @@ private fun Song.toPartyTrack(playerDurationMs: Long): PartyTrack = PartyTrack(
     // otherwise what the row that queued the track claimed.
     durationMs = playerDurationMs.takeIf { it > 0L }
         ?: TrackMatcher.secondsOf(durationText)?.let { it * 1000L },
+    // Carried across so a listener's player keeps the boundary between what
+    // somebody asked for and what the mix added — the queue panel draws its
+    // AutoPlay heading on it, and a queue that lost the boundary puts the mix
+    // above the listener's own picks.
+    fromAutoplay = fromAutoplay,
 )
 
 private fun PartyTrack.toSong(): Song = Song(
@@ -995,4 +1324,5 @@ private fun PartyTrack.toSong(): Song = Song(
         val total = ms / 1000
         "%d:%02d".format(total / 60, total % 60)
     },
+    fromAutoplay = fromAutoplay,
 )

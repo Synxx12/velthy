@@ -75,6 +75,22 @@ export class AppController {
     return this.parties.join(code, parseJoinRequest(body));
   }
 
+  /**
+   * Who is in a party, to somebody who has not joined it.
+   *
+   * Unauthenticated, and safe for the same reason the preview body is small:
+   * everything it returns is what the holder of the code would learn by joining.
+   * It is what lets an invite be looked at — a face, a name, how full it is —
+   * before a device slot is committed.
+   */
+  @Get('api/parties/:code/preview')
+  preview(@Param('code') code: string): Record<string, unknown> {
+    if (!isWellFormedCode(code)) {
+      throw new PartyError(400, 'bad_code', 'A party code is six letters or digits.');
+    }
+    return this.parties.preview(code);
+  }
+
   /** The full snapshot, for a device holding a token. */
   @Get('api/parties/:code')
   read(

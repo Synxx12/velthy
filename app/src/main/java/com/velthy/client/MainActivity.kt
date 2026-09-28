@@ -164,6 +164,7 @@ import com.velthy.client.playback.QueueShuffle
 import com.velthy.client.playback.autoplaySectionStart
 import com.velthy.client.playback.dropAutoplayTracks
 import com.velthy.client.playback.playSongs
+import com.velthy.client.playback.setQueueDragActive
 import com.velthy.client.playback.toMediaItem
 import com.velthy.client.download.DownloadStore
 import com.velthy.client.download.Downloads
@@ -1787,7 +1788,8 @@ private fun VelthyApp(
                     signedIn = signedIn,
                     onSignIn = { showLogin = true },
                     contentPadding = listPadding,
-                    inviteCode = jamInviteCode,
+                    inviteCode = jamInviteCode?.code,
+                    inviteServer = jamInviteCode?.serverUrl,
                     onInviteHandled = { JamInviteLink.handled() },
                 )
             } else if (key == "settings") {
@@ -2610,6 +2612,7 @@ private fun VelthyApp(
                     onJumpTo = { controller?.seekToDefaultPosition(it) },
                     onRemoveFromQueue = { controller?.removeMediaItem(it) },
                     onMoveInQueue = { from, to -> controller?.moveMediaItem(from, to) },
+                    onQueueDragActive = { controller?.setQueueDragActive(it) },
                     onClearQueue = {
                         controller?.let {
                             it.dropAutoplayTracks()

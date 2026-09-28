@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -89,6 +91,13 @@ object ListenTogether {
         val you: PartyMember? = null,
         val members: List<PartyMember> = emptyList(),
         val maxMembers: Int = 5,
+        /**
+         * Whether only the host may drive the music.
+         *
+         * Arrives on the member list, which is the only frame that carries it —
+         * it changes rarely and the heartbeat has no business repeating it.
+         */
+        val hostOnlyControl: Boolean = false,
         val playback: PartyPlayback = PartyPlayback(),
         /**
          * Held separately from [playback] because it arrives separately: the
@@ -105,6 +114,21 @@ object ListenTogether {
     ) {
         val inParty: Boolean get() = code != null
         val isFull: Boolean get() = members.size >= maxMembers
+
+        /**
+         * Whether this device may not drive the music.
+         *
+         * True only for a listener in a party whose host has taken control of
+         * it — the host is never locked out of their own party, and a device
+         * that is not in one is not in this feature's business at all. The
+         * server enforces the same rule, so this is what the app shows rather
+         * than what makes it true.
+         *
+         * The host role is handed on when a host leaves, so this can go false
+         * under a listener mid-party. Everything reading it has to follow.
+         */
+        val controlsLocked: Boolean
+            get() = inParty && hostOnlyControl && you?.isHost != true
     }
 
     /** A refusal from the server, carrying the machine-readable half. */
@@ -150,6 +174,18 @@ object ListenTogether {
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
+
+    private val _activity = MutableStateFlow<List<PartyActivity>>(emptyList())
+
+    /**
+     * The last hundred things that happened in the party, newest first.
+     *
+     * Held for this app session only, and never persisted: it is a live read of
+     * what people are doing, not a record anybody needs tomorrow. A device that
+     * was away for a minute has not "missed" anything it needs — the activity
+     * frame carries no sequence number precisely because it is not replayed.
+     */
+    val activity: StateFlow<List<PartyActivity>> = _activity.asStateFlow()
 
     /** The signed-in identity, or null when signed out. */
     @Volatile
@@ -260,6 +296,66 @@ object ListenTogether {
         prefs.edit().putString(KEY_SERVER, cleaned).apply()
     }
 
+    /**
+     * A server address the user typed, normalised, or null when it is not usable.
+     *
+     * Strict on purpose, and the refusal is what makes it worth having: an
+     * address with a typo would otherwise be stored happily and then fail on
+     * every request, with the failure looking like the *party's* problem rather
+     * than the address's. What is accepted is exactly what this client can dial
+     * — an http(s) URL with a host, optionally a port — and nothing else. The
+     * path is kept, because a server behind a reverse proxy at `/jam` is a
+     * perfectly ordinary deployment.
+     *
+     * Blank is valid and means "the built-in server": that is a real choice the
+     * user makes by clearing the box, not an error.
+     */
+    fun normalizeServerAddress(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        // A space inside an address is never a typo the app can guess at.
+        if (trimmed.any { it.isWhitespace() }) return null
+
+        // A scheme is looked for explicitly rather than by prefixing anything
+        // without one: `ftp://host` prefixed becomes `https://ftp//host`, which
+        // is a *valid* URL whose host is the word "ftp" — a typo silently
+        // turned into a server that does not exist. Anything that names a
+        // scheme keeps it, and is then held to being http(s).
+        val candidate = if (HAS_SCHEME.containsMatchIn(trimmed)) trimmed else "https://$trimmed"
+
+        val uri = runCatching { java.net.URI(candidate) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return null
+        val host = uri.host ?: return null
+        if (host.isBlank()) return null
+        // A port outside the range is a typo, not a deployment.
+        if (uri.port != -1 && uri.port !in 1..65535) return null
+        // Query and fragment are not part of an address; a link's `?server=`
+        // value that carried one is a malformed link rather than a server.
+        if (!uri.rawQuery.isNullOrEmpty() || !uri.rawFragment.isNullOrEmpty()) return null
+
+        val port = if (uri.port != -1) ":${uri.port}" else ""
+        val path = uri.rawPath.orEmpty().trimEnd('/')
+        // Dots that walk up the path are a way to make one address look like
+        // another, and no honest deployment needs them.
+        if (path.split('/').any { it == "." || it == ".." }) return null
+        return "$scheme://${host.lowercase()}$port$path"
+    }
+
+    /** Whether an address the user typed would be accepted. @see normalizeServerAddress */
+    fun isUsableServerAddress(raw: String): Boolean = normalizeServerAddress(raw) != null
+
+    /**
+     * The server a party on this device is actually reachable at, when that is
+     * not the built-in one.
+     *
+     * Null means "the built-in address", which is deliberately never published
+     * — see [redact]. An invite link built from this is what lets a party on a
+     * self-hosted server be shared without every ordinary invite carrying an
+     * address nobody needs.
+     */
+    fun activeServerOrNull(): String? = _customServer.value.trim().takeIf { it.isNotBlank() }
+
     /** Whether this device has an account it can jam as. */
     fun canJoin(): Boolean = identity != null
 
@@ -275,8 +371,11 @@ object ListenTogether {
 
     // ------------------------------------------------------------ joining --
 
-    suspend fun createParty(): Result<String> = enter { who ->
-        post("${httpBase()}/api/parties", JoinRequest(who.userId, who.deviceId, who.name, who.avatarUrl))
+    suspend fun createParty(maxMembers: Int = DEFAULT_MAX_MEMBERS): Result<String> = enter { who ->
+        post(
+            "${httpBase()}/api/parties",
+            JoinRequest(who.userId, who.deviceId, who.name, who.avatarUrl, maxMembers),
+        )
     }
 
     suspend fun joinParty(code: String): Result<String> {
@@ -287,6 +386,7 @@ object ListenTogether {
             if (cleaned.length != CODE_LENGTH) {
                 throw PartyException("bad_code", "A party code is six letters or digits.")
             }
+            refuseIfRecentlyKicked(cleaned)
             post("${httpBase()}/api/parties/$cleaned/join", JoinRequest(who.userId, who.deviceId, who.name, who.avatarUrl))
         }
         // A deep link can arrive while this device is already jamming. Join the
@@ -328,9 +428,15 @@ object ListenTogether {
                         you = membership.you,
                         members = membership.party.members,
                         maxMembers = membership.party.maxMembers,
+                        hostOnlyControl = membership.party.hostOnlyControl,
                         playback = membership.party.playback,
+                        queue = membership.party.queue,
                         connection = Connection.CONNECTING,
                     )
+                    // A new party's feed starts empty: the previous one's
+                    // entries name people who are not in this room, and a feed
+                    // that begins with somebody else's history reads as a bug.
+                    _activity.value = emptyList()
                     connect()
                 }
                 .onFailure { failure ->
@@ -351,6 +457,7 @@ object ListenTogether {
         token = null
         prefs.edit().remove(KEY_CODE).remove(KEY_TOKEN).apply()
         _state.value = State()
+        _activity.value = emptyList()
         if (code != null && held != null) {
             // Best effort, and after the local state is already clear: a leave
             // that fails must not strand this device in a party its own screen
@@ -366,8 +473,10 @@ object ListenTogether {
 
     // ------------------------------------------------------------ controls --
     //
-    // Any member may send any of these. There is no host privilege in this
-    // feature, on either side of the wire.
+    // Any member may send any of these, unless the host has taken control of
+    // the party — see [State.controlsLocked]. The server enforces that
+    // independently of anything the app does, so a control sent anyway comes
+    // back refused rather than quietly obeyed.
 
     fun play(positionMs: Long? = null): Boolean =
         control("play") { positionMs?.let { put("positionMs", it) } }
@@ -392,6 +501,39 @@ object ListenTogether {
         put("queue", json.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(PartyTrack.serializer()), queue))
         put("queueIndex", index)
     }
+
+    /**
+     * Adds songs to the party's queue, at the end or right after the current one.
+     *
+     * This is the control that makes the queue *shared*: everybody's additions
+     * land in one running order rather than each device keeping its own.
+     */
+    fun queueAdd(tracks: List<PartyTrack>, playNext: Boolean = false): Boolean =
+        control("queueAdd") {
+            put("tracks", json.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(PartyTrack.serializer()), tracks))
+            put("playNext", playNext)
+        }
+
+    fun queueRemove(videoId: String): Boolean = control("queueRemove") { put("videoId", videoId) }
+
+    fun queueClear(): Boolean = control("queueClear") {}
+
+    fun queueMove(fromIndex: Int, toIndex: Int, videoId: String? = null): Boolean =
+        control("queueMove") {
+            put("fromIndex", fromIndex)
+            put("toIndex", toIndex)
+            if (videoId != null) put("videoId", videoId)
+        }
+
+    /** Host only, and refused by the server from anybody else. */
+    fun setMaxMembers(value: Int): Boolean = control("setMaxMembers") { put("maxMembers", value) }
+
+    /** Host only, and refused by the server from anybody else. */
+    fun kick(memberId: String): Boolean = control("kick") { put("memberId", memberId) }
+
+    /** Host only, and refused by the server from anybody else. @see State.controlsLocked */
+    fun setHostOnlyControl(enabled: Boolean): Boolean =
+        control("setHostOnlyControl") { put("enabled", enabled) }
 
     /**
      * Sends one control, and reports whether it was actually handed to a live
@@ -570,6 +712,7 @@ object ListenTogether {
                     you = you ?: it.you,
                     members = party.members,
                     maxMembers = party.maxMembers,
+                    hostOnlyControl = party.hostOnlyControl,
                     playback = party.playback,
                     // A snapshot is the one message that carries the queue
                     // unconditionally — a device that has just arrived has no
@@ -621,7 +764,38 @@ object ListenTogether {
                         )
                     }.getOrNull()
                 } ?: return
-                _state.update { it.copy(members = members) }
+                val maxMembers = frame["maxMembers"]?.jsonPrimitive?.content?.toIntOrNull()
+                    ?: _state.value.maxMembers
+                // Absent on a server that predates the setting, which is not
+                // the same as "off": keeping the value already held means an
+                // upgrade mid-party does not silently unlock the party.
+                val hostOnly = frame["hostOnlyControl"]?.jsonPrimitive?.content?.toBooleanStrictOrNull()
+                    ?: _state.value.hostOnlyControl
+                _state.update { current ->
+                    current.copy(
+                        members = members,
+                        maxMembers = maxMembers,
+                        hostOnlyControl = hostOnly,
+                        // This frame is the only place a promotion is ever
+                        // announced — the server hands the role to a survivor
+                        // when a host leaves and says so nowhere else. Left
+                        // unread, [State.you] keeps saying "not the host" for
+                        // the rest of the party, which hides the host's own
+                        // controls from them and, with the lock on, locks them
+                        // out of a party they now own.
+                        you = current.you
+                            ?.let { mine -> members.firstOrNull { it.memberId == mine.memberId } }
+                            ?: current.you,
+                    )
+                }
+            }
+
+            "activity" -> {
+                val action = frame["action"]?.jsonPrimitive?.content ?: return
+                val by = frame["by"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return
+                val atMs = frame["atMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: received
+                val detail = frame["detail"]?.jsonPrimitive?.content.orEmpty()
+                recordActivity(PartyActivity(action, by, atMs, detail))
             }
 
             "error" -> {
@@ -639,8 +813,111 @@ object ListenTogether {
             "bye" -> {
                 // The server has let this membership go — the slot was swept, or
                 // the party ended.
+                //
+                // A removal is the one kind worth remembering: the code goes on
+                // this device's own shut-out list before the state carrying it
+                // is torn down, so the same party cannot be rejoined a moment
+                // later by a reconnect that looks identical to a network drop.
+                if (frame["reason"]?.jsonPrimitive?.content == "kicked") {
+                    _state.value.code?.let(::recordKick)
+                }
                 scope.launch { leaveParty() }
             }
+        }
+    }
+
+    // ------------------------------------------------------- recent kicks --
+
+    /**
+     * Parties this device was removed from, and when it may ask again.
+     *
+     * Held here rather than on the server, which forgets a party minutes after
+     * it empties and would have to keep a list of who is not welcome where for
+     * far longer than it keeps the party itself. A host who removes somebody
+     * gets a door that stays shut for a day without the server carrying a
+     * grudge; somebody determined to get back in can clear the app's data, and
+     * that is an acceptable trade for a guard rail rather than a ban.
+     *
+     * Stored as code → the epoch millisecond it lapses, pruned on every read.
+     */
+    private fun recentKicks(): Map<String, Long> {
+        if (!::prefs.isInitialized) return emptyMap()
+        val raw = prefs.getString(KEY_KICKED, null) ?: return emptyMap()
+        val stored = runCatching {
+            json.decodeFromString(MapSerializer(String.serializer(), Long.serializer()), raw)
+        }.getOrNull() ?: return emptyMap()
+        val now = System.currentTimeMillis()
+        val live = stored.filterValues { it > now }
+        if (live.size != stored.size) writeKicks(live)
+        return live
+    }
+
+    private fun writeKicks(entries: Map<String, Long>) {
+        if (entries.isEmpty()) {
+            prefs.edit().remove(KEY_KICKED).apply()
+            return
+        }
+        val encoded = json.encodeToString(MapSerializer(String.serializer(), Long.serializer()), entries)
+        prefs.edit().putString(KEY_KICKED, encoded).apply()
+    }
+
+    /** @see recentKicks */
+    private fun recordKick(code: String) {
+        val normalised = code.filter { it.isLetterOrDigit() }.uppercase()
+        if (normalised.isEmpty()) return
+        writeKicks(recentKicks() + (normalised to System.currentTimeMillis() + KICK_BLOCK_MS))
+    }
+
+    /**
+     * Refuses a party this device was recently removed from.
+     *
+     * The refusal says it was removed and not for how long: a countdown is an
+     * invitation to wait it out, and the listener's business is with the host
+     * rather than with a timer.
+     */
+    private fun refuseIfRecentlyKicked(code: String) {
+        if (recentKicks().containsKey(code)) {
+            throw PartyException(
+                "recently_kicked",
+                "You were removed from this party recently.",
+            )
+        }
+    }
+
+    /** @see recentKicks */
+    fun isRecentlyKicked(code: String): Boolean =
+        recentKicks().containsKey(code.filter { it.isLetterOrDigit() }.uppercase())
+
+    private fun recordActivity(entry: PartyActivity) {
+        // Newest first, and bounded: the feed is a glance at what is happening,
+        // not a log, and an unbounded list in a StateFlow is a leak with a
+        // friendly name.
+        _activity.value = (listOf(entry) + _activity.value).take(MAX_ACTIVITY)
+    }
+
+    /**
+     * Who is in a party, before committing a slot to it.
+     *
+     * Unauthenticated on both sides — see the server's preview handler for why
+     * that is safe — so this works from the code somebody read out as readily
+     * as from a tapped link. A party this device was recently removed from is
+     * refused here too, so the refusal arrives while the code is still on
+     * screen rather than after a confirmation the listener cannot act on.
+     */
+    suspend fun previewParty(code: String): Result<PartyPreview> {
+        val cleaned = code.filter { it.isLetterOrDigit() }.uppercase()
+        if (cleaned.length != CODE_LENGTH) {
+            return Result.failure(PartyException("bad_code", "A party code is six letters or digits."))
+        }
+        return runCatching {
+            refuseIfRecentlyKicked(cleaned)
+            val base = httpBase()
+            if (base.isBlank()) throw PartyException("no_server", "Set the party server address first.")
+            val response = http.get("$base/api/parties/$cleaned/preview")
+            if (!response.status.isSuccess()) throw response.toPartyException()
+            response.body<PartyPreview>()
+        }.onFailure {
+            Log.w(TAG, "could not look up a party: ${redact(it.message)}")
         }
     }
 
@@ -731,6 +1008,12 @@ object ListenTogether {
 
     const val CODE_LENGTH = 6
 
+    /** The ceiling the server enforces, and the default a new party is created with. */
+    const val DEFAULT_MAX_MEMBERS = 5
+
+    /** The largest party the server will allow. */
+    const val MAX_MEMBERS = 10
+
     private const val TAG = "ListenTogether"
     private const val PREFS = "velthy_listen_together"
     private const val KEY_SERVER = "server_url"
@@ -741,9 +1024,19 @@ object ListenTogether {
     private const val UNREACHABLE = "Couldn’t reach the party server."
 
     private val ABSOLUTE_URL = Regex("""(?:https?|wss?)://[^\s,;)\]}'"]+""", RegexOption.IGNORE_CASE)
+
+    /** Whether a typed address already names a scheme. @see normalizeServerAddress */
+    private val HAS_SCHEME = Regex("""^[a-zA-Z][a-zA-Z0-9+.\-]*://""")
     private const val KEY_CODE = "party_code"
     private const val KEY_TOKEN = "party_token"
     private const val KEY_DEVICE = "device_id"
+    private const val KEY_KICKED = "party_kicked_until"
+
+    /** How long a removal keeps this device out of that party. */
+    private const val KICK_BLOCK_MS = 24L * 60 * 60 * 1000
+
+    /** How many activity entries are kept. @see activity */
+    private const val MAX_ACTIVITY = 100
 
     /**
      * The party server this build ships pointed at, from `PARTY_SERVER_URL` in

@@ -30,6 +30,16 @@ data class PartyTrack(
     val artist: String = "",
     val thumbnailUrl: String? = null,
     val durationMs: Long? = null,
+    /**
+     * Whether this entry came from AutoPlay rather than from somebody asking
+     * for it.
+     *
+     * Carried on the wire so a device that receives a shared queue can tell the
+     * two sections apart, and so the queue it builds locally keeps the boundary
+     * the sender had: a listener's "add to queue" lands above the mix rather
+     * than inside it.
+     */
+    val fromAutoplay: Boolean = false,
 )
 
 /** One signed-in device in the party, as every other device sees it. */
@@ -111,10 +121,56 @@ data class PartySnapshot(
     val code: String = "",
     val createdAtMs: Long = 0,
     val maxMembers: Int = 5,
+    /**
+     * Whether only the host may drive the music here.
+     *
+     * Defaulted false so a party on a server that predates the setting reads as
+     * the shared free-for-all this feature shipped as, rather than as locked.
+     */
+    val hostOnlyControl: Boolean = false,
     val members: List<PartyMember> = emptyList(),
     val playback: PartyPlayback = PartyPlayback(),
     val queue: PartyQueue = PartyQueue(),
     val serverMs: Long = 0,
+)
+
+/**
+ * Who is in a party, to somebody who has not joined it.
+ *
+ * Deliberately smaller than [PartySnapshot]: enough to show a face and a name
+ * before committing a device slot, and nothing that would let the holder of a
+ * code act on a party they are not in.
+ */
+@Serializable
+data class PartyPreview(
+    val code: String = "",
+    val hostName: String = "",
+    val memberCount: Int = 0,
+    val maxMembers: Int = 5,
+    val isFull: Boolean = false,
+    val members: List<PartyPreviewMember> = emptyList(),
+)
+
+/** One face in a [PartyPreview], as the join confirmation shows it. */
+@Serializable
+data class PartyPreviewMember(
+    val displayName: String = "",
+    val avatarUrl: String? = null,
+    val isHost: Boolean = false,
+)
+
+/**
+ * One thing somebody did in a party, as the activity feed shows it.
+ *
+ * Local to this app session and not persisted: it is a live read of what is
+ * happening now, not a record anybody needs tomorrow.
+ */
+@Serializable
+data class PartyActivity(
+    val action: String,
+    val by: String,
+    val atMs: Long,
+    val detail: String = "",
 )
 
 /** The answer to a create or a join: the code, and this device's key to it. */
@@ -133,6 +189,14 @@ internal data class JoinRequest(
     val deviceId: String,
     val displayName: String,
     val avatarUrl: String? = null,
+    /**
+     * How many devices the creator wants to allow.
+     *
+     * Only read by the server when a party is being *created*: a join to an
+     * existing party cannot resize it, and the host has a control for that once
+     * inside.
+     */
+    val maxMembers: Int? = null,
 )
 
 @Serializable

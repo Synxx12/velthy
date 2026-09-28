@@ -83,10 +83,108 @@ async function main() {
   assert.equal(state.playback.isPlaying, true);
   console.log('8. ws state after control: track =', state.playback.track.title);
 
+  // The running order, sent the way the client does it: the queue first, so no
+  // frame ever points at an index in a list the other devices have not got.
+  socket.send(
+    JSON.stringify({
+      type: 'control',
+      action: 'setQueue',
+      queue: [{ videoId: 'vid1', title: 'Song', artist: 'Artist', durationMs: 200_000 }],
+      queueIndex: 0,
+    }),
+  );
+  await waitFor(inbox, (f) => f.type === 'queue' && f.queue.items.length === 1);
+
   socket.send(JSON.stringify({ type: 'sync' }));
   await waitFor(inbox, (f) => f.type === 'state');
   console.log('9. ws sync returned state');
 
+  // 5. The shared queue: an addition comes back as a queue frame.
+  socket.send(
+    JSON.stringify({
+      type: 'control',
+      action: 'queueAdd',
+      tracks: [{ videoId: 'vid2', title: 'Next', artist: 'Artist', durationMs: 180_000 }],
+    }),
+  );
+  const queue = await waitFor(inbox, (f) => f.type === 'queue' && f.queue.items.length >= 2);
+  assert.deepEqual(
+    queue.queue.items.map((track) => track.videoId),
+    ['vid1', 'vid2'],
+  );
+  console.log('10. queueAdd ->', queue.queue.items.map((t) => t.videoId).join(', '));
+
+  // A reorder travels as a move, and the activity feed says so.
+  socket.send(
+    JSON.stringify({
+      type: 'control',
+      action: 'queueAdd',
+      tracks: [{ videoId: 'vid3', title: 'Later', artist: 'Artist', durationMs: 210_000 }],
+    }),
+  );
+  await waitFor(inbox, (f) => f.type === 'queue' && f.queue.items.length === 3);
+  socket.send(
+    JSON.stringify({ type: 'control', action: 'queueMove', fromIndex: 2, toIndex: 1, videoId: 'vid3' }),
+  );
+  const reordered = await waitFor(
+    inbox,
+    (f) => f.type === 'queue' && f.queue.items[1]?.videoId === 'vid3',
+  );
+  assert.deepEqual(
+    reordered.queue.items.map((track) => track.videoId),
+    ['vid1', 'vid3', 'vid2'],
+  );
+  const moveActivity = await waitFor(
+    inbox,
+    (f) => f.type === 'activity' && f.action === 'queueMove',
+  );
+  assert.ok(moveActivity.by);
+  console.log('11. queueMove ->', reordered.queue.items.map((t) => t.videoId).join(', '), '·', moveActivity.detail);
+
+  // 6. Host controls: the lock, then a refused control from a listener.
+  socket.send(JSON.stringify({ type: 'control', action: 'setHostOnlyControl', enabled: true }));
+  const members = await waitFor(inbox, (f) => f.type === 'members' && f.hostOnlyControl === true);
+  assert.equal(members.hostOnlyControl, true);
+  console.log('12. host-only control on');
+
+  // A second device joins and is refused a control while the lock is on.
+  const guest = await (
+    await fetch(`${base}/api/parties/${created.code}/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: 'u2', deviceId: 'd2', displayName: 'Grace' }),
+    })
+  ).json();
+  const guestSocket = new WebSocket(
+    `${wsBase}/ws/parties/${created.code}?token=${guest.token}`,
+  );
+  const guestInbox = [];
+  guestSocket.on('message', (data) => guestInbox.push(JSON.parse(data.toString())));
+  await new Promise((resolve, reject) => {
+    guestSocket.once('open', resolve);
+    guestSocket.once('error', reject);
+  });
+  await waitFor(guestInbox, (f) => f.type === 'welcome');
+  guestSocket.send(JSON.stringify({ type: 'control', action: 'pause' }));
+  const refusal = await waitFor(guestInbox, (f) => f.type === 'error');
+  assert.equal(refusal.error, 'host_only');
+  console.log('13. listener refused:', refusal.error);
+
+  // 7. Preview: a party can be looked at before a slot is taken.
+  const preview = await (await fetch(`${base}/api/parties/${created.code}/preview`)).json();
+  assert.equal(preview.memberCount, 2);
+  assert.equal(preview.hostName, 'Ada');
+  console.log('14. preview:', preview.memberCount, 'of', preview.maxMembers, 'host', preview.hostName);
+
+  // 8. Kick: the removed device is told why before its socket closes.
+  socket.send(
+    JSON.stringify({ type: 'control', action: 'kick', memberId: guest.you.memberId }),
+  );
+  const bye = await waitFor(guestInbox, (f) => f.type === 'bye');
+  assert.equal(bye.reason, 'kicked');
+  console.log('15. kicked:', bye.reason);
+
+  guestSocket.close();
   socket.close();
   console.log('\nSMOKE OK');
 }

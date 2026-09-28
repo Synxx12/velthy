@@ -172,3 +172,192 @@ test('the store mints unique, well-formed codes', () => {
     seen.add(party.code);
   }
 });
+
+// -- the shared queue ------------------------------------------------------
+
+function tracks(...ids: string[]): Track[] {
+  return ids.map((id) => ({ ...aTrack(), videoId: id }));
+}
+
+test('a queue keeps the playing track as current', () => {
+  const state = new PlaybackState(config);
+  state.setTrack('m1', aTrack(), 0, true, undefined, 'Ada');
+  state.setTrack('m1', { ...aTrack(), videoId: 'b' }, 0, true, undefined, 'Ada');
+  // The sender's index is ignored when the current track is somewhere else in
+  // the queue: the two are separate controls and the queue must not move the
+  // party onto a different song by itself.
+  state.setQueue('m1', tracks('a', 'b', 'c'), 0);
+  assert.equal(state.queueIndex, 1);
+  assert.equal(state.queue[state.queueIndex].videoId, 'b');
+});
+
+test('a queue keeps everything behind the needle and caps what is ahead', () => {
+  const small: Config = { ...config, maxUpcomingQueue: 2, maxQueueLength: 3 };
+  const state = new PlaybackState(small);
+  state.setQueue('m1', tracks('a', 'b', 'c', 'd', 'e'), 1);
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'c', 'd'],
+  );
+  assert.equal(state.queueIndex, 1);
+});
+
+test('adding to the queue appends, or lands right after the current song', () => {
+  const state = new PlaybackState(config);
+  state.setTrack('m1', aTrack(), 0, true, undefined, 'Ada');
+  state.setQueue('m1', tracks('a', 'b', 'c'), 1);
+
+  assert.deepEqual(state.addUpcoming('m1', tracks('d')), { ok: true });
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'c', 'd'],
+  );
+
+  assert.deepEqual(state.addUpcoming('m1', tracks('e'), true), { ok: true });
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'e', 'c', 'd'],
+  );
+});
+
+test('adding past the upcoming limit is refused, not truncated', () => {
+  const small: Config = { ...config, maxUpcomingQueue: 2 };
+  const state = new PlaybackState(small);
+  state.setQueue('m1', tracks('a', 'b', 'c'), 0);
+  // 'a' is current, so two are ahead and there is no room for a third.
+  assert.deepEqual(state.addUpcoming('m1', tracks('d')), { ok: false, reason: 'queue_full' });
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'c'],
+  );
+});
+
+test('removing takes a song out and shifts the index with it', () => {
+  const state = new PlaybackState(config);
+  state.setQueue('m1', tracks('a', 'b', 'c', 'd'), 1);
+  assert.equal(state.removeUpcoming('m1', 'c'), true);
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'd'],
+  );
+  assert.equal(state.queueIndex, 1);
+});
+
+test('the song playing is not removable', () => {
+  const state = new PlaybackState(config);
+  state.setQueue('m1', tracks('a', 'b', 'c'), 1);
+  assert.equal(state.removeUpcoming('m1', 'b'), false);
+  assert.equal(state.removeUpcoming('m1', 'nope'), false);
+  assert.equal(state.queue.length, 3);
+});
+
+test('clearing keeps the current song and drops what follows', () => {
+  const state = new PlaybackState(config);
+  state.setQueue('m1', tracks('a', 'b', 'c'), 1);
+  assert.equal(state.clearUpcoming('m1'), true);
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b'],
+  );
+  assert.equal(state.clearUpcoming('m1'), false);
+});
+
+test('reordering only moves songs that are still to come', () => {
+  const state = new PlaybackState(config);
+  state.setQueue('m1', tracks('a', 'b', 'c', 'd'), 1);
+  assert.equal(state.moveUpcoming('m1', 2, 3, ''), true);
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'd', 'c'],
+  );
+  // The needle and everything behind it are out of a reorder's reach.
+  assert.equal(state.moveUpcoming('m1', 0, 3, ''), false);
+  assert.equal(state.moveUpcoming('m1', 2, 1, ''), false);
+  // A move addressed by id finds its own index, so the sender's own idea of
+  // where the row is does not have to be right.
+  assert.equal(state.moveUpcoming('m1', 0, 3, 'd'), true);
+  assert.deepEqual(
+    state.queue.map((track) => track.videoId),
+    ['a', 'b', 'c', 'd'],
+  );
+});
+
+test('a queue change bumps the queue sequence, not the playback one', () => {
+  const state = new PlaybackState(config);
+  state.setQueue('m1', tracks('a', 'b'), 0);
+  const playbackSeq = state.seq;
+  const queueSeq = state.queueSeq;
+  state.addUpcoming('m1', tracks('c'));
+  assert.equal(state.seq, playbackSeq);
+  assert.ok(state.queueSeq > queueSeq);
+});
+
+// -- who may control what --------------------------------------------------
+
+test('a party is everyone-controls until the host says otherwise', () => {
+  const party = new Party('ABC123', config);
+  const host = party.join('u1', 'dev1', 'Ada', null);
+  const guest = party.join('u2', 'dev2', 'Grace', null);
+  assert.equal(party.hostOnlyControl, false);
+  assert.equal(party.mayControl(guest), true);
+  assert.equal(party.mayControl(host), true);
+});
+
+test('host-only control locks listeners out and leaves the host in', () => {
+  const party = new Party('ABC123', config);
+  const host = party.join('u1', 'dev1', 'Ada', null);
+  const guest = party.join('u2', 'dev2', 'Grace', null);
+
+  party.setHostOnlyControl(host, true);
+  assert.equal(party.hostOnlyControl, true);
+  assert.equal(party.mayControl(host), true);
+  assert.equal(party.mayControl(guest), false);
+
+  party.setHostOnlyControl(host, false);
+  assert.equal(party.mayControl(guest), true);
+});
+
+test('only the host may change who controls the music', () => {
+  const party = new Party('ABC123', config);
+  party.join('u1', 'dev1', 'Ada', null);
+  const guest = party.join('u2', 'dev2', 'Grace', null);
+  assert.throws(() => party.setHostOnlyControl(guest, true), PartyError);
+});
+
+test('only the host may resize the party, and not below its own membership', () => {
+  const party = new Party('ABC123', config);
+  const host = party.join('u1', 'dev1', 'Ada', null);
+  const guest = party.join('u2', 'dev2', 'Grace', null);
+
+  assert.throws(() => party.setMaxMembers(guest, 8), PartyError);
+  assert.throws(() => party.setMaxMembers(host, 1), PartyError);
+  assert.throws(() => party.setMaxMembers(host, 11), PartyError);
+  // Two people are in, so the floor is two.
+  assert.throws(() => party.setMaxMembers(host, 1), PartyError);
+
+  party.setMaxMembers(host, 2);
+  assert.equal(party.maxMembers, 2);
+  assert.throws(() => party.join('u3', 'dev3', 'Alan', null), PartyError);
+});
+
+test('a created party carries the size its creator chose', () => {
+  const store = new PartyStore(config);
+  const party = store.create(8);
+  assert.equal(party.maxMembers, 8);
+  // And a party created without one falls back to the server default.
+  assert.equal(store.create().maxMembers, config.maxMembers);
+});
+
+test('a promotion to host lifts the lock for the member it lands on', () => {
+  const party = new Party('ABC123', config);
+  const host = party.join('u1', 'dev1', 'Ada', null);
+  const guest = party.join('u2', 'dev2', 'Grace', null);
+  party.setHostOnlyControl(host, true);
+  assert.equal(party.mayControl(guest), false);
+
+  party.remove(host.memberId);
+  assert.equal(guest.isHost, true);
+  // The role is what the lock defers to, so the new host is not locked out of
+  // a party they now own.
+  assert.equal(party.mayControl(guest), true);
+});

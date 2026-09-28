@@ -812,6 +812,15 @@ fun NowPlayingScreen(
     onRemoveFromQueue: (Int) -> Unit,
     onMoveInQueue: (Int, Int) -> Unit,
     onClearQueue: () -> Unit,
+    /**
+     * Told when a queue row starts and stops being dragged.
+     *
+     * A reorder is published to the party once, when the row lands: a drag
+     * across four rows is four queue changes as far as the player is concerned,
+     * and sending each would have every listener's player rebuild its timeline
+     * four times for one gesture.
+     */
+    onQueueDragActive: (Boolean) -> Unit = {},
     onOpenMenu: () -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
@@ -961,6 +970,7 @@ fun NowPlayingScreen(
     var lyricsOpen by remember { mutableStateOf(false) }
     var showSleepTimerSheet by remember { mutableStateOf(false) }
     var showAudioOutputSheet by remember { mutableStateOf(false) }
+    var showPartyMembers by remember { mutableStateOf(false) }
     var showLyricsOffset by remember { mutableStateOf(false) }
     // Apple-style: while the queue or lyrics list is being scrolled the whole
     // transport block ducks out of the way so the content gets the screen,
@@ -1903,6 +1913,7 @@ fun NowPlayingScreen(
                         onMove = onMoveInQueue,
                         onClear = onClearQueue,
                         onUserScroll = {},
+                        onDragActive = onQueueDragActive,
                         modifier = Modifier.fillMaxSize(),
                     )
                 },
@@ -2492,6 +2503,7 @@ fun NowPlayingScreen(
                             onMove = onMoveInQueue,
                             onClear = onClearQueue,
                             onUserScroll = { panelScrollHidden = it },
+                            onDragActive = onQueueDragActive,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -2870,7 +2882,14 @@ fun NowPlayingScreen(
                                 },
                                 onParty = {
                                     haptics.play(Haptic.Tap)
-                                    onOpenParty()
+                                    // In a party the button is about *who else is
+                                    // here*, which is a sheet; outside one it is
+                                    // the way into the feature, which is a screen.
+                                    if (party.inParty) {
+                                        showPartyMembers = true
+                                    } else {
+                                        onOpenParty()
+                                    }
                                 },
                                 inParty = party.inParty,
                                 sleepBadge = sleepBadge,
@@ -2949,6 +2968,19 @@ fun NowPlayingScreen(
         // down to the arrangement: the outputs, then volume.
         if (showAudioOutputSheet) {
             AudioOutputSheet(onDismiss = { showAudioOutputSheet = false })
+        }
+
+        // Who else is in the party, from the player's own party button. The
+        // way through to the full screen — where the server box and the host
+        // settings are — is the row at the bottom of it.
+        if (showPartyMembers) {
+            ListenTogetherMembersSheet(
+                onDismiss = { showPartyMembers = false },
+                onManage = {
+                    showPartyMembers = false
+                    onOpenParty()
+                },
+            )
         }
     }
 }
@@ -5410,6 +5442,11 @@ private fun InlineQueue(
     onMove: (Int, Int) -> Unit,
     onClear: () -> Unit,
     onUserScroll: (Boolean) -> Unit = {},
+    /**
+     * Told when a row starts and stops being dragged, so the party hears about
+     * a reorder once rather than once per row it crosses.
+     */
+    onDragActive: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -5445,12 +5482,14 @@ private fun InlineQueue(
         lazyRange = firstMovable until autoplayStart,
         lazyOffset = 0,
         onMove = onMove,
+        onDragActive = onDragActive,
     )
     val autoplayDrag = rememberQueueDragState(
         listState = listState,
         lazyRange = (autoplayStart + headingCount) until (autoplayStart + headingCount + autoplayRows.size),
         lazyOffset = headingCount,
         onMove = onMove,
+        onDragActive = onDragActive,
     )
 
     Column(modifier.fillMaxWidth()) {
@@ -5624,11 +5663,13 @@ private fun rememberQueueDragState(
     lazyRange: IntRange,
     lazyOffset: Int,
     onMove: (Int, Int) -> Unit,
+    onDragActive: (Boolean) -> Unit = {},
 ): QueueDragState {
     val state = remember(listState) { QueueDragState(listState) }
     state.lazyRange = lazyRange
     state.lazyOffset = lazyOffset
     state.onMove = onMove
+    state.onDragActive = onDragActive
     return state
 }
 
@@ -5636,6 +5677,16 @@ private class QueueDragState(private val listState: LazyListState) {
     var lazyRange: IntRange = IntRange.EMPTY
     var lazyOffset: Int = 0
     var onMove: (Int, Int) -> Unit = { _, _ -> }
+
+    /**
+     * Told when a drag begins and ends.
+     *
+     * The party hears about a reorder once, when the row lands: a drag across
+     * four rows is four queue changes as far as the player is concerned, and
+     * publishing each would have every listener's player rebuild its timeline
+     * four times for one gesture. See [MediaController.setQueueDragActive].
+     */
+    var onDragActive: (Boolean) -> Unit = {}
 
     /** LazyColumn key of the row being dragged; null at rest. */
     var draggedKey by mutableStateOf<Any?>(null)
@@ -5650,6 +5701,7 @@ private class QueueDragState(private val listState: LazyListState) {
         draggedKey = key
         dragOffset = 0f
         awaiting = null
+        onDragActive(true)
     }
 
     fun onDrag(deltaY: Float) {
@@ -5683,6 +5735,7 @@ private class QueueDragState(private val listState: LazyListState) {
         draggedKey = null
         dragOffset = 0f
         awaiting = null
+        onDragActive(false)
     }
 }
 

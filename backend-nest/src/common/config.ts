@@ -52,6 +52,15 @@ export interface Config {
   readonly emptyPartyTtlMs: number;
   readonly partyMaxAgeMs: number;
   readonly controlRatePerSecond: number;
+  /**
+   * How many songs may be queued *ahead* of the one playing.
+   *
+   * The number that matters to a listener: it is the queue they can see and
+   * add to. Past this the server refuses with `queue_full` rather than
+   * truncating, so a device is never left believing it queued something that
+   * was silently dropped.
+   */
+  readonly maxUpcomingQueue: number;
   readonly maxQueueLength: number;
   readonly allowedOrigins: string[];
 }
@@ -64,6 +73,11 @@ export function loadConfig(): Config {
     max: 65535,
   });
   const bindHost = process.env.BIND_ADDR?.trim();
+
+  // Upcoming first, because the queue ceiling is derived from it: a party's
+  // queue is "what is playing" plus the songs still to come, and allowing
+  // more than that in total would let a `setQueue` slip past the add limit.
+  const maxUpcomingQueue = int('JAM_MAX_UPCOMING_QUEUE', 25, { min: 1, max: 500 });
 
   return {
     bindAddress: bindHost && bindHost.length > 0 ? bindHost : `0.0.0.0:${port}`,
@@ -98,7 +112,12 @@ export function loadConfig(): Config {
     // throttle and exists only to stop a broken client shouting the party down.
     controlRatePerSecond: int('JAM_CONTROL_RATE_PER_SECOND', 25, { min: 1, max: 200 }),
 
-    maxQueueLength: int('JAM_MAX_QUEUE_LENGTH', 500, { min: 1, max: 5_000 }),
+    maxQueueLength: int('JAM_MAX_QUEUE_LENGTH', 1 + maxUpcomingQueue, {
+      min: 1,
+      max: 5_000,
+    }),
+
+    maxUpcomingQueue,
 
     // Browsers are not a client of this service today, so the default is closed
     // to none in particular: an empty list allows any origin, which is what the

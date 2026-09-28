@@ -30,14 +30,23 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { nowMs } from '../common/clock.js';
 import { normalise } from '../common/codes.js';
 import {
+  ACTION_KICK,
   ACTION_NEXT,
   ACTION_PAUSE,
   ACTION_PLAY,
   ACTION_PREVIOUS,
+  ACTION_QUEUE_ADD,
+  ACTION_QUEUE_CLEAR,
+  ACTION_QUEUE_MOVE,
+  ACTION_QUEUE_REMOVE,
   ACTION_SEEK,
+  ACTION_SET_HOST_ONLY_CONTROL,
+  ACTION_SET_MAX_MEMBERS,
   ACTION_SET_QUEUE,
   ACTION_SET_TRACK,
+  BYE,
   CONTROL,
+  CONTROL_ACTIONS,
   ERROR,
   PING,
   PONG,
@@ -46,7 +55,7 @@ import {
   SYNC_QUEUE,
   WELCOME,
 } from '../common/protocol.js';
-import { asInt, PartyError, trackFromWire, type Member, type Party } from './party.js';
+import { asInt, PartyError, trackFromWire, type Member, type Party, type Track } from './party.js';
 import { PartyService } from './party.service.js';
 
 /** The path prefix the app dials: `/ws/parties/{code}?token=…`. */
@@ -225,8 +234,10 @@ export class PartySocketServer implements OnApplicationShutdown {
     }
 
     const queueBefore = party.playback.queueSeq;
-    if (!applyControl(party, member, frame)) {
-      this.send(ws, { type: ERROR, error: 'bad_control', message: 'Unsupported control.' });
+    const action = typeof frame['action'] === 'string' ? frame['action'] : '';
+    const result = applyControl(party, member, frame);
+    if (!result.ok) {
+      this.send(ws, { type: ERROR, error: result.code, message: result.message });
       return;
     }
 
@@ -240,6 +251,36 @@ export class PartySocketServer implements OnApplicationShutdown {
     // off the same frame as the rest, so nobody is running on a locally
     // predicted state the server never confirmed.
     this.parties.hub.broadcast(party.code, this.parties.stateFrame(party));
+    // The member list and the control policy travel together, and only when
+    // something about the membership actually changed — a kick, a resize, or the
+    // lock being turned on. Sending it on every control would be a frame per
+    // pause to say nothing new.
+    if (
+      action === ACTION_KICK ||
+      action === ACTION_SET_MAX_MEMBERS ||
+      action === ACTION_SET_HOST_ONLY_CONTROL
+    ) {
+      this.parties.hub.broadcast(party.code, this.parties.membersFrame(party));
+    }
+    this.parties.hub.broadcast(party.code, this.parties.activityFrame(member, action, frame));
+    // Last, and after the frame that says so: the removed listener is told why
+    // before their socket is closed under them. Told first, because a close
+    // alone is indistinguishable from a network drop — the client would simply
+    // reconnect to a party that no longer knows it.
+    if (action === ACTION_KICK) {
+      const targetId = typeof frame['memberId'] === 'string' ? frame['memberId'] : '';
+      if (targetId) this.eject(party, targetId);
+    }
+  }
+
+  /** Tells a removed member why, then closes their socket. */
+  private eject(party: Party, memberId: string): void {
+    this.parties.hub.send(party.code, memberId, {
+      type: BYE,
+      reason: 'kicked',
+      message: 'The host removed you from this party.',
+    });
+    this.parties.hub.closeMember(party.code, memberId);
   }
 
   private send(ws: WebSocket, payload: unknown): void {
@@ -256,30 +297,48 @@ export class PartySocketServer implements OnApplicationShutdown {
   }
 }
 
+/** What a control came to: applied, or a reason it was refused. */
+type ControlResult = { ok: true } | { ok: false; code: string; message: string };
+
 /**
  * Applies one member's control.
  *
- * Any member may send any of these: there is no host privilege here. "Anyone can
- * control the music" is a product decision, and this function is all of its
- * enforcement — the member is identified so the state can say who moved it, and
- * then not consulted about whether they were allowed to.
+ * Who may send what is enforced here rather than left to the clients. An app
+ * that hides its own next button is a courtesy; this is what actually stops a
+ * listener's device — a stale build, a backgrounded one still echoing an old
+ * intent, or something else entirely — from moving the music for everybody.
+ * The host-only setting is one half of that and the membership actions the
+ * other, and both are checked below.
  */
-function applyControl(party: Party, member: Member, frame: Record<string, unknown>): boolean {
+function applyControl(party: Party, member: Member, frame: Record<string, unknown>): ControlResult {
   const playback = party.playback;
   const who = member.memberId;
+  const action = typeof frame['action'] === 'string' ? frame['action'] : '';
 
-  switch (frame['action']) {
+  // A party locked to its host refuses the transport and the queue from anyone
+  // else. Membership actions are not in this set and carry their own checks.
+  if (CONTROL_ACTIONS.has(action) && !party.mayControl(member)) {
+    return {
+      ok: false,
+      code: 'host_only',
+      message: 'Only the host can control the music in this party.',
+    };
+  }
+
+  switch (action) {
     case ACTION_PLAY:
       playback.play(who, asInt(frame['positionMs']));
-      return true;
+      return { ok: true };
     case ACTION_PAUSE:
       playback.pause(who, asInt(frame['positionMs']));
-      return true;
+      return { ok: true };
     case ACTION_SEEK: {
       const position = asInt(frame['positionMs']);
-      if (position === null) return false;
+      if (position === null) {
+        return { ok: false, code: 'missing_position', message: 'seek requires positionMs.' };
+      }
       playback.seek(who, position);
-      return true;
+      return { ok: true };
     }
     case ACTION_SET_TRACK:
       playback.setTrack(
@@ -290,22 +349,143 @@ function applyControl(party: Party, member: Member, frame: Record<string, unknow
         asInt(frame['queueIndex']),
         member.displayName,
       );
-      return true;
+      return { ok: true };
     case ACTION_SET_QUEUE: {
       const raw = frame['queue'];
-      if (!Array.isArray(raw)) return false;
-      const queue = raw.map(trackFromWire).filter((track) => track !== null);
+      if (!Array.isArray(raw)) {
+        return { ok: false, code: 'missing_queue', message: 'setQueue requires a queue array.' };
+      }
+      const queue = raw.map(trackFromWire).filter((track): track is Track => track !== null);
       playback.setQueue(who, queue, asInt(frame['queueIndex']) ?? -1);
-      return true;
+      return { ok: true };
+    }
+    case ACTION_QUEUE_ADD: {
+      // Either one track or a batch: a tap on a row sends the first, "add
+      // album" and an AutoPlay refill send the second.
+      const single = trackFromWire(frame['track']);
+      const raw = frame['tracks'];
+      const batch = Array.isArray(raw)
+        ? raw.map(trackFromWire).filter((track): track is Track => track !== null)
+        : [];
+      const tracks = single !== null ? [single] : batch;
+      const added = playback.addUpcoming(who, tracks, frame['playNext'] === true);
+      if (!added.ok) {
+        return added.reason === 'queue_full'
+          ? {
+              ok: false,
+              code: 'queue_full',
+              message: 'The upcoming queue is full.',
+            }
+          : { ok: false, code: 'no_tracks', message: 'No songs to add.' };
+      }
+      return { ok: true };
+    }
+    case ACTION_QUEUE_REMOVE: {
+      let videoId = typeof frame['videoId'] === 'string' ? frame['videoId'] : '';
+      if (!videoId) {
+        const index = asInt(frame['index']);
+        if (index !== null && index >= 0 && index < playback.queue.length) {
+          videoId = playback.queue[index].videoId;
+        }
+      }
+      if (!videoId) {
+        return {
+          ok: false,
+          code: 'missing_track',
+          message: 'queueRemove requires videoId or index.',
+        };
+      }
+      if (!playback.removeUpcoming(who, videoId)) {
+        return { ok: false, code: 'not_found', message: 'That song is not in the upcoming queue.' };
+      }
+      return { ok: true };
+    }
+    case ACTION_QUEUE_CLEAR:
+      if (!playback.clearUpcoming(who)) {
+        return { ok: false, code: 'no_upcoming', message: 'No upcoming songs to clear.' };
+      }
+      return { ok: true };
+    case ACTION_QUEUE_MOVE: {
+      const from = asInt(frame['fromIndex']);
+      const to = asInt(frame['toIndex']);
+      if (from === null || to === null) {
+        return {
+          ok: false,
+          code: 'missing_indices',
+          message: 'queueMove requires fromIndex and toIndex.',
+        };
+      }
+      const videoId = typeof frame['videoId'] === 'string' ? frame['videoId'] : '';
+      if (!playback.moveUpcoming(who, from, to, videoId)) {
+        return { ok: false, code: 'invalid_move', message: 'That reorder is not possible.' };
+      }
+      return { ok: true };
     }
     case ACTION_NEXT:
-      playback.step(who, 1, member.displayName);
-      return true;
+      if (!playback.step(who, 1, member.displayName)) {
+        return { ok: false, code: 'end_of_queue', message: 'Already at the end of the queue.' };
+      }
+      return { ok: true };
     case ACTION_PREVIOUS:
-      playback.step(who, -1, member.displayName);
-      return true;
+      if (!playback.step(who, -1, member.displayName)) {
+        return { ok: false, code: 'start_of_queue', message: 'Already at the beginning of the queue.' };
+      }
+      return { ok: true };
+    case ACTION_SET_MAX_MEMBERS: {
+      const value = asInt(frame['maxMembers']);
+      if (value === null) {
+        return {
+          ok: false,
+          code: 'invalid_capacity',
+          message: 'Choose a party size between 2 and 10.',
+        };
+      }
+      return asControlResult(() => party.setMaxMembers(member, value));
+    }
+    case ACTION_SET_HOST_ONLY_CONTROL: {
+      const enabled = frame['enabled'];
+      if (typeof enabled !== 'boolean') {
+        return {
+          ok: false,
+          code: 'invalid_control_policy',
+          message: 'Host-only control must be enabled or disabled.',
+        };
+      }
+      return asControlResult(() => party.setHostOnlyControl(member, enabled));
+    }
+    case ACTION_KICK: {
+      const targetId = typeof frame['memberId'] === 'string' ? frame['memberId'] : '';
+      if (!member.isHost) {
+        return { ok: false, code: 'host_only', message: 'Only the host can remove listeners.' };
+      }
+      if (!targetId || targetId === member.memberId) {
+        return { ok: false, code: 'invalid_member', message: 'Choose another listener to remove.' };
+      }
+      if (!party.members.has(targetId)) {
+        return {
+          ok: false,
+          code: 'not_found',
+          message: 'That listener is no longer in this party.',
+        };
+      }
+      party.remove(targetId);
+      return { ok: true };
+    }
     default:
-      return false;
+      return { ok: false, code: 'unknown_action', message: 'Unsupported control.' };
+  }
+}
+
+/** Runs a domain method whose only failure is a [PartyError], as a control result. */
+function asControlResult(run: () => void): ControlResult {
+  try {
+    run();
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof PartyError) {
+      return { ok: false, code: error.code, message: error.message };
+    }
+    throw error;
   }
 }
 

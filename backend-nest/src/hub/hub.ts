@@ -84,6 +84,26 @@ export class Hub {
   }
 
   /**
+   * Closes one member's socket, leaving the party otherwise alone.
+   *
+   * Used for a removal: the socket has to go, or the device keeps receiving
+   * frames for a membership it no longer holds. Best effort, like every other
+   * close here — a peer that has already gone away cannot be told so.
+   */
+  closeMember(code: string, memberId: string): void {
+    const room = this.rooms.get(code);
+    const held = room?.get(memberId);
+    if (!held) return;
+    room?.delete(memberId);
+    if (room && room.size === 0) this.rooms.delete(code);
+    try {
+      held.socket.close();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /**
    * Delivers a frame to every socket in a party, optionally skipping one member.
    *
    * Sends are issued together and settled together, so one member on a slow link

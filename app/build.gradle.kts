@@ -278,6 +278,11 @@ dependencies {
     implementation("dev.chrisbanes.haze:haze:1.3.1")
     implementation("dev.chrisbanes.haze:haze-materials:1.3.1")
 
+    // ---- QR codes: invite links drawn as a scannable square ----
+    // Encoder only. The matrix is painted by hand, so no Android-specific
+    // artifact is needed — `core` is pure Java and has no transitive baggage.
+    implementation("com.google.zxing:core:3.5.3")
+
     implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.20.0")
     implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0")
 

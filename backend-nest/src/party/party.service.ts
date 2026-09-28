@@ -10,7 +10,28 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { nowMs } from '../common/clock.js';
 import { CONFIG, type Config } from '../common/config.js';
-import { BYE, MEMBERS, QUEUE, STATE, type JoinRequest } from '../common/protocol.js';
+import {
+  ACTION_KICK,
+  ACTION_NEXT,
+  ACTION_PAUSE,
+  ACTION_PLAY,
+  ACTION_PREVIOUS,
+  ACTION_QUEUE_ADD,
+  ACTION_QUEUE_CLEAR,
+  ACTION_QUEUE_MOVE,
+  ACTION_QUEUE_REMOVE,
+  ACTION_SEEK,
+  ACTION_SET_HOST_ONLY_CONTROL,
+  ACTION_SET_MAX_MEMBERS,
+  ACTION_SET_QUEUE,
+  ACTION_SET_TRACK,
+  ACTIVITY,
+  BYE,
+  MEMBERS,
+  QUEUE,
+  STATE,
+  type JoinRequest,
+} from '../common/protocol.js';
 import { Hub } from '../hub/hub.js';
 import { Member, Party, PartyError, PartyStore } from './party.js';
 
@@ -36,9 +57,11 @@ export class PartyService {
 
   /** Mint a code and put the caller in it as host. */
   create(body: JoinRequest): Record<string, unknown> {
-    const party = this.store.create();
+    const party = this.store.create(body.maxMembers ?? undefined);
     const member = party.join(body.userId, body.deviceId, body.displayName, body.avatarUrl);
-    this.log.log(`party ${party.code} created by ${member.displayName}`);
+    this.log.log(
+      `party ${party.code} created by ${member.displayName} (max ${party.maxMembers})`,
+    );
     return this.membershipPayload(party, member);
   }
 
@@ -47,7 +70,7 @@ export class PartyService {
     const party = this.store.get(code);
     const member = party.join(body.userId, body.deviceId, body.displayName, body.avatarUrl);
     this.log.log(
-      `party ${party.code} joined by ${member.displayName} (${party.occupiedSlots}/${this.config.maxMembers})`,
+      `party ${party.code} joined by ${member.displayName} (${party.occupiedSlots}/${party.maxMembers})`,
     );
     // Everyone already in the party learns about the arrival now, rather than at
     // the next heartbeat — the member list is the one part of this feature that
@@ -118,8 +141,126 @@ export class PartyService {
     return {
       type: MEMBERS,
       members: wire['members'],
-      maxMembers: this.config.maxMembers,
+      maxMembers: party.maxMembers,
+      hostOnlyControl: party.hostOnlyControl,
       serverMs: nowMs(),
     };
+  }
+
+  /**
+   * One thing somebody did, in the words the party will read it in.
+   *
+   * Built from the control frame rather than from the resulting state, because
+   * the sentence is about the *action*: "changed the song to X" is not
+   * recoverable from a playback state that has since moved on. The detail is
+   * composed here rather than on each device so every listener reads the same
+   * sentence, and so the wording can change without a client release.
+   */
+  activityFrame(member: Member, action: string, frame: Record<string, unknown>): Record<string, unknown> {
+    return {
+      type: ACTIVITY,
+      action,
+      by: member.displayName,
+      detail: describeAction(action, frame),
+      atMs: nowMs(),
+    };
+  }
+
+  /**
+   * Who is in a party, to somebody who has not joined it.
+   *
+   * Unauthenticated on purpose, and the reason it is safe is that it says
+   * nothing a person holding the code could not learn by joining: a name, a
+   * face, and how full the party is. It exists so the invite in somebody's
+   * hand can be *looked at* before a device slot is committed to it — and so a
+   * full or expired party is refused while the code is still on screen, rather
+   * than after a confirmation the listener cannot act on.
+   */
+  preview(code: string): Record<string, unknown> {
+    const party = this.store.get(code);
+    const members = [...party.members.values()]
+      .sort((a, b) =>
+        a.joinedAtMs !== b.joinedAtMs ? a.joinedAtMs - b.joinedAtMs : a.memberId.localeCompare(b.memberId),
+      )
+      .map((member) => ({
+        displayName: member.displayName,
+        avatarUrl: member.avatarUrl,
+        isHost: member.isHost,
+      }));
+    const host = members.find((member) => member.isHost);
+    return {
+      code: party.code,
+      hostName: host?.displayName ?? '',
+      memberCount: party.members.size,
+      maxMembers: party.maxMembers,
+      isFull: party.members.size >= party.maxMembers,
+      members,
+    };
+  }
+}
+
+/**
+ * The sentence one action reads as.
+ *
+ * Deliberately a fixed set of phrasings rather than anything built from user
+ * text: the title of a track goes in quotes as a *value*, and everything around
+ * it is this server's own wording. A client cannot put arbitrary prose on
+ * everybody else's screen through an activity frame.
+ */
+function describeAction(action: string, frame: Record<string, unknown>): string {
+  const titleOf = (raw: unknown): string => {
+    if (typeof raw !== 'object' || raw === null) return '';
+    const title = (raw as Record<string, unknown>)['title'];
+    return typeof title === 'string' ? title : '';
+  };
+
+  switch (action) {
+    case ACTION_SET_TRACK: {
+      const title = titleOf(frame['track']);
+      return title ? `Changed the song to “${title}”` : 'Changed the song';
+    }
+    case ACTION_QUEUE_ADD: {
+      const raw = frame['tracks'];
+      if (Array.isArray(raw) && raw.length > 0) {
+        const title = titleOf(raw[0]);
+        if (title) {
+          return raw.length === 1
+            ? `Added “${title}” to the queue`
+            : `Added “${title}” and ${raw.length - 1} more to the queue`;
+        }
+      }
+      const single = titleOf(frame['track']);
+      return single ? `Added “${single}” to the queue` : 'Added songs to the queue';
+    }
+    case ACTION_SET_QUEUE: {
+      const raw = frame['queue'];
+      return Array.isArray(raw)
+        ? `Replaced the queue with ${raw.length} song${raw.length === 1 ? '' : 's'}`
+        : 'Replaced the queue';
+    }
+    case ACTION_QUEUE_REMOVE:
+      return 'Removed a song from the queue';
+    case ACTION_QUEUE_CLEAR:
+      return 'Cleared the upcoming songs';
+    case ACTION_QUEUE_MOVE:
+      return 'Reordered the upcoming songs';
+    case ACTION_NEXT:
+      return 'Skipped to the next song';
+    case ACTION_PREVIOUS:
+      return 'Went back to the previous song';
+    case ACTION_PLAY:
+      return 'Started playback';
+    case ACTION_PAUSE:
+      return 'Paused playback';
+    case ACTION_SEEK:
+      return 'Changed the playback position';
+    case ACTION_KICK:
+      return 'Removed a listener from the party';
+    case ACTION_SET_MAX_MEMBERS:
+      return 'Changed the party size';
+    case ACTION_SET_HOST_ONLY_CONTROL:
+      return 'Changed who can control the music';
+    default:
+      return 'Did something in the party';
   }
 }

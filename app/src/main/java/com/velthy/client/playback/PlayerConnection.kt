@@ -80,6 +80,25 @@ fun MediaController.toggleAutoplay() {
     )
 }
 
+/**
+ * Tells the playback service that a queue row started or stopped being dragged.
+ *
+ * The party publishes a reorder once, when the row lands: a drag from position
+ * five to position one crosses four neighbours, and each crossing is a queue
+ * change the player reports. Without this the party would watch the song jump
+ * through every intermediate position, and every listener's player would
+ * rebuild its timeline four times for one gesture.
+ */
+fun MediaController.setQueueDragActive(active: Boolean) {
+    sendCustomCommand(
+        SessionCommand(
+            PlaybackService.ACTION_QUEUE_DRAG,
+            bundleOf(PlaybackService.EXTRA_QUEUE_DRAG_ACTIVE to active),
+        ),
+        Bundle.EMPTY,
+    )
+}
+
 /** Mirrors the controller into Compose state, polling position while playing. */
 @Composable
 fun rememberPlayerState(controller: MediaController?): PlayerState {

@@ -15,6 +15,12 @@ export interface JoinRequest {
   deviceId: string;
   displayName: string;
   avatarUrl: string | null;
+  /**
+   * How many devices the creator wants to allow. Only read when a party is
+   * being *created* — a join to an existing party cannot resize it, and the
+   * host has a control for that once inside.
+   */
+  maxMembers?: number | null;
 }
 
 /**
@@ -53,7 +59,23 @@ export function parseJoinRequest(raw: unknown): JoinRequest {
     throw new PartyError(400, 'bad_request', 'avatarUrl must be an http(s) URL.');
   }
 
-  return { userId, deviceId, displayName, avatarUrl: avatarUrl || null };
+  // Optional, and only meaningful on create. A malformed value is refused
+  // rather than clamped: silently resizing somebody's party to five when they
+  // asked for ten is a surprise they would only discover by counting faces.
+  const rawMax = body['maxMembers'];
+  let maxMembers: number | null = null;
+  if (rawMax !== undefined && rawMax !== null) {
+    if (typeof rawMax !== 'number' || !Number.isFinite(rawMax)) {
+      throw new PartyError(400, 'bad_request', 'maxMembers must be a number.');
+    }
+    const value = Math.trunc(rawMax);
+    if (value < 2 || value > 10) {
+      throw new PartyError(400, 'bad_request', 'maxMembers must be between 2 and 10.');
+    }
+    maxMembers = value;
+  }
+
+  return { userId, deviceId, displayName, avatarUrl: avatarUrl || null, maxMembers };
 }
 
 function str(value: unknown): string {
@@ -69,6 +91,15 @@ export const MEMBERS = 'members';
 export const PONG = 'pong';
 export const ERROR = 'error';
 export const BYE = 'bye';
+/**
+ * One thing somebody did, broadcast to the party as it happens.
+ *
+ * Separate from [STATE] on purpose: the state says what is true now, this says
+ * *who* made it true and in what words. It is not replayed — a device that was
+ * away for a minute does not need to read back everything it missed, and the
+ * frame carries no sequence number for exactly that reason.
+ */
+export const ACTIVITY = 'activity';
 
 // -- WebSocket frame types, client -> server --------------------------------
 
@@ -90,5 +121,35 @@ export const ACTION_PAUSE = 'pause';
 export const ACTION_SEEK = 'seek';
 export const ACTION_SET_TRACK = 'setTrack';
 export const ACTION_SET_QUEUE = 'setQueue';
+export const ACTION_QUEUE_ADD = 'queueAdd';
+export const ACTION_QUEUE_REMOVE = 'queueRemove';
+export const ACTION_QUEUE_CLEAR = 'queueClear';
+export const ACTION_QUEUE_MOVE = 'queueMove';
 export const ACTION_NEXT = 'next';
 export const ACTION_PREVIOUS = 'previous';
+export const ACTION_KICK = 'kick';
+export const ACTION_SET_MAX_MEMBERS = 'setMaxMembers';
+export const ACTION_SET_HOST_ONLY_CONTROL = 'setHostOnlyControl';
+
+/**
+ * The actions a party's host-only setting restricts.
+ *
+ * Membership actions are deliberately absent. `kick` and `setMaxMembers` are
+ * host-only unconditionally — the server checks the role itself — and
+ * `setHostOnlyControl` has to stay reachable by the host to be turned back off.
+ * Putting them here would mean the setting could lock the host out of
+ * administering their own party.
+ */
+export const CONTROL_ACTIONS: ReadonlySet<string> = new Set([
+  ACTION_PLAY,
+  ACTION_PAUSE,
+  ACTION_SEEK,
+  ACTION_SET_TRACK,
+  ACTION_SET_QUEUE,
+  ACTION_QUEUE_ADD,
+  ACTION_QUEUE_REMOVE,
+  ACTION_QUEUE_CLEAR,
+  ACTION_QUEUE_MOVE,
+  ACTION_NEXT,
+  ACTION_PREVIOUS,
+]);

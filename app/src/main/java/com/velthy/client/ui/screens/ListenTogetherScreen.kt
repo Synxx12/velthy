@@ -5,7 +5,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,20 +62,20 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.velthy.client.data.listentogether.JamInviteLink
 import com.velthy.client.data.listentogether.ListenTogether
+import com.velthy.client.data.listentogether.PartyActivity
 import com.velthy.client.data.listentogether.PartyMember
+import com.velthy.client.data.listentogether.PartyPreview
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
 import kotlinx.coroutines.launch
 
 /**
- * Listen Together — one party shared by up to five signed-in devices.
+ * Listen Together — one party shared by up to ten signed-in devices.
  *
  * Laid out in Velthy's own pushed-screen shape (inset cards, hairline rules,
  * the same type scale as Settings) in the order that answers the questions a
  * person actually has: *can I reach the server*, then *start or join*, then
- * *who else is here*. Everything about a server address comes last, because
- * nobody setting up a party needs to think about one — there is a built-in
- * default — and it is only somebody running their own who comes looking.
+ * *who else is here*, then *what has been happening*.
  *
  * The player is deliberately untouched by anything here. What this screen (and
  * the layer under it) publishes is where the party is; binding that to the
@@ -94,11 +93,18 @@ fun ListenTogetherScreen(
      * and coming back does not re-fill a code somebody has since cleared.
      */
     inviteCode: String? = null,
+    /**
+     * A server an invite named, if it named one. Applied before the join so the
+     * code is looked for where the link says it lives rather than on whatever
+     * server this install happens to be pointed at.
+     */
+    inviteServer: String? = null,
     onInviteHandled: () -> Unit = {},
 ) {
     val state by ListenTogether.state.collectAsStateWithLifecycle()
     val serverStatus by ListenTogether.serverStatus.collectAsStateWithLifecycle()
     val customServer by ListenTogether.customServerUrl.collectAsStateWithLifecycle()
+    val activity by ListenTogether.activity.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val clipboard = LocalClipboardManager.current
@@ -108,6 +114,11 @@ fun ListenTogetherScreen(
     var serverInput by remember(customServer) { mutableStateOf(customServer) }
     var busy by remember { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
+    var maxMembers by remember { mutableStateOf(ListenTogether.DEFAULT_MAX_MEMBERS) }
+    /** The party an invite asked about, awaiting the listener's confirmation. */
+    var pendingJoin by remember { mutableStateOf<PartyPreview?>(null) }
+    /** The invite sheet, open while somebody is showing a code to a room. */
+    var showInvite by remember { mutableStateOf(false) }
 
     // A membership restored from storage is worth a socket while somebody is
     // looking at it — which is exactly now.
@@ -117,13 +128,13 @@ fun ListenTogetherScreen(
     }
 
     // An invite link arrives with its code already known, so it goes straight
-    // into the field and the source is cleared. Typing over it afterwards is
-    // normal: this is a starting value, not a lock.
-    LaunchedEffect(inviteCode) {
-        if (!inviteCode.isNullOrBlank() && !state.inParty) {
-            codeInput = inviteCode
-            onInviteHandled()
-        }
+    // into the field. A link that also names a server applies it first, so the
+    // code is resolved against the party's own server rather than this device's.
+    LaunchedEffect(inviteCode, inviteServer) {
+        if (inviteCode.isNullOrBlank() || state.inParty) return@LaunchedEffect
+        if (!inviteServer.isNullOrBlank()) ListenTogether.setCustomServerUrl(inviteServer)
+        codeInput = inviteCode
+        onInviteHandled()
     }
 
     Column(
@@ -169,24 +180,37 @@ fun ListenTogetherScreen(
                         .uppercase()
                         .take(ListenTogether.CODE_LENGTH)
                 },
+                maxMembers = maxMembers,
+                onMaxMembers = { maxMembers = it },
                 busy = busy,
                 onCreate = {
                     busy = true
                     failure = null
                     haptics.play(Haptic.ToggleOn)
                     scope.launch {
-                        failure = ListenTogether.createParty().exceptionOrNull()?.message
+                        failure = ListenTogether.createParty(maxMembers).exceptionOrNull()?.message
                         busy = false
                     }
                 },
                 onJoin = {
+                    val code = codeInput
                     busy = true
                     failure = null
                     haptics.play(Haptic.Tap)
                     scope.launch {
-                        failure = ListenTogether.joinParty(codeInput).exceptionOrNull()?.message
-                        if (failure == null) codeInput = ""
+                        // Look the party up first, so a full or expired code is
+                        // refused while it is still on screen rather than after
+                        // a confirmation nobody can act on. A server that does
+                        // not answer the lookup is not a reason to refuse: the
+                        // join itself is the answer that matters.
+                        val preview = ListenTogether.previewParty(code).getOrNull()
                         busy = false
+                        if (preview != null) {
+                            pendingJoin = preview
+                        } else {
+                            failure = ListenTogether.joinParty(code).exceptionOrNull()?.message
+                            if (failure == null) codeInput = ""
+                        }
                     }
                 },
             )
@@ -199,7 +223,8 @@ fun ListenTogetherScreen(
                 },
                 onShare = {
                     val code = state.code ?: return@InAParty
-                    val link = JamInviteLink.url(code)
+                    val server = ListenTogether.activeServerOrNull()
+                    val link = JamInviteLink.url(code, server)
                     haptics.play(Haptic.Tap)
                     context.startActivity(
                         Intent.createChooser(
@@ -213,8 +238,8 @@ fun ListenTogetherScreen(
                                 putExtra(
                                     Intent.EXTRA_TEXT,
                                     "Join my party with code $code\n" +
-                                        "$link\n" +
-                                        JamInviteLink.webUrl(code),
+                                        "${JamInviteLink.schemeUrl(code, server)}\n" +
+                                        JamInviteLink.webUrl(code, server),
                                 )
                             },
                             null,
@@ -224,6 +249,22 @@ fun ListenTogetherScreen(
                 onLeave = {
                     haptics.play(Haptic.Tap)
                     scope.launch { ListenTogether.leaveParty() }
+                },
+                onShowInvite = {
+                    haptics.play(Haptic.Tap)
+                    showInvite = true
+                },
+                onSetMaxMembers = { value ->
+                    haptics.play(Haptic.Tap)
+                    ListenTogether.setMaxMembers(value)
+                },
+                onKick = { memberId ->
+                    haptics.play(Haptic.Tap)
+                    ListenTogether.kick(memberId)
+                },
+                onSetHostOnlyControl = { enabled ->
+                    haptics.play(Haptic.Tap)
+                    ListenTogether.setHostOnlyControl(enabled)
                 },
             )
         }
@@ -235,6 +276,10 @@ fun ListenTogetherScreen(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(start = GROUP_INSET + 4.dp, end = GROUP_INSET + 4.dp, top = 12.dp),
             )
+        }
+
+        if (state.inParty && activity.isNotEmpty()) {
+            ActivityGroup(activity)
         }
 
         // Last, and empty by default. Nothing here forces anybody to read an
@@ -263,7 +308,9 @@ fun ListenTogetherScreen(
                         placeholder = "Use the built-in server",
                         enabled = !state.inParty,
                         imeAction = ImeAction.Done,
-                        onDone = { ListenTogether.setCustomServerUrl(serverInput) },
+                        onDone = {
+                            applyServer(serverInput, { serverInput = it }, { failure = it })
+                        },
                     )
                 }
             }
@@ -275,14 +322,71 @@ fun ListenTogetherScreen(
                 emphasised = true,
                 onClick = {
                     haptics.play(Haptic.Tap)
-                    ListenTogether.setCustomServerUrl(serverInput)
-                    ListenTogether.refreshServerHealth()
+                    applyServer(serverInput, { serverInput = it }, { failure = it })
                 },
             )
         }
 
         Spacer(Modifier.height(32.dp))
     }
+
+    // Confirmation before a slot is committed. Shown for a lookup that answered,
+    // which is every server this app talks to; the join path above falls back to
+    // joining directly when the lookup could not be made at all.
+    pendingJoin?.let { preview ->
+        JoinConfirmDialog(
+            preview = preview,
+            busy = busy,
+            onDismiss = { pendingJoin = null },
+            onConfirm = {
+                val code = preview.code.ifBlank { codeInput }
+                pendingJoin = null
+                busy = true
+                failure = null
+                scope.launch {
+                    failure = ListenTogether.joinParty(code).exceptionOrNull()?.message
+                    if (failure == null) codeInput = ""
+                    busy = false
+                }
+            },
+        )
+    }
+
+    if (showInvite) {
+        val code = state.code.orEmpty()
+        val server = ListenTogether.activeServerOrNull()
+        InviteQrDialog(
+            code = code,
+            link = JamInviteLink.url(code, server),
+            onCopy = {
+                haptics.play(Haptic.Tap)
+                clipboard.setText(AnnotatedString(code))
+            },
+            onDismiss = { showInvite = false },
+        )
+    }
+}
+
+/**
+ * Applies a typed server address, refusing one the app cannot use.
+ *
+ * The validation is deliberately strict and the refusal is shown in place: an
+ * address that is a typo would otherwise be stored and then fail on every
+ * request, with the failure looking like the party's rather than the address's.
+ */
+private fun applyServer(
+    raw: String,
+    onNormalised: (String) -> Unit,
+    onRejected: (String) -> Unit,
+) {
+    val normalised = ListenTogether.normalizeServerAddress(raw)
+    if (normalised == null) {
+        onRejected("That doesn't look like a server address.")
+        return
+    }
+    onNormalised(normalised)
+    ListenTogether.setCustomServerUrl(normalised)
+    ListenTogether.refreshServerHealth()
 }
 
 /** Whether the server is up, first, because every other failure looks like this one. */
@@ -333,6 +437,8 @@ private fun NotInAParty(
     hasServer: Boolean,
     codeInput: String,
     onCodeInput: (String) -> Unit,
+    maxMembers: Int,
+    onMaxMembers: (Int) -> Unit,
     busy: Boolean,
     onCreate: () -> Unit,
     onJoin: () -> Unit,
@@ -342,7 +448,7 @@ private fun NotInAParty(
     SettingsGroup(
         header = "Join a party",
         footer = "A code is six letters or digits, read out by whoever started the party. " +
-            "Up to five devices can listen at once.",
+            "Up to ten devices can listen at once.",
     ) {
         Column(Modifier.padding(horizontal = ROW_INSET, vertical = 16.dp)) {
             PartyCodeField(
@@ -367,6 +473,74 @@ private fun NotInAParty(
             enabled = ready,
             onClick = onCreate,
         )
+        RowDivider()
+        // How big the new party is. Only the host's own choice, and only at
+        // creation: resizing afterwards is a control on the party screen, where
+        // the people already in it are visible.
+        StepperRow(
+            title = "Party size",
+            value = maxMembers,
+            enabled = ready,
+            onChange = onMaxMembers,
+        )
+    }
+}
+
+/** A count with a minus and a plus, bounded to what the server will accept. */
+@Composable
+private fun StepperRow(
+    title: String,
+    value: Int,
+    enabled: Boolean,
+    onChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .padding(horizontal = ROW_INSET, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        StepperButton(label = "−", enabled = enabled && value > 2) { onChange(value - 1) }
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(40.dp),
+        )
+        StepperButton(label = "+", enabled = enabled && value < ListenTogether.MAX_MEMBERS) {
+            onChange(value + 1)
+        }
+    }
+}
+
+@Composable
+private fun StepperButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val tint = if (enabled) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+    }
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            color = tint,
+        )
     }
 }
 
@@ -376,12 +550,17 @@ private fun InAParty(
     onCopy: () -> Unit,
     onShare: () -> Unit,
     onLeave: () -> Unit,
+    onShowInvite: () -> Unit,
+    onSetMaxMembers: (Int) -> Unit,
+    onKick: (String) -> Unit,
+    onSetHostOnlyControl: (Boolean) -> Unit,
 ) {
     val connection = when (state.connection) {
         ListenTogether.Connection.LIVE -> "Connected"
         ListenTogether.Connection.CONNECTING -> "Connecting…"
         ListenTogether.Connection.OFFLINE -> "Offline"
     }
+    val isHost = state.you?.isHost == true
 
     SettingsGroup(
         header = "Your party",
@@ -419,6 +598,12 @@ private fun InAParty(
         )
         RowDivider()
         ActionRow(
+            icon = Icons.Rounded.Share,
+            title = "Show invite code",
+            onClick = onShowInvite,
+        )
+        RowDivider()
+        ActionRow(
             icon = Icons.AutoMirrored.Rounded.Logout,
             title = "Leave party",
             destructive = true,
@@ -426,22 +611,134 @@ private fun InAParty(
         )
     }
 
-    MembersGroup(state)
-}
+    MembersGroup(
+        state = state,
+        onKick = onKick,
+    )
 
-/** The member list, host first as the server orders it. */
-@Composable
-private fun MembersGroup(state: ListenTogether.State) {
-    SettingsGroup(header = "${state.members.size} of ${state.maxMembers} here") {
-        state.members.forEachIndexed { index, member ->
-            if (index > 0) RowDivider()
-            MemberRow(member = member, isYou = member.memberId == state.you?.memberId)
+    // Host-only, and only shown to the host: a listener has no business
+    // resizing a party or locking themselves out of it.
+    if (isHost) {
+        HostControlsGroup(
+            state = state,
+            onSetMaxMembers = onSetMaxMembers,
+            onSetHostOnlyControl = onSetHostOnlyControl,
+        )
+    } else if (state.controlsLocked) {
+        SettingsGroup(
+            footer = "The host is controlling the music right now. You can still listen, " +
+                "and the queue you see is everyone's.",
+        ) {
+            SettingsRow(
+                icon = Icons.Rounded.Podcasts,
+                title = "Host controls the music",
+                subtitle = "Your device can't change the song",
+            )
         }
     }
 }
 
+/** The member list, host first as the server orders it. */
 @Composable
-private fun MemberRow(member: PartyMember, isYou: Boolean) {
+private fun MembersGroup(
+    state: ListenTogether.State,
+    onKick: (String) -> Unit,
+) {
+    val isHost = state.you?.isHost == true
+    SettingsGroup(header = "${state.members.size} of ${state.maxMembers} here") {
+        state.members.forEachIndexed { index, member ->
+            if (index > 0) RowDivider()
+            MemberRow(
+                member = member,
+                isYou = member.memberId == state.you?.memberId,
+                // The host cannot remove themselves — leaving is the control for
+                // that, and it is the same row every member has.
+                onKick = if (isHost && member.memberId != state.you?.memberId) {
+                    { onKick(member.memberId) }
+                } else {
+                    null
+                },
+            )
+        }
+    }
+}
+
+/** The host's own settings: how big the party is, and who may drive it. */
+@Composable
+private fun HostControlsGroup(
+    state: ListenTogether.State,
+    onSetMaxMembers: (Int) -> Unit,
+    onSetHostOnlyControl: (Boolean) -> Unit,
+) {
+    SettingsGroup(
+        header = "Host controls",
+        footer = "Only you can see these. Everyone keeps listening either way.",
+    ) {
+        StepperRow(
+            title = "Party size",
+            // The floor is the people already in it: shrinking past them would
+            // evict somebody as a side effect of a settings change, and the
+            // server refuses it for the same reason.
+            value = state.maxMembers.coerceAtLeast(state.members.size),
+            enabled = true,
+            onChange = onSetMaxMembers,
+        )
+        RowDivider()
+        ToggleRow(
+            title = "Only I control the music",
+            subtitle = if (state.hostOnlyControl) {
+                "Listeners can listen but not change the song"
+            } else {
+                "Anyone in the party can change the song"
+            },
+            checked = state.hostOnlyControl,
+            onCheckedChange = onSetHostOnlyControl,
+        )
+    }
+}
+
+@Composable
+private fun ToggleRow(
+    title: String,
+    subtitle: String?,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .heightIn(min = 52.dp)
+            .padding(horizontal = ROW_INSET, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        androidx.compose.material3.Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
+    }
+}
+
+@Composable
+private fun MemberRow(
+    member: PartyMember,
+    isYou: Boolean,
+    onKick: (() -> Unit)?,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -479,12 +776,58 @@ private fun MemberRow(member: PartyMember, isYou: Boolean) {
             val detail = buildList {
                 if (member.isHost) add("Host")
                 if (isYou) add("You")
-                if (!member.connected) add("Reconnecting…")
+                // "Away" rather than "offline": the slot is still theirs, and
+                // the server holds it through a grace period precisely so a
+                // tunnel or a locked screen does not read as leaving.
+                if (!member.connected) add("Away")
             }.joinToString(" · ")
             if (detail.isNotEmpty()) {
                 Text(
                     text = detail,
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (onKick != null) {
+            Text(
+                text = "Remove",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onKick)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * What has been happening in the party, newest first.
+ *
+ * Shown as a plain list of sentences rather than as a log: the wording comes
+ * from the server already composed, so every listener reads the same thing and
+ * nothing here has to know what any particular action means.
+ */
+@Composable
+private fun ActivityGroup(activity: List<PartyActivity>) {
+    SettingsGroup(header = "Party activity") {
+        activity.forEachIndexed { index, entry ->
+            if (index > 0) RowDivider()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = ROW_INSET, vertical = 12.dp),
+            ) {
+                Text(
+                    text = entry.detail.ifBlank { entry.action },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    text = entry.by,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

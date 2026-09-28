@@ -142,6 +142,21 @@ export class PlaybackState {
     this.updatedAtMs = nowMs();
   }
 
+  /**
+   * Marks the queue as changed, without touching [seq].
+   *
+   * The two counters are separate for a reason the client depends on: [seq] is
+   * "the playhead moved", and a device reacts to it by re-aligning its own
+   * player exactly. A queue edit is not that — nobody's playhead moved, and
+   * treating it as one made every listener seek on somebody else's reorder.
+   * The queue's own counter is what tells a client its copy is stale.
+   */
+  private touchQueue(memberId: string | null): void {
+    this.queueSeq += 1;
+    this.updatedBy = memberId;
+    this.updatedAtMs = nowMs();
+  }
+
   play(memberId: string | null, positionMs: number | null): void {
     const now = nowMs();
     const start = positionMs ?? this.positionAt(now);
@@ -200,10 +215,130 @@ export class PlaybackState {
   }
 
   setQueue(memberId: string | null, queue: Track[], queueIndex: number): void {
-    this.queue = queue.slice(0, this.config.maxQueueLength);
-    this.queueIndex = queueIndex >= 0 && queueIndex < this.queue.length ? queueIndex : -1;
-    this.queueSeq += 1;
-    this.touch(memberId);
+    // A track that is playing is kept as the current one even when the sender's
+    // index says otherwise: the two are separate controls, and a queue arriving
+    // mid-flight from a device that has not yet published its track change would
+    // otherwise move the party to a different song by itself.
+    if (this.track !== null) {
+      const match = queue.findIndex((item) => item.videoId === this.track?.videoId);
+      if (match >= 0) queueIndex = match;
+    }
+
+    if (queueIndex >= 0 && queueIndex < queue.length) {
+      // Past and current are kept whole; upcoming is capped. A device that has
+      // played through an album has a long tail behind it and no reason to lose
+      // it — the queue panel scrolls back — while the part that matters for
+      // "what is next" is bounded.
+      const pastAndCurrent = queue.slice(0, queueIndex + 1);
+      const upcoming = queue.slice(queueIndex + 1, queueIndex + 1 + this.config.maxUpcomingQueue);
+      this.queue = [...pastAndCurrent, ...upcoming];
+      this.queueIndex = queueIndex;
+    } else {
+      this.queue = queue.slice(0, this.config.maxQueueLength);
+      this.queueIndex =
+        queueIndex >= 0 && queueIndex < this.queue.length ? queueIndex : -1;
+    }
+    this.touchQueue(memberId);
+  }
+
+  /**
+   * How many songs are ahead of the one playing, counting from the whole queue
+   * when nothing is current — which is the state a party is in before its first
+   * track, and one where everything in the queue is still to come.
+   */
+  private upcomingCount(): number {
+    if (this.queueIndex < 0) return this.queue.length;
+    return Math.max(0, this.queue.length - 1 - this.queueIndex);
+  }
+
+  /**
+   * Adds songs to the queue, at the end or right after the current one.
+   *
+   * Refused rather than truncated when there is no room, because the sender is
+   * a person who just pressed "add to queue": silently dropping the song they
+   * picked, with nothing on screen to say so, is worse than saying the queue is
+   * full.
+   */
+  addUpcoming(
+    memberId: string | null,
+    tracks: Track[],
+    playNext = false,
+  ): { ok: true } | { ok: false; reason: string } {
+    const slotsLeft = this.config.maxUpcomingQueue - this.upcomingCount();
+    if (slotsLeft <= 0) return { ok: false, reason: 'queue_full' };
+    if (tracks.length === 0) return { ok: false, reason: 'no_tracks' };
+
+    const toAdd = tracks.slice(0, slotsLeft);
+    if (playNext && this.queueIndex >= 0 && this.queueIndex < this.queue.length) {
+      const at = this.queueIndex + 1;
+      this.queue = [...this.queue.slice(0, at), ...toAdd, ...this.queue.slice(at)];
+    } else {
+      this.queue = [...this.queue, ...toAdd];
+    }
+    this.touchQueue(memberId);
+    return { ok: true };
+  }
+
+  /**
+   * Removes one song by id.
+   *
+   * The current track is not removable: it is what the party is listening to,
+   * and taking it out would leave the state pointing at an index that no longer
+   * exists. "Remove" on that row is a different intent — skipping — and it has
+   * its own control.
+   */
+  removeUpcoming(memberId: string | null, videoId: string): boolean {
+    const match = this.queue.findIndex((item) => item.videoId === videoId);
+    if (match < 0 || match === this.queueIndex) return false;
+    this.queue = [...this.queue.slice(0, match), ...this.queue.slice(match + 1)];
+    if (this.queueIndex > match) this.queueIndex -= 1;
+    this.touchQueue(memberId);
+    return true;
+  }
+
+  /** Drops everything after the current track. */
+  clearUpcoming(memberId: string | null): boolean {
+    if (this.queueIndex >= 0) {
+      if (this.queue.length <= this.queueIndex + 1) return false;
+      this.queue = this.queue.slice(0, this.queueIndex + 1);
+    } else {
+      if (this.queue.length === 0) return false;
+      this.queue = [];
+    }
+    this.touchQueue(memberId);
+    return true;
+  }
+
+  /**
+   * Moves one upcoming song to another position.
+   *
+   * Both ends are required to be *after* the current track. A reorder is a
+   * statement about what is coming, and letting one reach back past the needle
+   * would move a song the party is part-way through — a different operation,
+   * with a different name, that nobody asked for.
+   */
+  moveUpcoming(
+    memberId: string | null,
+    fromIndex: number,
+    toIndex: number,
+    videoId: string,
+  ): boolean {
+    let from = fromIndex;
+    if (videoId !== '') {
+      const match = this.queue.findIndex((item) => item.videoId === videoId);
+      if (match < 0) return false;
+      from = match;
+    }
+    if (from < 0 || from >= this.queue.length) return false;
+    if (toIndex < 0 || toIndex >= this.queue.length) return false;
+    if (from <= this.queueIndex || toIndex <= this.queueIndex) return false;
+    if (from === toIndex) return true;
+
+    const item = this.queue[from];
+    const without = [...this.queue.slice(0, from), ...this.queue.slice(from + 1)];
+    this.queue = [...without.slice(0, toIndex), item, ...without.slice(toIndex)];
+    this.touchQueue(memberId);
+    return true;
   }
 
   /** Next (`delta` +1) or previous (`delta` -1). False when the queue has nowhere to go. */
@@ -305,12 +440,34 @@ export class Party {
   touchedAtMs = nowMs();
   /** When the last connected member dropped off, or null while someone is on. */
   emptySinceMs: number | null = nowMs();
+  /**
+   * Whether only the host may drive the music.
+   *
+   * Held here rather than on the playback state because it changes rarely and
+   * `PlaybackState.toWire` rides the heartbeat to every device every few
+   * seconds. It travels with the member list instead, which is only sent when
+   * something about the membership actually changed.
+   *
+   * The default is the behaviour this feature shipped with: everyone controls
+   * the music, and a party that never touches the setting never notices it.
+   */
+  hostOnlyControl = false;
+  /**
+   * This party's own ceiling, which may differ from the server default because
+   * the creator chose it. Rejoining an existing party does not change it.
+   */
+  maxMembers: number;
 
   constructor(
     readonly code: string,
     private readonly config: Config,
+    maxMembers?: number,
   ) {
     this.playback = new PlaybackState(config);
+    this.maxMembers =
+      maxMembers !== undefined && maxMembers >= 2 && maxMembers <= 10
+        ? maxMembers
+        : config.maxMembers;
   }
 
   get occupiedSlots(): number {
@@ -340,8 +497,8 @@ export class Party {
       }
     }
 
-    if (this.members.size >= this.config.maxMembers) {
-      throw new PartyError(409, 'party_full', `This party is full (${this.config.maxMembers} devices).`);
+    if (this.members.size >= this.maxMembers) {
+      throw new PartyError(409, 'party_full', `This party is full (${this.maxMembers} devices).`);
     }
 
     const member = new Member(
@@ -366,6 +523,61 @@ export class Party {
       if (timingSafeEqual(member.token, token)) return member;
     }
     throw new PartyError(401, 'bad_token', 'This device is not a member of that party.');
+  }
+
+  /**
+   * Resizes the party. Host only, and refused by the server from anybody else —
+   * a listener who could raise the ceiling is not governed by it.
+   *
+   * The new size cannot be below the number of people already in: shrinking a
+   * party past its own membership would mean evicting somebody as a side effect
+   * of a settings change.
+   */
+  setMaxMembers(member: Member, maxMembers: number): void {
+    if (!member.isHost) {
+      throw new PartyError(403, 'host_only', 'Only the host can change the party size.');
+    }
+    if (!Number.isFinite(maxMembers) || maxMembers < 2 || maxMembers > 10) {
+      throw new PartyError(422, 'invalid_capacity', 'Party size must be between 2 and 10.');
+    }
+    if (maxMembers < this.members.size) {
+      throw new PartyError(
+        409,
+        'party_too_small',
+        'Party size cannot be smaller than the current member count.',
+      );
+    }
+    this.maxMembers = Math.trunc(maxMembers);
+    this.touch();
+  }
+
+  /**
+   * Restricts the music to the host, or hands it back to everyone.
+   *
+   * Host only, like [setMaxMembers] and for the same reason: a listener who
+   * could turn this off is not restricted by it.
+   */
+  setHostOnlyControl(member: Member, enabled: boolean): void {
+    if (!member.isHost) {
+      throw new PartyError(403, 'host_only', 'Only the host can change who controls the music.');
+    }
+    if (this.hostOnlyControl === enabled) return;
+    this.hostOnlyControl = enabled;
+    this.touch();
+  }
+
+  /**
+   * Whether this member is allowed to drive playback and the queue right now.
+   *
+   * The host always may. Everyone else may until the host says otherwise —
+   * which is the behaviour this feature shipped with and stays the default for
+   * a party that never touches the setting.
+   *
+   * The host is reassigned when a host leaves (see [remove]), so a listener can
+   * find themselves promoted mid-party and immediately allowed through here.
+   */
+  mayControl(member: Member): boolean {
+    return !this.hostOnlyControl || member.isHost;
   }
 
   /**
@@ -450,7 +662,11 @@ export class Party {
     return {
       code: this.code,
       createdAtMs: this.createdAtMs,
-      maxMembers: this.config.maxMembers,
+      maxMembers: this.maxMembers,
+      // Sent here as well as on the members frame: a device arriving has to
+      // learn the setting from the same snapshot as everything else, or its
+      // first frames would draw controls the party is not offering.
+      hostOnlyControl: this.hostOnlyControl,
       members: this.orderedMembers().map((member) => member.toWire()),
       playback: this.playback.toWire(now),
       // A snapshot is the one place the queue always travels: it is what a
@@ -487,11 +703,11 @@ export class PartyStore {
     return this.parties.size;
   }
 
-  create(): Party {
+  create(maxMembers?: number): Party {
     for (let attempt = 0; attempt < 12; attempt += 1) {
       const code = newCode();
       if (!this.parties.has(code)) {
-        const party = new Party(code, this.config);
+        const party = new Party(code, this.config, maxMembers);
         this.parties.set(code, party);
         return party;
       }
