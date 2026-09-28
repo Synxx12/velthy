@@ -938,6 +938,29 @@ class PlaybackService : MediaSessionService() {
      * without knowing the queue was cold.
      */
     private fun restoreLastQueue(player: ExoPlayer) {
+        // The personal queue a party put aside wins over the last-played one,
+        // and this is the only place it can be honoured. A process killed while
+        // in a party comes back with a stash and a last-played queue that both
+        // look restorable, and they are not the same queue: the last-played one
+        // is what the *party* was playing, because that is what was written
+        // down most recently. Restoring it would quietly hand the listener the
+        // jam's music as though it were their own, and drop the stash on the
+        // floor. Taken once, then cleared — see [onLeftParty] for the other
+        // route out of a party.
+        PartyPersonalQueueStash.load()?.let { stashed ->
+            Log.i(
+                "Velthy",
+                "restoring ${stashed.songs.size} stashed personal queue item(s) after a party",
+            )
+            player.setMediaItems(
+                stashed.songs.map { it.toMediaItem() },
+                stashed.index,
+                stashed.positionMs,
+            )
+            PartyPersonalQueueStash.clear()
+            warmRestoredTrack(player)
+            return
+        }
         val last = LastPlayed.load() ?: return
         player.setMediaItems(
             last.songs.map { it.toMediaItem() },

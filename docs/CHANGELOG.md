@@ -10,6 +10,13 @@ Semua pembaruan dan perubahan teknis pada Velthy Android didokumentasikan dalam 
 > 📅 2026-09-27
 > ⚠️ **Severity: Important**
 
+#### ⚡ Peningkatan Kualitas & Performa
+- **Dengar Bareng Tersambung Lebih Cepat**: Saat masuk ke sebuah party, aplikasi mengukur selisih jam dengan server sebelum bisa ikut memutar lagu. Pengukuran itu kini dilakukan dengan lebih banyak percobaan dalam waktu yang lebih singkat, sehingga waktu tunggu sebelum party bisa bertindak berkurang sekitar setengah detik — dan makin cepat pula lagu mulai berbunyi setelah kamu bergabung.
+- **Tombol Putar Tidak Lagi Terasa Menggantung**: Bila party tidak menjawab perintah putar — misalnya koneksi sedang bermasalah — aplikasi kini menyerah menunggu jauh lebih cepat dan langsung memutar lagunya sendiri, sehingga tombol putar terasa merespons alih-alih diam beberapa detik.
+
+#### ✨ Fitur Baru & Tampilan
+- **Antrean Pribadimu Dikembalikan Setelah Dengar Bareng**: Sebelumnya, masuk ke sebuah party berarti antrean yang sedang kamu susun — album, playlist, atau stasiun — langsung tertimpa oleh lagu party dan tidak bisa kembali; satu-satunya jalan adalah mencari halaman itu lagi dari awal. Kini antrean itu disimpan lebih dulu, lengkap dengan posisi lagu dan apakah sedang diputar, lalu dikembalikan persis seperti semula begitu kamu keluar dari party. Simpanan ini bertahan bahkan bila aplikasi tertutup paksa saat kamu masih di dalam party, sehingga musikmu tidak pernah benar-benar hilang.
+
 #### 🐛 Perbaikan Masalah
 - **Lagu Tidak Lagi Bolak-balik Saat Dengar Bareng**: Ketika sebuah lagu habis sendiri sementara kamu sedang dengar bareng, lagu itu dulu bisa berpindah maju lalu ditarik kembali ke lagu yang baru saja selesai — bolak-balik terus tanpa henti, beberapa kali per detik. Penyebabnya adalah perpindahan otomatis di akhir lagu tidak pernah diberitahukan ke party, sehingga aplikasi mengira perangkatmu berjalan sendiri dan berusaha mengembalikannya ke lagu yang sudah selesai itu. Kini perpindahan itu ikut diberitahukan, dengan jeda singkat lebih dulu supaya dua perangkat yang lagunya habis bersamaan tidak saling menimpa. Kalau perangkat lain sudah memindahkan lagu lebih dulu, perangkatmu cukup mengikuti tanpa mengirim perintah tambahan.
 

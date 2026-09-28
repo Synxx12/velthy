@@ -186,6 +186,17 @@ class PartySync(
     /** When the player may next be seeked for drift, having just been. */
     private var driftCooldownUntilMs = 0L
 
+    /**
+     * The party this device was last seen in, so entering and leaving can be
+     * told apart from every other change to the state.
+     *
+     * Read off the state rather than set by the join and leave calls because a
+     * party can also be *restored*: a process killed mid-jam comes back holding
+     * a membership it never asked for, and that arrival has to stash the
+     * personal queue exactly like a hand-joined one does. Null is "not in one".
+     */
+    private var lastPartyCode: String? = null
+
     fun start() {
         jobs += scope.launch {
             ListenTogether.state
@@ -211,8 +222,16 @@ class PartySync(
                 }
                 .distinctUntilChanged()
                 .collect { signal ->
+                    // Entering or leaving, observed from the code itself rather
+                    // than from the join/leave calls — a party restored by a
+                    // cold start arrives here too, and it has to stash and
+                    // restore exactly like one joined by hand.
+                    if (signal.code != lastPartyCode) {
+                        if (signal.code != null) onEnteredParty() else onLeftParty()
+                        lastPartyCode = signal.code
+                    }
                     // Every control this device sent has come back around, so
-                    // the party now describes the world the user made â€” or
+                    // the party now describes the world the user made — or
                     // somebody else has moved it on past ours, which is equally
                     // a reason to stop holding reconcile off.
                     if (signal.seq >= awaitSeq) reconcileQuietUntilMs = 0L
@@ -421,6 +440,49 @@ class PartySync(
     }
 
     // ------------------------------------------------------------ inbound --
+
+    /**
+     * The party is about to take the player over, so the listener's own queue
+     * is put aside first.
+     *
+     * Without this the join is destructive: the party's queue replaces whatever
+     * was playing, and the album or playlist somebody had lined up is gone with
+     * no way back to it but finding the page again. See
+     * [PartyPersonalQueueStash].
+     *
+     * Nothing is stashed when there is nothing to stash — an empty player and no
+     * last-played queue is a listener who had not started listening yet, and
+     * there is no state of theirs to protect.
+     */
+    private fun onEnteredParty() {
+        val exo = player() ?: return
+        if (PartyPersonalQueueStash.stashFromPlayer(exo)) {
+            Log.i(TAG, "entered party ${ListenTogether.state.value.code}; personal queue stashed")
+        }
+    }
+
+    /**
+     * The party has handed the player back, so the listener's own queue goes
+     * where it was.
+     *
+     * Position and playing state are restored too, not just the list: coming
+     * back to the right queue paused at the start would be a second, quieter
+     * version of the same loss.
+     *
+     * The stash is only cleared once it has actually been applied. A restore
+     * that could not run — no player yet, during a teardown — leaves it on disk
+     * for the next launch, which is the same path a process death takes.
+     */
+    private fun onLeftParty() {
+        val stashed = PartyPersonalQueueStash.load() ?: return
+        val exo = player() ?: return
+        Log.i(TAG, "left the party; restoring ${stashed.songs.size} personal queue item(s)")
+        val items = stashed.songs.map { it.toMediaItem() }
+        exo.setMediaItems(items, stashed.index, stashed.positionMs)
+        exo.prepare()
+        if (stashed.wasPlaying) exo.play() else exo.pause()
+        PartyPersonalQueueStash.clear()
+    }
 
     private fun reconcile() {
         val party = ListenTogether.state.value
@@ -834,8 +896,18 @@ class PartySync(
          */
         const val SEEK_REPORT_FLOOR_MS = 1_000L
 
-        /** How long a deferred resume waits for the party before giving up on it. */
-        const val DEFERRED_PLAY_TIMEOUT_MS = 1_800L
+        /**
+         * How long a deferred resume waits for the party before giving up on it.
+         *
+         * The echo normally lands in well under a hundred milliseconds, and the
+         * wait this bounds is the case where it never does — a control dropped,
+         * or a socket that is up in name only. Nothing is gained by being patient
+         * there: the listener pressed play and is listening to silence, and every
+         * extra millisecond is another one of those. Under a second, so a failed
+         * resume reads as a beat rather than as the button not working, and still
+         * several times the round trip a working party needs.
+         */
+        const val DEFERRED_PLAY_TIMEOUT_MS = 900L
 
         /**
          * Long enough to coalesce the burst one tap makes â€” choosing a track
@@ -863,12 +935,17 @@ class PartySync(
          * ordinary case, and both will want to publish the change. This is the
          * window in which the other one's control can arrive first, so the
          * device that speaks is whichever got there a moment sooner rather than
-         * both of them. Short enough that a party of one — where nothing else is
-         * coming — is not left waiting on a track it has already started, and
-         * longer than the round trip a control takes, measured here at well
-         * under 200ms on a good connection.
+         * both of them.
+         *
+         * Deliberately short. Every millisecond here is a millisecond the rest
+         * of the party spends still on the track that just ended, and the thing
+         * being avoided — both devices publishing the same next track — is
+         * harmless when it happens: the server's sequence number settles it and
+         * both devices converge on the same answer either way. So this is a
+         * saving of redundant traffic, not a correctness requirement, and it is
+         * sized accordingly.
          */
-        const val AUTO_ADVANCE_GRACE_MS = 400L
+        const val AUTO_ADVANCE_GRACE_MS = 200L
 
         /** The server's own ceiling; publishing more would only be truncated. */
         const val MAX_PUBLISHED_QUEUE = 500

@@ -507,11 +507,20 @@ object ListenTogether {
     /**
      * A burst on arrival, then a slow trickle. The burst is what makes the first
      * seconds of a party accurate.
+     *
+     * Six pings at 120ms rather than four at 300ms, which is the same number of
+     * round trips in half the time. The point of the burst is to get enough
+     * samples that the *best* one — the smallest round trip, which is what
+     * [ServerClock] picks — is a good one, and that is a question of how many
+     * attempts have been made rather than how long they were spaced. Nothing
+     * here waits for the previous answer before sending the next, so a slower
+     * connection simply has more of them in flight, and the wait before the
+     * party can act on a measured clock drops from about 1.2s to about 0.7s.
      */
     private suspend fun DefaultClientWebSocketSession.pingLoop() {
-        repeat(4) {
+        repeat(PING_BURST_COUNT) {
             ping()
-            delay(300)
+            delay(PING_BURST_STEP_MS)
         }
         while (true) {
             delay(PING_INTERVAL_MS)
@@ -748,5 +757,9 @@ object ListenTogether {
     private val DEFAULT_SERVER: String = BuildConfig.PARTY_SERVER_URL
     private const val PING_INTERVAL_MS = 15_000L
     private const val REPORT_INTERVAL_MS = 10_000L
+
+    /** The connect-time burst — see [pingLoop] for why these numbers. */
+    private const val PING_BURST_COUNT = 6
+    private const val PING_BURST_STEP_MS = 120L
     private const val HEALTH_TIMEOUT_MS = 45_000L
 }

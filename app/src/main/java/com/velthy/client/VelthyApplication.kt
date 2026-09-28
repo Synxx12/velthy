@@ -16,6 +16,7 @@ import com.velthy.client.data.canvas.SpotifyToken
 import com.velthy.client.data.listentogether.ListenTogether
 import com.velthy.client.playback.AudioCache
 import com.velthy.client.playback.LastPlayed
+import com.velthy.client.playback.PartyPersonalQueueStash
 import com.velthy.client.data.innertube.Innertube
 import com.velthy.client.data.innertube.StreamResolver
 import com.velthy.client.data.scrobbling.LastFM
@@ -62,6 +63,10 @@ open class VelthyApplication : Application(), SingletonImageLoader.Factory {
         // Listen Together needs prefs to hand a previous process's party slot
         // back on launch, and a device id that survives a sign-out.
         ListenTogether.init(this)
+        // The listener's own queue, set aside for the length of a party. Prefs
+        // rather than memory because the case it exists for is the process being
+        // killed while in one — see [PartyPersonalQueueStash].
+        PartyPersonalQueueStash.init(this)
         // Registers the daily background release check. KEEP policy, so this is
         // a no-op once the schedule exists — see [UpdateCheckWorker.schedule].
         com.velthy.client.data.UpdateCheckWorker.schedule(this)
