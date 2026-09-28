@@ -12,7 +12,7 @@ Kamu **tidak punya memori** dari sesi sebelumnya. File ini adalah memorimu. Ikut
 
 1. **Baca seluruh file ini** (§0 sampai §8) sebelum menyentuh apa pun.
 2. **Baca `.agents/AGENTS.md`** — aturan changelog & rilis.
-3. **Cek working tree** — harus **bersih**, HEAD `73e92bf` atau lebih baru:
+3. **Cek working tree** — harus **bersih**, HEAD `67315b1` atau lebih baru:
    ```cmd
    cd /d "D:\Vs code\Velthy"
    git status --short
@@ -22,8 +22,7 @@ Kamu **tidak punya memori** dari sesi sebelumnya. File ini adalah memorimu. Ikut
    ```cmd
    gradlew.bat compileDevDebugKotlin --console=plain 2>&1 | findstr /R /C:"BUILD SUCCESSFUL" /C:"BUILD FAILED" /C:"^e: "
    ```
-5. **TANYA USER** apa yang mau dikerjakan berikutnya (§3 daftar permintaan yang belum selesai,
-   §3a sudah ada daftar fitur party v1.7 + blocker-nya).
+5. **TANYA USER** apa yang mau dikerjakan berikutnya (§3 daftar permintaan yang belum selesai).
 6. **JANGAN commit** sampai user bilang. Lihat §0.
 
 **Sudah selesai & sudah di-commit** (jangan dikerjakan ulang):
@@ -31,13 +30,13 @@ Kamu **tidak punya memori** dari sesi sebelumnya. File ini adalah memorimu. Ikut
 - Kurangi jeda party + Personal Queue Stash (§1a, §1b, §1e) — `7e215f3`
 - `startup.mjs` auto-pull + graceful shutdown fix (§1c) — `36b8fa4`
 - Handoff docs + `.gitignore` — `73e92bf`
+- **Party v1.7 lengkap** (shared queue, host controls, activity feed, QR, preview) — `67315b1`
 
-**Belum dikerjakan:** §3a (sisa fitur party v1.7), §3b (peningkatan backend).
-**Blocker:** §3a — `QueueTier` tidak ada di Velthy.
+**Belum dikerjakan:** §3 (lihat daftar di bawah — sebagian besar sudah selesai di `67315b1`).
 
 ---
 
-Repositori: `D:\Vs code\Velthy` — branch `main`, HEAD `73e92bf` (party stash + backend + docs)
+Repositori: `D:\Vs code\Velthy` — branch `main`, HEAD `67315b1` (party v1.7 lengkap)
 Backend: `D:\Vs code\Velthy\backend-nest` (NestJS + `ws`, mandiri)
 Sumber referensi: `D:\Vs code\BitChord-latest` — **tag `v1.7`** (sudah di-checkout)
 
@@ -62,13 +61,16 @@ Sumber referensi: `D:\Vs code\BitChord-latest` — **tag `v1.7`** (sudah di-chec
 ## 1. STATUS WORKING TREE — **BERSIH** (semua sudah di-commit)
 
 ```
-(e416134..73e92bf)
+(e416134..67315b1)
 7e215f3 feat(party): antrean pribadi pulih setelah dengar bareng + jeda party dipersingkat
 36b8fa4 fix(backend): startup.mjs auto-pull opsional + drain shutdown yang benar
 73e92bf chore: abaikan file Signature* + dokumen handoff party
+ada601e docs: perbarui handoff party pasca-commit
+67315b1 feat(party): antrean bersama, kontrol host, activity feed, QR & preview
 ```
 
-Semua sudah **build hijau** dan **backend 16/16 test lulus**.
+Semua sudah **build hijau**, **31/31 unit test backend lulus**, **159 test klien lulus**,
+dan **smoke test end-to-end 15 langkah lulus**.
 
 ### 1a. `PartySync.kt` — jeda & anti-osilasi
 | Perubahan | Nilai |
@@ -151,79 +153,77 @@ Perbaikan: `PartySync.onAutoAdvance()` + hook di `PlaybackService.onMediaItemTra
 
 ---
 
-## 3. YANG BELUM DIKERJAKAN — PERMINTAAN USER
+## 3. STATUS PERMINTAAN USER
 
-### 3a. Party listen di-update seperti BitChord v1.7 ⬜ BELUM
+### 3a. Party listen di-update seperti BitChord v1.7 ✅ SELESAI (commit `67315b1`)
 User: *"di party listen itu di update kyk bitchord sekarang"*
 
-**Gap yang sudah dipetakan (dari riset v1.7):**
-
-| Fitur v1.7 | Velthy | File v1.7 |
+| Fitur v1.7 | Velthy | Catatan |
 |---|---|---|
-| **`PartyPersonalQueueStash`** — simpan antrean pribadi sebelum masuk party, pulihkan saat keluar | ✅ **SELESAI** (§1e) | `playback/PartyPersonalQueueStash.kt` |
-| **Shared queue 25 lagu** + delta (`queueAdd`/`queueRemove`/`queueClear`/`queueMove`) | ❌ tidak ada | `PartySync.kt` (`MAX_PARTY_UPCOMING_QUEUE = 25`) |
-| **Activity feed** — 100 entri, `PartyActivity(action, by, atMs, detail)` | ❌ tidak ada | `ListenTogether.kt` (`_activity`) |
-| **Host controls** — `hostOnlyControl`, `controlsLocked`, `kick`, `setMaxMembers` | ❌ tidak ada | `ListenTogether.kt` |
-| **Custom server editor** — validasi + probe + fallback | ⚠️ parsial | `ui/screens/PartyServerEditor.kt` |
-| **QR code** | ❌ tidak ada | `ui/components/QrCode.kt` (161 baris) |
-| **Sheets** (Create/Join/Confirm/Invite + `GlowingAvatar`, `MemberAvatarStack`) | ❌ tidak ada | `ui/screens/ListenTogetherSheets.kt` (732 baris) |
-| **Members sheet di player** | ❌ tidak ada | `ui/player/ListenTogetherMembersSheet.kt` (207 baris) |
-| **Invite link** `?server=` + preview sebelum join | ⚠️ parsial | `JamInviteLink.kt` |
+| **`PartyPersonalQueueStash`** | ✅ SELESAI (`7e215f3`) | §1e |
+| **Shared queue 25 lagu** + delta | ✅ SELESAI | `MAX_PARTY_UPCOMING_QUEUE = 25` |
+| **Activity feed** — 100 entri | ✅ SELESAI | `ListenTogether.activity` |
+| **Host controls** — `hostOnlyControl`, `controlsLocked`, `kick`, `setMaxMembers` | ✅ SELESAI | server + klien |
+| **Custom server editor** — validasi | ✅ SELESAI | `normalizeServerAddress` (probe+fallback belum) |
+| **QR code** | ✅ SELESAI | ZXing 3.5.3 ditambahkan |
+| **Sheets** (Confirm/Invite) | ✅ SELESAI | `ListenTogetherSheets.kt` |
+| **Members sheet di player** | ✅ SELESAI | `ListenTogetherMembersSheet.kt` |
+| **Invite link** `?server=` + preview | ✅ SELESAI | `ParsedJamInvite` + `/preview` |
 
-### ⚠️ BLOCKER BESAR untuk shared queue & host controls
+### Cara `QueueTier` diselesaikan (PENTING untuk sesi berikutnya)
 
-Velthy **TIDAK PUNYA** `QueueTier` / `queueEntryId` / `isExplicit` di `Song`, sedangkan
-v1.7 memakainya di **11 file, 78 referensi**. Ini prasyarat yang harus diputuskan dulu:
+Velthy **tidak** menambahkan `QueueTier` (opsi (b) dari handoff lama). Yang dipakai:
 
-| Field v1.7 | Velthy | Dampak |
-|---|---|---|
-| `queueTier: QueueTier` (USER_QUEUE/CONTEXT/AUTOPLAY) | ❌ | Shared queue 25 lagu bergantung padanya untuk memisahkan antrean user vs AutoPlay |
-| `queueEntryId: String?` | ❌ | Identitas baris antrean (satu lagu bisa muncul 2×) |
-| `isExplicit: Boolean?` | ❌ | Badge "E" di kredits |
+- `Song.fromAutoplay` sudah ada di Velthy dan sudah dipakai UI antrean
+  (`autoplaySectionStart`) — jadi ia yang menggantikan batas manual/AutoPlay.
+- `PartyTrack.fromAutoplay` ditambahkan ke wire, sehingga antrean yang diterima
+  perangkat lain tetap punya batas section-nya.
+- **Yang tidak dipakai dari v1.7:** `queueEntryId` (satu lagu bisa muncul 2×) dan
+  `isExplicit`. Keduanya tidak dibutuhkan fitur ini. Antrean party mengidentifikasi
+  baris lewat `videoId`, jadi **satu lagu yang sama dua kali di antrean party akan
+  dianggap satu baris** saat `queueRemove`/`queueMove` — batasan yang diketahui,
+  bukan bug yang belum ditemukan.
+- v1.7 memakai `detectSingleMove` dengan `baseOffset`; versi Velthy tidak
+  (offset selalu 0 karena indeks sudah relatif terhadap antrean party).
 
-**Opsi:** (a) tambahkan `QueueTier` ke `Song` Velthy (port besar, menyentuh ~11 file),
-(b) shared queue versi sederhana tanpa tier (hanya hitung 25 dari `fromAutoplay`),
-(c) lewati shared queue, kerjakan fitur lain dulu.
-
-**Ukuran file (Velthy vs v1.7):**
-```
-ListenTogether.kt            765  vs 1662   (+897)
-PartyModels.kt               142  vs  188
-PartySync.kt                 936  vs 1165
-ListenTogetherScreen.kt      695  vs 1139
-PartyPersonalQueueStash.kt     -  vs  189   (baru)
-ListenTogetherSheets.kt        -  vs  732   (baru)
-ListenTogetherMembersSheet.kt  -  vs  207   (baru)
-QrCode.kt                      -  vs  161   (baru)
-```
-
-**Dependency:** `QrCode.kt` butuh **ZXing** — Velthy **belum punya**.
-v1.7 pakai `implementation("com.google.zxing:core:3.5.3")`.
-
-**PENTING:** backend Velthy (NestJS) **tidak punya** `queueAdd`/`queueRemove`/`queueClear`/
-`queueMove` — riset backend mengonfirmasi hanya ada `setQueue` (full replace). Jadi port shared
-queue butuh **kerja backend juga**.
-
-### 3b. Peningkatan backend ⬜ BELUM
+### 3b. Peningkatan backend ✅ SELESAI (commit `67315b1`)
 User: *"backendnya juga perlu peningkatatan kyknya"*
-Belum ada lingkup konkret. Kandidat dari riset:
-- Queue deltas (lihat 3a) — **wajib** untuk shared queue
+
+Yang dikerjakan:
+- Queue deltas (`queueAdd`/`queueRemove`/`queueClear`/`queueMove`)
 - Activity feed broadcast (`{type:'activity'}` frame)
 - Host privileges (`hostOnlyControl`, `kick`, `setMaxMembers`)
-- `maxQueueLength` saat ini 500; v1.7 pakai 25 upcoming
+- `JAM_MAX_UPCOMING_QUEUE` (default 25); `maxQueueLength` diturunkan jadi `1 + upcoming`
+- Endpoint `GET /api/parties/:code/preview` (tanpa auth)
+- `create` menerima `maxMembers` (2–10)
+- `seq` vs `queueSeq` dipisah: suntingan antrean tidak menaikkan `seq`
+- Test: **31/31** unit + **smoke 15 langkah** (`node checks/smoke.mjs`, butuh server jalan)
 
 ### 3c. Auto-update di `startup.mjs` ✅ SELESAI (commit `36b8fa4`)
 Lihat §1c.
+
+### 3d. Belum dikerjakan (sisa kecil)
+- **Probe + fallback server** (v1.7 `ServerConnectionState.CustomFallback`): Velthy
+  hanya memvalidasi alamat dan punya health check sederhana. Belum ada fallback
+  otomatis ke server bawaan saat server kustom mati.
+- **`GlowingAvatar` / avatar remote di sheets**: Velthy sengaja memakai monogram
+  (lihat komentar di `MemberRow`), bukan URL avatar.
+- **`PartyServerEditor.kt` sebagai layar terpisah**: Velthy menaruh editor di
+  dalam `ListenTogetherScreen`, bukan file sendiri.
 
 ---
 
 ## 4. HASIL RISET BACKEND (referensi cepat)
 
-**Frame types:** `welcome`, `state`, `queue`, `members`, `pong`, `error`, `bye`
+**Frame types:** `welcome`, `state`, `queue`, `members`, `pong`, `error`, `bye`, `activity`
 **Client → server:** `ping`, `sync`, `syncQueue`, `report`, `control`
-**Control actions:** `play`, `pause`, `seek`, `setTrack`, `setQueue`, `next`, `previous`
+**Control actions:** `play`, `pause`, `seek`, `setTrack`, `setQueue`, `queueAdd`,
+`queueRemove`, `queueClear`, `queueMove`, `next`, `previous`, `kick`,
+`setMaxMembers`, `setHostOnlyControl`
 **REST:** `GET /`, `GET /healthz`, `GET /api/time`, `POST /api/parties`,
-`POST /api/parties/:code/join`, `GET /api/parties/:code`, `POST /api/parties/:code/leave`
+`POST /api/parties/:code/join`, `GET /api/parties/:code`,
+`GET /api/parties/:code/preview`, `POST /api/parties/:code/leave`
+
 
 **Config (semua di `src/common/config.ts`):**
 | Env | Default | Range |
@@ -265,28 +265,44 @@ dalam hitungan detik.
 ## 6. VERIFIKASI YANG SUDAH LULUS
 
 - `gradlew.bat compileDevDebugKotlin` → **BUILD SUCCESSFUL**
-- `npm test` (backend) → **16 pass, 0 fail**
+- `gradlew.bat testDevDebugUnitTest` → **BUILD SUCCESSFUL** (159 test, termasuk
+  `PartyQueueTest.kt` — move detection, alamat server, invite link)
+- `npm test` (backend) → **31 pass, 0 fail**
+- `npm run build` (backend) → bersih
+- `node checks/smoke.mjs` (server jalan di PORT=33183) → **SMOKE OK**, 15 langkah:
+  REST + health + create + bad token + bad code + welcome + pong + state + sync +
+  queueAdd + queueMove + host-only + listener refused + preview + kick
 - `node --check startup.mjs` → OK
 - `GIT_PULL=1 node startup.mjs` → terdeteksi "no .git here", server tetap naik normal
   (`listening on 0.0.0.0:33183`), cloudflared start
+
+**Catatan menjalankan smoke test:**
+```cmd
+cd /d "D:\Vs code\Velthy\backend-nest"
+:: PORT ada di .env (33183), BUKAN 8080. set harus tanpa spasi:
+set "PORT=33183" && node checks/smoke.mjs
+```
+Server dijalankan terpisah (`node startup.mjs`) dan memegang port itu. Matikan dengan
+`taskkill /PID <pid> /F` setelah selesai — jangan biarkan proses lama menahan port,
+karena server berikutnya akan gagal `EADDRINUSE`.
 
 ---
 
 ## 7. LANGKAH BERIKUTNYA (urutan yang disarankan)
 
-1. ~~Tunggu instruksi commit dari user.~~ **Selesai** — commit `7e215f3`, `36b8fa4`, `73e92bf`.
-2. **Uji di perangkat** (`.\dev.ps1`): buat party, mainkan 3–4 lagu **sampai habis otomatis**,
-   baca log, pastikan osilasi hilang. Sekaligus uji antrean pribadi: susun antrean, masuk party,
-   keluar party → antrean harus kembali utuh (daftar, posisi, status putar).
-3. **Tentukan lingkup 3a (party v1.7)** — ini besar (~2.000+ baris klien + kerja backend).
-   Tanyakan ke user mau yang mana dulu:
-   - Shared queue 25 (butuh backend)
-   - ~~Personal queue stash~~ ✅ selesai
-   - Activity feed (butuh backend)
-   - Host controls (butuh backend)
-   - QR + sheets (murni klien, butuh ZXing)
-   - Members sheet di player (murni klien)
-4. **Tentukan lingkup 3b (backend)** setelah 3a jelas — keduanya saling terkait.
+1. ~~Tunggu instruksi commit dari user.~~ **Selesai** — semua sudah di-commit (`67315b1`).
+2. ~~Party v1.7~~ ✅ **SELESAI** (`67315b1`).
+3. **Uji di perangkat** (`.\dev.ps1`) — belum pernah dijalankan untuk fitur party v1.7.
+   Urutan yang disarankan:
+   - Buat party, mainkan 3–4 lagu **sampai habis otomatis**; pastikan osilasi hilang
+   - Susun antrean, masuk party, keluar → antrean pribadi harus kembali utuh
+   - Dua perangkat: tambah lagu dari satu perangkat → harus muncul di yang lain
+   - Seret satu baris antrean → perangkat lain hanya bergeser sekali, tanpa lagu tersendat
+   - Nyalakan **Only I control the music** → perangkat lain tidak bisa mengganti lagu,
+     tapi tetap bisa menjeda perangkatnya sendiri
+   - Keluarkan satu anggota → perangkat itu keluar dan tidak bisa masuk lagi sehari
+   - Buka QR, pindai dari perangkat lain → kode terisi otomatis
+4. **Sisa kecil** (§3d): probe + fallback server otomatis ke server bawaan.
 
 ---
 
@@ -297,10 +313,17 @@ dalam hitungan detik.
 cd /d "D:\Vs code\Velthy"
 gradlew.bat compileDevDebugKotlin --console=plain 2>&1 | findstr /R /C:"BUILD SUCCESSFUL" /C:"BUILD FAILED" /C:"^e: "
 
+:: Test klien
+gradlew.bat testDevDebugUnitTest --console=plain 2>&1 | findstr /R /C:"BUILD SUCCESSFUL" /C:"BUILD FAILED" /C:"FAILED"
+
 :: Backend
 cd /d "D:\Vs code\Velthy\backend-nest"
 npm test
+npm run build
 set GIT_PULL=1 && node startup.mjs
+
+:: Smoke test end-to-end (server harus jalan dulu; PORT dari .env = 33183)
+set "PORT=33183" && node checks/smoke.mjs
 
 :: Perangkat
 adb devices -l
