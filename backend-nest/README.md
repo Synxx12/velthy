@@ -138,6 +138,107 @@ docker run -p 8080:8080 velthy-party
 
 ---
 
+## Deploying an update (and knowing it landed)
+
+A restart does **not** mean new code is running. There are three separate things
+that can be stale, and each fails quietly:
+
+| What can be stale | What it looks like | What fixes it |
+|---|---|---|
+| The files on disk | the panel pulled, the code did not change | `GIT_PULL=1` (or pull yourself) |
+| `dist/` — the compiled output | sources are new, the server runs the previous build | automatic: rebuilt when `src/` is newer |
+| The process | it is running the code it started with | restart |
+
+The middle one is the trap: `dist/` is what the server actually loads, and it is
+*preferred* over `src/`, so a fresh checkout beside an old build changes nothing
+at all — no error, no warning, just a server that is healthy and out of date.
+`startup.mjs` now compares the two and rebuilds when `src/` is newer, so a
+restart always runs at least the code that is on disk.
+
+### 1. Let the server update itself
+
+Set these on the server (Pterodactyl: **Startup** tab, or `.env`):
+
+```bash
+GIT_PULL=1
+GIT_URL=https://github.com/Synxx12/velthy.git
+GIT_BRANCH=main
+```
+
+Then **restart**. The server fetches, checks the new commit out, reinstalls only
+if `package-lock.json` moved, and rebuilds. The log says which of those happened:
+
+```
+[startup] 67315b1 -> d5ef700 on origin/main.
+[startup] updated and rebuilt.
+```
+
+`GIT_URL` is only needed once, on a tree that was uploaded rather than cloned —
+the server sets up `.git` itself and updates normally from then on. `.env` and
+`node_modules/` are untouched by an update; a local edit to a *tracked* file
+stops the update rather than being overwritten.
+
+Without `GIT_PULL`, the server still rebuilds a stale `dist/`, so it never runs
+a build older than its own sources — it just will not fetch anything new.
+
+### 2. Check what is actually running
+
+From the repository, against the deployed server:
+
+```bash
+npm run version                                  # the built-in server
+npm run version -- https://api.velthy.my.id      # or any server
+```
+
+It prints both sides and exits non-zero when the server is behind:
+
+```
+repo:   1.0.0 (d5ef700)
+server: 1.0.0 (unknown) · protocol 2
+        https://api.velthy.my.id
+
+STALE — the server is missing: queue-deltas, activity-feed, host-controls
+```
+
+Or by hand — the banner names the build and every capability it has:
+
+```bash
+curl -s https://api.velthy.my.id/ | jq
+{
+  "service": "velthy-listen-together",
+  "version": "1.0.0",
+  "commit": "d5ef700…",
+  "protocol": 2,
+  "features": ["queue-deltas", "activity-feed", "host-controls",
+               "party-preview", "per-party-size"],
+  …
+}
+```
+
+A server missing a feature from that list is running an older build. That is the
+only reliable way to tell from outside: an out-of-date server answers `/healthz`
+with `ok: true`, accepts sockets, and otherwise looks exactly like a current one.
+
+### 3. The panel's own startup command
+
+A generic Pterodactyl Node egg runs its own command, and some of them dispatch on
+the main file with `[[ "${MAIN_FILE}" == "*.js" ]]` — quoted, so it is a literal
+comparison that never matches anything, and **every** server on that egg is run
+through `ts-node` instead of `node`. `ts-node` is not a dependency of this
+project and is not compatible with every Node version, so the process can die
+before a single line of `startup.mjs` runs.
+
+If the log shows `ts-node --esm` rather than `node`, set the startup command
+explicitly to:
+
+```
+node startup.mjs
+```
+
+That is the whole fix, and it is worth doing regardless of which egg is in use.
+
+---
+
 ## Cloudflare Tunnel (token)
 
 The quickest way to get a party reachable over HTTPS/WSS from a phone on mobile

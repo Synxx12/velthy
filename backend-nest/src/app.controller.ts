@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common';
 
 import { nowMs } from './common/clock.js';
+import { BUILD, PROTOCOL } from './common/build.js';
 import { parseJoinRequest } from './common/protocol.js';
 import { isWellFormedCode, PartyError } from './party/party.js';
 import { PartyService } from './party/party.service.js';
@@ -28,11 +29,23 @@ export class AppController {
   /** Injected by explicit token; see `PartyService` for why not by type. */
   constructor(@Inject(PartyService) private readonly parties: PartyService) {}
 
-  /** Service banner: what this is, and how many parties it is holding. */
+  /**
+   * Service banner: what this is, which build it is, and what it can do.
+   *
+   * The capability list is the part worth having. A server that is running an
+   * older build looks *healthy* from the outside — it answers here, it answers
+   * `/healthz`, its socket accepts connections — and the only sign that the
+   * party features are missing is a control that comes back refused, which
+   * reads as a client bug. So the features are named, and a client (or a person
+   * with `curl`) can tell "this server cannot do shared queues" from "this
+   * server is broken".
+   */
   @Get()
   root(): Record<string, unknown> {
     return {
       service: 'velthy-listen-together',
+      ...BUILD,
+      protocol: PROTOCOL,
       maxMembers: this.parties.config.maxMembers,
       parties: this.parties.store.size,
       serverMs: nowMs(),
@@ -41,7 +54,7 @@ export class AppController {
 
   @Get('healthz')
   health(): Record<string, unknown> {
-    return { ok: true, serverMs: nowMs() };
+    return { ok: true, ...BUILD, serverMs: nowMs() };
   }
 
   /**

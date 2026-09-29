@@ -16,7 +16,8 @@
     "test": "node --import tsx --test checks/*.test.ts",
     "smoke": "node checks/smoke.mjs",
     "lint": "tsc --noEmit",
-    "format": "prettier --write \"{src,checks,scripts}/**/*.mjs\" \"{src,checks}/**/*.ts\" startup.mjs"
+    "format": "prettier --write \"{src,checks,scripts}/**/*.mjs\" \"{src,checks}/**/*.ts\" startup.mjs",
+    "version": "node checks/version.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",

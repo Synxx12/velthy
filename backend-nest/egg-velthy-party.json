@@ -148,6 +148,36 @@
             "user_editable": true,
             "rules": "nullable|string|max:2000",
             "field_type": "text"
+        },
+        {
+            "name": "Update from git",
+            "description": "Set to 1 and the server updates ITSELF at startup: it fetches the branch below, checks the new commit out, reinstalls if the lockfile moved, and rebuilds. Without this, a restart runs the code on disk (and rebuilds dist/ if src/ is newer) but never fetches anything new. The log says which happened.",
+            "env_variable": "GIT_PULL",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:0,1",
+            "field_type": "text"
+        },
+        {
+            "name": "Repository URL",
+            "description": "Only needed once, on a server whose files were uploaded rather than cloned: the server sets up .git itself and follows this repository from then on. .env and node_modules are never touched by an update.",
+            "env_variable": "GIT_URL",
+            "default_value": "https://github.com/Synxx12/velthy.git",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:300",
+            "field_type": "text"
+        },
+        {
+            "name": "Git branch",
+            "description": "The branch the server follows when updating from git.",
+            "env_variable": "GIT_BRANCH",
+            "default_value": "main",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:100",
+            "field_type": "text"
         }
     ]
 }

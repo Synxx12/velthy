@@ -35,7 +35,14 @@
  * Run:  node startup.mjs
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -131,6 +138,64 @@ function rebuild() {
 }
 
 /**
+ * Give an uploaded tree the repo identity it was never given.
+ *
+ * The question this answers is "which repository is this server following?" —
+ * and the honest answer for a deployment whose files were uploaded rather than
+ * cloned is that it does not have one. `git pull` reads `remote.origin.url` out
+ * of `.git/config`; no `.git` means no URL, no branch, and no update is
+ * possible. Nothing about GitHub can fix that from its side: a repository
+ * cannot reach into a machine that never told it where it is.
+ *
+ * So it is told, once, through `GIT_URL`. This writes the same three lines a
+ * `git clone` would have — an init, a remote, and the branch's tip — and from
+ * then on the ordinary update path above applies.
+ *
+ * ## What this does not touch
+ *
+ * `reset --hard` restores *tracked* files to the branch's copy and leaves
+ * everything else alone. So `.env` (a credential the repo ignores), the whole
+ * of `node_modules/`, and any file somebody put here by hand all survive — the
+ * experiment in `checks/` asserts exactly that. What does not survive is a
+ * local edit to a file the repo also tracks, which is why [autoUpdate] refuses
+ * to run against a dirty tree at all.
+ *
+ * @return true when `.git` now exists and points at a fetched commit.
+ */
+function bootstrapRepo(url, branch) {
+  if (!capture('git', ['--version'])) {
+    console.warn('[startup] git is not available, so the repository cannot be set up.');
+    return false;
+  }
+
+  console.log(`[startup] no .git here -- setting this tree up to follow ${url} (${branch}).`);
+  if (!run('git', ['init', '-q', '-b', branch])) {
+    console.warn('[startup] git init failed.');
+    return false;
+  }
+  if (!run('git', ['remote', 'add', 'origin', url])) {
+    console.warn('[startup] could not add the remote.');
+    return false;
+  }
+  // Shallow on purpose: a server needs the tip of one branch, not the history
+  // of a repository it will never commit to. It also makes the first fetch
+  // seconds rather than minutes.
+  if (!run('git', ['fetch', '-q', '--depth=1', 'origin', branch])) {
+    console.warn('[startup] could not fetch from that repository -- check GIT_URL and the branch.');
+    return false;
+  }
+  if (!run('git', ['reset', '--hard', 'FETCH_HEAD'])) {
+    console.warn('[startup] fetched, but could not check the files out.');
+    return false;
+  }
+  // Shallow fetches do not update `origin/<branch>` the way a full one does, so
+  // the ref the update path compares against is written here explicitly.
+  run('git', ['update-ref', `refs/remotes/origin/${branch}`, 'FETCH_HEAD']);
+  console.log('[startup] repository set up; future boots can update from it.');
+  return true;
+}
+
+/**
  * Bring the checkout up to date, then rebuild -- before anything is loaded.
  *
  * Off by default, and switched on with `GIT_PULL=1`. That is deliberate: this
@@ -138,6 +203,11 @@ function rebuild() {
  * on a server that exists to follow a branch and the wrong thing on a
  * workstation somebody is in the middle of editing. A deployment that wants it
  * sets the flag once.
+ *
+ * `GIT_URL` is what makes that possible on a deployment whose files were
+ * uploaded rather than cloned -- see [bootstrapRepo]. It is only read when
+ * there is no `.git` to read a remote from, so setting it on a real checkout
+ * changes nothing.
  *
  * Every failure is survivable and every one of them is only a warning. The
  * server starting on the code it already has is always better than the server
@@ -151,27 +221,46 @@ function rebuild() {
  */
 function autoUpdate() {
   if (!flagOn('GIT_PULL')) {
-    console.log('[startup] GIT_PULL not set -- using the code on disk as-is.');
-    return;
-  }
-  if (!existsSync(join(here, '.git'))) {
+    // Said plainly, because this is the setting whose absence makes a deploy
+    // look like it silently did nothing: the panel pulls the repository, this
+    // server never does, and the sources it starts from are whatever the panel
+    // left behind. [loadBootstrap] still rebuilds when those sources are newer
+    // than the build, so the code that runs is at least the code on disk.
     console.log(
-      '[startup] GIT_PULL is set but there is no .git here -- nothing to pull.\n' +
-        '          Uploaded deployments have no history to follow; clone the\n' +
-        '          repository instead if you want this to work.',
+      '[startup] GIT_PULL not set -- this server does not update itself.\n' +
+        '          It will run the code on disk, rebuilding dist/ if src/ is newer.',
     );
-    return;
-  }
-  if (!capture('git', ['--version'])) {
-    console.warn('[startup] GIT_PULL is set but git is not available -- skipping.');
     return;
   }
 
   const branch = process.env.GIT_BRANCH?.trim() || 'main';
   const remote = process.env.GIT_REMOTE?.trim() || 'origin';
+  const url = process.env.GIT_URL?.trim() || '';
+
+  // The one case a repository can be pointed at from outside: an uploaded tree
+  // that has no identity of its own yet.
+  if (!existsSync(join(here, '.git'))) {
+    if (!url) {
+      console.log(
+        '[startup] GIT_PULL is set but there is no .git here -- nothing to pull.\n' +
+          '          Set GIT_URL to the repository this server should follow and it\n' +
+          '          will be set up on the next start; see the README.',
+      );
+      return;
+    }
+    if (!bootstrapRepo(url, branch)) {
+      console.warn('[startup] starting on the code already here.');
+      return;
+    }
+  }
+
+  if (!capture('git', ['--version'])) {
+    console.warn('[startup] GIT_PULL is set but git is not available -- skipping.');
+    return;
+  }
 
   // A dirty tree is not an error to report at every boot -- it is the normal
-  // state of a server somebody has patched by hand. Pulling into it would
+  // state of a server somebody has patched by hand. Checking out over it would
   // either fail or overwrite their change, so neither is attempted.
   const dirty = capture('git', ['status', '--porcelain']);
   if (dirty === null) {
@@ -181,36 +270,45 @@ function autoUpdate() {
   if (dirty.length > 0) {
     console.warn(
       `[startup] the working tree has local changes (${dirty.split('\n').length} file(s));\n` +
-        '          not pulling, because the update would fight them.',
+        '          not updating, because it would overwrite them.\n' +
+        '          Commit or discard them, or delete .git to start following the\n' +
+        '          branch again from scratch.',
     );
     return;
   }
 
-  if (!run('git', ['fetch', '--prune', remote, branch])) {
+  if (!run('git', ['fetch', '-q', '--prune', remote, branch])) {
     console.warn('[startup] git fetch failed -- starting on the code already here.');
     return;
   }
 
-  const behind = capture('git', ['rev-list', '--count', `HEAD..${remote}/${branch}`]);
-  if (behind === null) {
+  // Compared by commit id rather than by `rev-list --count`. A shallow fetch
+  // has no history to count through, and this deployment's first fetch is
+  // shallow by design -- so the count would be a number nobody could trust.
+  const local = capture('git', ['rev-parse', 'HEAD']);
+  const target = capture('git', ['rev-parse', `refs/remotes/${remote}/${branch}`]);
+  if (local === null || target === null) {
     console.warn(`[startup] could not compare against ${remote}/${branch} -- skipping.`);
     return;
   }
-  if (behind === '0') {
-    console.log(`[startup] already up to date with ${remote}/${branch}.`);
+  if (local === target) {
+    console.log(`[startup] already up to date with ${remote}/${branch} (${local.slice(0, 7)}).`);
     return;
   }
 
-  console.log(`[startup] ${behind} new commit(s) on ${remote}/${branch}; updating.`);
+  console.log(`[startup] ${local.slice(0, 7)} -> ${target.slice(0, 7)} on ${remote}/${branch}.`);
   const lockBefore = existsSync(join(here, 'package-lock.json'))
     ? readFileSync(join(here, 'package-lock.json'), 'utf8')
     : '';
 
-  // Fast-forward only. A merge commit on a server nobody is watching is how a
-  // deployment ends up in a state its own history cannot explain, and a
-  // conflict here would leave the tree half-updated.
-  if (!run('git', ['pull', '--ff-only', remote, branch])) {
-    console.warn('[startup] could not fast-forward -- starting on the code already here.');
+  // A hard checkout rather than a merge. There is nothing here to merge with:
+  // the tree is clean by the check above, this process holds no commits of its
+  // own, and a merge commit on a server nobody is watching is how a deployment
+  // ends up in a state its own history cannot explain. The files the repo does
+  // not track -- `.env`, `node_modules/`, anything hand-written -- are outside
+  // this either way.
+  if (!run('git', ['reset', '--hard', `refs/remotes/${remote}/${branch}`])) {
+    console.warn('[startup] could not check out the new commit -- starting on the code already here.');
     return;
   }
 
@@ -262,6 +360,67 @@ function loadEnvFile() {
 }
 
 /**
+ * The newest modification time under a path, or 0 when it cannot be read.
+ *
+ * Recursive, because a build is driven by every file under `src/` rather than by
+ * any one of them. Skipping `node_modules`, `.git` and `dist` keeps the walk
+ * cheap: those are the three directories that can be large and none of them is a
+ * source of the compiled output.
+ */
+function newestMtimeMs(path, depth = 0) {
+  if (depth > 12) return 0;
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch {
+    return 0;
+  }
+  if (!stats.isDirectory()) return stats.mtimeMs;
+
+  let newest = 0;
+  let entries;
+  try {
+    entries = readdirSync(path, { withFileTypes: true });
+  } catch {
+    return newest;
+  }
+  for (const entry of entries) {
+    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+    newest = Math.max(newest, newestMtimeMs(join(path, entry.name), depth + 1));
+  }
+  return newest;
+}
+
+/**
+ * Whether `dist/` is older than the sources it is supposed to be built from.
+ *
+ * This is the check whose absence made a deploy look like it worked. The panel
+ * pulls new code into `src/`, the old `dist/` is still there, and [loadBootstrap]
+ * prefers `dist/` -- so the process starts happily on the *previous* build, with
+ * no error anywhere and no way to tell from outside. "Restarted and nothing
+ * changed" is exactly that.
+ *
+ * Modification times are what git gives us: a checkout stamps the files it
+ * rewrites, and `tsc` stamps everything it emits, so a source newer than the
+ * build means the build is behind. Nothing is inferred from version numbers or
+ * hashes -- only from the files on this disk.
+ */
+function distIsStale() {
+  const dist = join(here, 'dist');
+  if (!existsSync(join(dist, 'bootstrap.js'))) return true;
+
+  const built = newestMtimeMs(dist);
+  const sources = Math.max(
+    newestMtimeMs(join(here, 'src')),
+    // The build's own configuration: a changed target or module setting is a
+    // reason to re-emit, and it is not under src/.
+    newestMtimeMs(join(here, 'tsconfig.json')),
+  );
+  if (sources === 0) return false; // no sources to compare against
+  return sources > built;
+}
+
+/**
  * The module that actually builds the app, resolved against what has been built.
  *
  * `dist/` wins when it exists because that is the deployed artefact; a source
@@ -269,26 +428,43 @@ function loadEnvFile() {
  * making `npm start` differ between the two -- is what keeps this file identical
  * in both.
  *
- * ## Why this builds when `dist/` is missing
+ * ## Why this rebuilds
  *
- * A panel that ran `npm install` but never `npm run build` is the ordinary way
- * to arrive here with nothing compiled, and the source fallback below is not
- * always available to cover it: `tsx` runs on `esbuild`, and a panel with
- * install scripts locked down refuses esbuild's postinstall -- the package is
- * present, its binary is not, and importing it throws. So a build is attempted
- * here first, where it can still turn "nothing compiled" into a working server.
+ * Two cases, and both of them used to end in the same silent failure -- a server
+ * running yesterday's code while reporting itself healthy.
  *
- * It is not attempted on every boot, only when there is no `dist/` to load:
- * compiling is seconds of work that only the first run of an unbuilt tree needs.
+ * **Nothing compiled.** A panel that ran `npm install` but never `npm run build`
+ * is the ordinary way to arrive here with no `dist/` at all, and the source
+ * fallback below is not always available to cover it: `tsx` runs on `esbuild`,
+ * and a panel with install scripts locked down refuses esbuild's postinstall --
+ * the package is present, its binary is not, and importing it throws.
+ *
+ * **Compiled, but stale.** A panel that pulls the repository itself, before this
+ * file is even reached, leaves new sources beside an old build. `dist/` is
+ * preferred, so the new code never ran. See [distIsStale].
+ *
+ * Neither is attempted on a healthy boot: a `dist/` that is newer than its
+ * sources is loaded as-is, which is the ordinary case and the fast one.
  */
 async function loadBootstrap() {
   const compiled = join(here, 'dist', 'bootstrap.js');
-  if (!existsSync(compiled) && existsSync(join(here, 'src', 'bootstrap.ts'))) {
-    console.log('[startup] no dist/ -- building it once from src/.');
+  const hasSources = existsSync(join(here, 'src', 'bootstrap.ts'));
+
+  if (hasSources && distIsStale()) {
+    const reason = existsSync(compiled)
+      ? 'dist/ is older than src/ -- rebuilding before it is loaded.'
+      : 'no dist/ -- building it once from src/.';
+    console.log(`[startup] ${reason}`);
     if (!rebuild()) {
-      console.warn('[startup] the build did not succeed; trying to run from source.');
+      console.error(
+        '[startup] THE BUILD FAILED. What runs next is NOT the latest code:\n' +
+          '          either the previous build, or the sources through tsx if that\n' +
+          '          works. Fix the compile error above, or run `npm run build` by\n' +
+          '          hand to see it in full.',
+      );
     }
   }
+
   if (existsSync(compiled)) {
     return import(pathToFileURL(compiled).href);
   }

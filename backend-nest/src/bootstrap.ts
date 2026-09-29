@@ -25,12 +25,19 @@ import type { Server as HttpServer } from 'node:http';
 import express from 'express';
 
 import { AppModule } from './app.module.js';
+import { BUILD, PROTOCOL } from './common/build.js';
 import { loadConfig } from './common/config.js';
 import { PartySocketServer } from './party/party.socket.js';
 
 const logger = new Logger('Bootstrap');
 
 export async function bootstrap(): Promise<void> {
+  // Said first, before anything can fail, so the log always answers "which
+  // build is this?" — including for a boot that goes wrong afterwards.
+  logger.log(
+    `build ${BUILD.version}${BUILD.commit ? ` (${BUILD.commit.slice(0, 7)})` : ''} · protocol ${PROTOCOL} · ${BUILD.features.join(', ')}`,
+  );
+
   // Read before the container exists, so a bad value is a startup error with no
   // half-built app left behind.
   const config = loadConfig();
