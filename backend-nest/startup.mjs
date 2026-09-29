@@ -101,21 +101,52 @@ function flagOn(name) {
 }
 
 /**
- * The executable name to spawn for a command on this platform.
+ * How to run a command on this platform, as an executable plus arguments.
  *
- * Windows resolves `npm` to `npm.cmd` only through a shell, and a shell
- * re-parses the arguments it is handed — which breaks on any path containing a
- * space, and turns a list of arguments into something the caller did not write.
- * Naming the `.cmd` shim directly avoids the shell entirely: it is a real
- * executable as far as `spawnSync` is concerned, so the arguments arrive
- * exactly as given.
+ * `npm` is the awkward one, and it is awkward in a way that breaks deploys.
+ * It is not an executable: on POSIX it is a shell script, and on Windows it is
+ * a `.cmd` batch file. Node refuses to spawn a batch file without a shell
+ * (`EINVAL`, a security decision), and spawning it *with* a shell means the
+ * shell re-parses the arguments — which is how a path with a space in it ends
+ * up as two arguments.
  *
- * Only `npm` needs this. `git` ships an `.exe` on every platform.
+ * The way out is to skip the shim entirely: npm ships a JavaScript entry point,
+ * and running it under the same Node that is running this file needs neither a
+ * shell nor a platform-specific name. It is the one form that behaves
+ * identically on a developer's Windows machine and in a Linux container.
+ *
+ * `git` needs none of this — it is a real executable everywhere.
  */
-function executable(command) {
-  if (process.platform !== 'win32') return command;
-  if (command === 'npm') return 'npm.cmd';
-  return command;
+function invocation(command, args) {
+  if (command !== 'npm') return { file: command, args };
+
+  const npmCli = npmCliPath();
+  if (npmCli) return { file: process.execPath, args: [npmCli, ...args] };
+
+  // No npm beside this Node. Falling back to the name on PATH is what a
+  // container with a system npm looks like, and `shell` is left off so that a
+  // missing binary surfaces as an error rather than as a shell message.
+  return { file: command, args };
+}
+
+/**
+ * npm's JavaScript entry point, found relative to the Node running this file.
+ *
+ * Every installation puts it in the same place under Node's own directory:
+ * `node_modules/npm/bin/npm-cli.js` beside the `node` binary. That holds for
+ * the official installer on Windows, the distribution packages on Linux, and
+ * the container images a panel uses.
+ */
+function npmCliPath() {
+  const candidates = [
+    join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    // The lib/ layout Linux distributions and the NodeSource packages use.
+    join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -130,7 +161,8 @@ function executable(command) {
  *   able to act on, not a crash.
  */
 function run(command, args) {
-  const result = spawnSync(executable(command), args, {
+  const { file, args: argv } = invocation(command, args);
+  const result = spawnSync(file, argv, {
     cwd: here,
     stdio: 'inherit',
   });
@@ -143,7 +175,8 @@ function run(command, args) {
 
 /** Run a command and capture its trimmed stdout, or null if it failed. */
 function capture(command, args) {
-  const result = spawnSync(executable(command), args, {
+  const { file, args: argv } = invocation(command, args);
+  const result = spawnSync(file, argv, {
     cwd: here,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
