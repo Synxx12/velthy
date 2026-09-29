@@ -139,7 +139,7 @@ async function main() {
     (f) => f.type === 'activity' && f.action === 'queueMove',
   );
   assert.ok(moveActivity.by);
-  console.log('11. queueMove ->', reordered.queue.items.map((t) => t.videoId).join(', '), '·', moveActivity.detail);
+  console.log('11. queueMove ->', reordered.queue.items.map((t) => t.videoId).join(', '), '-', moveActivity.detail);
 
   // 6. Host controls: the lock, then a refused control from a listener.
   socket.send(JSON.stringify({ type: 'control', action: 'setHostOnlyControl', enabled: true }));

@@ -2,7 +2,7 @@
 /**
  * Run a Cloudflare tunnel for the party server, using a token from `.env`.
  *
- * Wraps `cloudflared` so the token never has to be pasted on the command line —
+ * Wraps `cloudflared` so the token never has to be pasted on the command line --
  * which puts it in shell history and in `ps` for anyone else on the box to read.
  * The value comes from the environment, loaded from `.env` if it is not already
  * set, and is passed to the child through `TUNNEL_TOKEN`, the variable
@@ -55,8 +55,8 @@ function loadEnvFile() {
  * The npm package ships the real executable at `node_modules/cloudflared/bin/`,
  * and that is preferred over the `.bin/cloudflared.cmd` shim: a shim is a batch
  * script, batch scripts are not spawnable without a shell, and a shell then
- * re-parses the arguments — which breaks on any path containing a space
- * (`D:\Vs code\…`) and warns about injection besides. Running the executable
+ * re-parses the arguments -- which breaks on any path containing a space
+ * (`D:\Vs code\...`) and warns about injection besides. Running the executable
  * directly avoids all of it, on every platform.
  *
  * The name on PATH is the last resort, for a system-wide install.

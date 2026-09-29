@@ -14,7 +14,7 @@
         "ghcr.io/parkervcp/yolks:nodejs_22": "ghcr.io/parkervcp/yolks:nodejs_22"
     },
     "file_denylist": [],
-    "startup": "npm run start:prod",
+    "startup": "node startup.mjs",
     "config": {
         "files": "{}",
         "startup": "{\r\n    \"done\": \"listening on\"\r\n}",

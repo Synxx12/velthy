@@ -1,28 +1,28 @@
 #!/usr/bin/env node
 /**
- * Velthy Listen Together — the one entry point.
+ * Velthy Listen Together -- the one entry point.
  *
  * Everything about starting this server lives here, in order, so that "how does
  * it run" has exactly one answer:
  *
- *   1. environment  — read and validate before a port is bound, so a bad value
+ *   1. environment  -- read and validate before a port is bound, so a bad value
  *                     is a startup error rather than a mystery at 3am
- *   2. app          — build the Nest application (REST + WebSocket on one port)
- *   3. listen       — bind, and say so
- *   4. tunnel       — if TUNNEL_TOKEN is set, bring cloudflared up beside it
- *   5. shutdown     — on SIGTERM/SIGINT, stop accepting, drain, exit
+ *   2. app          -- build the Nest application (REST + WebSocket on one port)
+ *   3. listen       -- bind, and say so
+ *   4. tunnel       -- if TUNNEL_TOKEN is set, bring cloudflared up beside it
+ *   5. shutdown     -- on SIGTERM/SIGINT, stop accepting, drain, exit
  *
  * It is an `.mjs` file on purpose. Nest conventionally boots from `main.ts`,
  * which means two entry points once anything needs to run before the Nest
  * container exists (validation, a preflight log, a signal handler that is not
  * inside the app). This file is that single entry point instead, and it is the
- * same file in development and in production — `src/` is loaded through tsx when
+ * same file in development and in production -- `src/` is loaded through tsx when
  * the compiled `dist/` is not present, and `dist/` is preferred when it is.
  *
  * ## The tunnel runs from here, not from the panel's command line
  *
  * A control panel runs exactly one command, and the two halves of this service
- * must be alive at the same instant — a tunnel with no server behind it answers
+ * must be alive at the same instant -- a tunnel with no server behind it answers
  * 502s, and a server with no tunnel is unreachable from a phone. Chaining them
  * with `&` in the panel's startup line works only as long as the shell keeps
  * both, and leaves the tunnel behind the moment the server is restarted. So the
@@ -90,7 +90,7 @@ function capture(command, args) {
  *
  * `npm run build` deletes `dist/` before compiling, which is fine on a
  * workstation and actively harmful here: this runs on a server that is about to
- * start, and a compile error would leave no `dist/` *and* no source fallback —
+ * start, and a compile error would leave no `dist/` *and* no source fallback --
  * `tsx` is a dev dependency and production installs prune it, so the process
  * would exit with nothing to serve. So the old build is moved aside first and
  * put back if the new one fails, and the caller is told either way.
@@ -131,7 +131,7 @@ function rebuild() {
 }
 
 /**
- * Bring the checkout up to date, then rebuild — before anything is loaded.
+ * Bring the checkout up to date, then rebuild -- before anything is loaded.
  *
  * Off by default, and switched on with `GIT_PULL=1`. That is deliberate: this
  * rewrites the working tree of whatever it is run in, which is the right thing
@@ -142,7 +142,7 @@ function rebuild() {
  * Every failure is survivable and every one of them is only a warning. The
  * server starting on the code it already has is always better than the server
  * not starting, so a missing `git`, a detached head, a dirty tree, a branch
- * that has moved on with a conflict — all of them end in "carry on with what is
+ * that has moved on with a conflict -- all of them end in "carry on with what is
  * on disk" rather than an exit.
  *
  * Ordering is the whole point of where this is called from: `dist/` is preferred
@@ -151,31 +151,31 @@ function rebuild() {
  */
 function autoUpdate() {
   if (!flagOn('GIT_PULL')) {
-    console.log('[startup] GIT_PULL not set — using the code on disk as-is.');
+    console.log('[startup] GIT_PULL not set -- using the code on disk as-is.');
     return;
   }
   if (!existsSync(join(here, '.git'))) {
     console.log(
-      '[startup] GIT_PULL is set but there is no .git here — nothing to pull.\n' +
+      '[startup] GIT_PULL is set but there is no .git here -- nothing to pull.\n' +
         '          Uploaded deployments have no history to follow; clone the\n' +
         '          repository instead if you want this to work.',
     );
     return;
   }
   if (!capture('git', ['--version'])) {
-    console.warn('[startup] GIT_PULL is set but git is not available — skipping.');
+    console.warn('[startup] GIT_PULL is set but git is not available -- skipping.');
     return;
   }
 
   const branch = process.env.GIT_BRANCH?.trim() || 'main';
   const remote = process.env.GIT_REMOTE?.trim() || 'origin';
 
-  // A dirty tree is not an error to report at every boot — it is the normal
+  // A dirty tree is not an error to report at every boot -- it is the normal
   // state of a server somebody has patched by hand. Pulling into it would
   // either fail or overwrite their change, so neither is attempted.
   const dirty = capture('git', ['status', '--porcelain']);
   if (dirty === null) {
-    console.warn('[startup] could not read the git status — skipping the update.');
+    console.warn('[startup] could not read the git status -- skipping the update.');
     return;
   }
   if (dirty.length > 0) {
@@ -187,13 +187,13 @@ function autoUpdate() {
   }
 
   if (!run('git', ['fetch', '--prune', remote, branch])) {
-    console.warn('[startup] git fetch failed — starting on the code already here.');
+    console.warn('[startup] git fetch failed -- starting on the code already here.');
     return;
   }
 
   const behind = capture('git', ['rev-list', '--count', `HEAD..${remote}/${branch}`]);
   if (behind === null) {
-    console.warn(`[startup] could not compare against ${remote}/${branch} — skipping.`);
+    console.warn(`[startup] could not compare against ${remote}/${branch} -- skipping.`);
     return;
   }
   if (behind === '0') {
@@ -210,7 +210,7 @@ function autoUpdate() {
   // deployment ends up in a state its own history cannot explain, and a
   // conflict here would leave the tree half-updated.
   if (!run('git', ['pull', '--ff-only', remote, branch])) {
-    console.warn('[startup] could not fast-forward — starting on the code already here.');
+    console.warn('[startup] could not fast-forward -- starting on the code already here.');
     return;
   }
 
@@ -223,7 +223,7 @@ function autoUpdate() {
   if (lockAfter !== lockBefore) {
     console.log('[startup] dependencies changed; installing.');
     if (!run('npm', ['ci'])) {
-      console.warn('[startup] npm ci failed — the build below may not be usable.');
+      console.warn('[startup] npm ci failed -- the build below may not be usable.');
     }
   }
 
@@ -238,7 +238,7 @@ function autoUpdate() {
  * Fold `.env` into the environment, without overwriting what is already set.
  *
  * The panel passes its variables in for real, so this only matters for a local
- * `node startup.mjs` — and it is done here rather than by pulling in `dotenv`
+ * `node startup.mjs` -- and it is done here rather than by pulling in `dotenv`
  * so the one entry point stays dependency-free.
  */
 function loadEnvFile() {
@@ -265,20 +265,40 @@ function loadEnvFile() {
  * The module that actually builds the app, resolved against what has been built.
  *
  * `dist/` wins when it exists because that is the deployed artefact; a source
- * tree loaded through tsx is the development path. Resolving here — rather than
- * making `npm start` differ between the two — is what keeps this file identical
+ * tree loaded through tsx is the development path. Resolving here -- rather than
+ * making `npm start` differ between the two -- is what keeps this file identical
  * in both.
+ *
+ * ## Why this builds when `dist/` is missing
+ *
+ * A panel that ran `npm install` but never `npm run build` is the ordinary way
+ * to arrive here with nothing compiled, and the source fallback below is not
+ * always available to cover it: `tsx` runs on `esbuild`, and a panel with
+ * install scripts locked down refuses esbuild's postinstall -- the package is
+ * present, its binary is not, and importing it throws. So a build is attempted
+ * here first, where it can still turn "nothing compiled" into a working server.
+ *
+ * It is not attempted on every boot, only when there is no `dist/` to load:
+ * compiling is seconds of work that only the first run of an unbuilt tree needs.
  */
 async function loadBootstrap() {
   const compiled = join(here, 'dist', 'bootstrap.js');
+  if (!existsSync(compiled) && existsSync(join(here, 'src', 'bootstrap.ts'))) {
+    console.log('[startup] no dist/ -- building it once from src/.');
+    if (!rebuild()) {
+      console.warn('[startup] the build did not succeed; trying to run from source.');
+    }
+  }
   if (existsSync(compiled)) {
     return import(pathToFileURL(compiled).href);
   }
   // Development: compile the TypeScript on the fly.
   const { register } = await import('tsx/esm/api').catch(() => {
     throw new Error(
-      'No dist/bootstrap.js and tsx is not installed.\n' +
-        'Run `npm run build` for production, or `npm install` for development.',
+      'No dist/bootstrap.js, and tsx cannot be used either.\n' +
+        'Run `npm run build` to produce dist/, or `npm install` for development.\n' +
+        'On a panel that blocks install scripts, `npm run build` is the one that\n' +
+        'works: it needs only the TypeScript compiler, which has no postinstall.',
     );
   });
   const unregister = register();
@@ -294,7 +314,7 @@ async function loadBootstrap() {
  *
  * The real executable is preferred over the `.bin/cloudflared.cmd` shim on
  * Windows: a shim is a batch script, a batch script cannot be spawned without a
- * shell, and a shell then re-parses the arguments — which breaks on any path
+ * shell, and a shell then re-parses the arguments -- which breaks on any path
  * containing a space, which the development tree's does. Falling back to the
  * name on PATH covers a system-wide install.
  */
@@ -323,7 +343,7 @@ function resolvePort() {
  *
  * The tunnel is started only after this succeeds. Spawned at the same instant
  * as the server it would dial out immediately and serve 502s for however long
- * the port stayed unbound — harmless in production, and thoroughly confusing on
+ * the port stayed unbound -- harmless in production, and thoroughly confusing on
  * a first run where somebody is watching for it.
  */
 async function waitForServer(port, timeoutMs) {
@@ -358,14 +378,14 @@ function prefixOutput(stream, label, colour) {
  * Start the tunnel beside the server, and tie the two together.
  *
  * The tunnel is deliberately *not* fatal to the server. If cloudflared is
- * missing or cannot connect, this process keeps serving on its port — which is
+ * missing or cannot connect, this process keeps serving on its port -- which is
  * still useful (a local client, a reverse proxy in front) and is the only
  * behaviour that lets somebody debug the tunnel without also losing the API.
  */
 async function startTunnel(port) {
   const token = process.env.TUNNEL_TOKEN?.trim();
   if (!token) {
-    console.log('[startup] TUNNEL_TOKEN not set — serving locally only.');
+    console.log('[startup] TUNNEL_TOKEN not set -- serving locally only.');
     return null;
   }
 
@@ -392,7 +412,7 @@ async function startTunnel(port) {
   child.on('error', (error) => {
     if (error.code === 'ENOENT') {
       console.error(
-        '[startup] cloudflared not found — the server keeps running.\n' +
+        '[startup] cloudflared not found -- the server keeps running.\n' +
           '          Install it with `npm install --save-dev cloudflared`, or\n' +
           '          `sudo apt-get install -y cloudflared` on a server.',
       );
@@ -407,7 +427,7 @@ async function startTunnel(port) {
 async function main() {
   loadEnvFile();
 
-  // Before the application is loaded, not after — see [autoUpdate]. `dist/` is
+  // Before the application is loaded, not after -- see [autoUpdate]. `dist/` is
   // preferred over `src/` by [loadBootstrap], so a pull that is not followed by
   // a rebuild changes nothing at all.
   autoUpdate();
@@ -448,7 +468,7 @@ async function main() {
   /**
    * How long the app's own drain may take before the process is ended anyway.
    *
-   * Generous, because what is being waited for is open sockets closing — and a
+   * Generous, because what is being waited for is open sockets closing -- and a
    * party member mid-request is the thing this is protecting. The point is only
    * that it is finite: a drain that hangs must not leave a process a panel
    * cannot restart.
@@ -458,32 +478,32 @@ async function main() {
   let shuttingDown = false;
 
   /**
-   * Stop the tunnel, then let the application drain — in that order, and
+   * Stop the tunnel, then let the application drain -- in that order, and
    * without exiting here.
    *
    * The exit used to happen in this handler, and it was the reason the drain
    * never completed. `bootstrap` registers its own SIGTERM/SIGINT handler that
    * awaits `app.close()`, and both handlers fire on the same signal in
-   * registration order — but an `await` suspends, so this one ran to its
+   * registration order -- but an `await` suspends, so this one ran to its
    * `process.exit(0)` in the same tick and the process was gone before a single
    * socket had been closed. The server looked like it shut down cleanly and had
    * in fact been killed mid-flight.
    *
    * So this only arms a deadline. The normal path is the app's own handler
    * exiting after a clean close, and the watchdog covers the case where it
-   * cannot — which is the one where waiting forever would be worse.
+   * cannot -- which is the one where waiting forever would be worse.
    */
   const onSignal = (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[startup] ${signal} — shutting down.`);
+    console.log(`[startup] ${signal} -- shutting down.`);
     stopTunnel();
     const watchdog = setTimeout(() => {
       console.warn(`[startup] the app did not finish closing within ${SHUTDOWN_GRACE_MS}ms; exiting.`);
       process.exit(1);
     }, SHUTDOWN_GRACE_MS);
     // Deliberately *not* unref'd. The happy path is the app's own handler
-    // exiting 0 the moment `app.close()` resolves, so this never fires — and
+    // exiting 0 the moment `app.close()` resolves, so this never fires -- and
     // the case it exists for is precisely the one where nothing else is left to
     // keep the process alive. An unref'd timer would let the loop drain and the
     // process exit 0 on a drain that never happened, which is the failure this
