@@ -58,3 +58,6 @@ Thumbs.db
 *.seed
 tmp/
 temp/
+
+# The checkout the self-update keeps beside this tree.
+.velthy-repo/

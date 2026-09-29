@@ -36,22 +36,86 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Where this project comes from, and where in it this folder is.
+ *
+ * Compiled in rather than left to configuration, because the deployment this
+ * exists for is one nobody wants to configure twice: the panel's folder holds
+ * the *contents* of this project, and the repository that produced them is a
+ * monorepo with this folder one level down. Naming all three here means a
+ * server updates itself with `GIT_PULL=1` and nothing else.
+ *
+ * Each is overridable for a fork, a mirror, or a different branch -- see the
+ * environment names in [autoUpdate].
+ */
+const DEFAULT_REPO_URL = 'https://github.com/Synxx12/velthy.git';
+const DEFAULT_BRANCH = 'main';
+/** The folder of that repository this file lives in. */
+const DEFAULT_SUBDIR = 'backend-nest';
+
+/**
+ * Whether a directory is a subfolder of a larger checkout.
+ *
+ * The one thing that must never happen is a self-update running on somebody's
+ * working copy: the sources here are their uncommitted edits, and copying the
+ * branch over them would delete work that exists nowhere else. A repository is
+ * not a deployment, and this is how the two are told apart -- a development tree
+ * sits *inside* a checkout (this folder is one of its subdirectories), while a
+ * deployment is a folder with nothing above it that knows what git is.
+ *
+ * Only the parents are walked, and only a few of them: a checkout nested four
+ * levels deep is a monorepo, and anything above that is a filesystem root.
+ *
+ * @param from the directory to judge. Defaults to the one this file is in.
+ */
+function insideLargerCheckout(from = here) {
+  let dir = from;
+  for (let levels = 0; levels < 6; levels += 1) {
+    const parent = dirname(dir);
+    if (parent === dir) return false; // reached the filesystem root
+    if (existsSync(join(parent, '.git'))) return true;
+    dir = parent;
+  }
+  return false;
+}
+
 /** Whether an environment flag reads as "on". Absent, blank and "0" are all off. */
 function flagOn(name) {
   const value = process.env[name]?.trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
+}
+
+/**
+ * The executable name to spawn for a command on this platform.
+ *
+ * Windows resolves `npm` to `npm.cmd` only through a shell, and a shell
+ * re-parses the arguments it is handed — which breaks on any path containing a
+ * space, and turns a list of arguments into something the caller did not write.
+ * Naming the `.cmd` shim directly avoids the shell entirely: it is a real
+ * executable as far as `spawnSync` is concerned, so the arguments arrive
+ * exactly as given.
+ *
+ * Only `npm` needs this. `git` ships an `.exe` on every platform.
+ */
+function executable(command) {
+  if (process.platform !== 'win32') return command;
+  if (command === 'npm') return 'npm.cmd';
+  return command;
 }
 
 /**
@@ -66,12 +130,9 @@ function flagOn(name) {
  *   able to act on, not a crash.
  */
 function run(command, args) {
-  const result = spawnSync(command, args, {
+  const result = spawnSync(executable(command), args, {
     cwd: here,
     stdio: 'inherit',
-    // Windows resolves `npm` to `npm.cmd` only through a shell; POSIX is
-    // unaffected either way.
-    shell: process.platform === 'win32',
   });
   if (result.error) {
     console.warn(`[startup] could not run ${command}: ${result.error.message}`);
@@ -82,11 +143,10 @@ function run(command, args) {
 
 /** Run a command and capture its trimmed stdout, or null if it failed. */
 function capture(command, args) {
-  const result = spawnSync(command, args, {
+  const result = spawnSync(executable(command), args, {
     cwd: here,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    shell: process.platform === 'win32',
   });
   if (result.error || result.status !== 0) return null;
   return (result.stdout ?? '').trim();
@@ -138,178 +198,191 @@ function rebuild() {
 }
 
 /**
- * Give an uploaded tree the repo identity it was never given.
+ * The repository this deployment follows, checked out beside the running tree.
  *
- * The question this answers is "which repository is this server following?" —
- * and the honest answer for a deployment whose files were uploaded rather than
- * cloned is that it does not have one. `git pull` reads `remote.origin.url` out
- * of `.git/config`; no `.git` means no URL, no branch, and no update is
- * possible. Nothing about GitHub can fix that from its side: a repository
- * cannot reach into a machine that never told it where it is.
+ * ## Why a second checkout instead of `git init` in place
  *
- * So it is told, once, through `GIT_URL`. This writes the same three lines a
- * `git clone` would have — an init, a remote, and the branch's tip — and from
- * then on the ordinary update path above applies.
+ * The panel's working directory holds the *contents* of this folder, not the
+ * repository that contains it: `/home/container` gets `package.json`, `src/`,
+ * `startup.mjs` — and the repository those came from has them one level down,
+ * under `backend-nest/`. So a `git init` here followed by a checkout of the
+ * branch would scatter the whole monorepo across this directory: an `app/`
+ * folder next to `src/`, the Android tree beside the server's own files. That
+ * is not a layout anything here knows how to run.
  *
- * ## What this does not touch
+ * So the repository is kept whole, in a directory of its own, and the one
+ * subdirectory this deployment actually is gets copied out of it. The copy
+ * carries tracked files only — a clone contains no `.env`, no `node_modules/`,
+ * no `dist/` — so everything this server has accumulated locally survives.
  *
- * `reset --hard` restores *tracked* files to the branch's copy and leaves
- * everything else alone. So `.env` (a credential the repo ignores), the whole
- * of `node_modules/`, and any file somebody put here by hand all survive — the
- * experiment in `checks/` asserts exactly that. What does not survive is a
- * local edit to a file the repo also tracks, which is why [autoUpdate] refuses
- * to run against a dirty tree at all.
+ * ## What it costs
  *
- * @return true when `.git` now exists and points at a fetched commit.
+ * One shallow clone on first use, one shallow fetch per update after that. The
+ * directory is ignored by git and by the build; nothing else reads it.
  */
-function bootstrapRepo(url, branch) {
-  if (!capture('git', ['--version'])) {
-    console.warn('[startup] git is not available, so the repository cannot be set up.');
-    return false;
-  }
+const REPO_DIR_NAME = '.velthy-repo';
 
-  console.log(`[startup] no .git here -- setting this tree up to follow ${url} (${branch}).`);
-  if (!run('git', ['init', '-q', '-b', branch])) {
-    console.warn('[startup] git init failed.');
-    return false;
+/** Copy a directory tree over another, returning how many files changed. */
+function copyTree(from, to, skip = new Set()) {
+  let changed = 0;
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    if (skip.has(entry.name)) continue;
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (entry.isDirectory()) {
+      mkdirSync(target, { recursive: true });
+      changed += copyTree(source, target, skip);
+      continue;
+    }
+    if (!entry.isFile()) continue; // symlinks and sockets are not ours to place
+    const incoming = readFileSync(source);
+    const existing = existsSync(target) ? readFileSync(target) : null;
+    if (existing !== null && existing.equals(incoming)) continue;
+    copyFileSync(source, target);
+    changed += 1;
   }
-  if (!run('git', ['remote', 'add', 'origin', url])) {
-    console.warn('[startup] could not add the remote.');
-    return false;
-  }
-  // Shallow on purpose: a server needs the tip of one branch, not the history
-  // of a repository it will never commit to. It also makes the first fetch
-  // seconds rather than minutes.
-  if (!run('git', ['fetch', '-q', '--depth=1', 'origin', branch])) {
-    console.warn('[startup] could not fetch from that repository -- check GIT_URL and the branch.');
-    return false;
-  }
-  if (!run('git', ['reset', '--hard', 'FETCH_HEAD'])) {
-    console.warn('[startup] fetched, but could not check the files out.');
-    return false;
-  }
-  // Shallow fetches do not update `origin/<branch>` the way a full one does, so
-  // the ref the update path compares against is written here explicitly.
-  run('git', ['update-ref', `refs/remotes/origin/${branch}`, 'FETCH_HEAD']);
-  console.log('[startup] repository set up; future boots can update from it.');
-  return true;
+  return changed;
 }
 
 /**
- * Bring the checkout up to date, then rebuild -- before anything is loaded.
+ * Brings the tracked files of `subdir` up to the tip of `branch`.
  *
- * Off by default, and switched on with `GIT_PULL=1`. That is deliberate: this
- * rewrites the working tree of whatever it is run in, which is the right thing
- * on a server that exists to follow a branch and the wrong thing on a
- * workstation somebody is in the middle of editing. A deployment that wants it
- * sets the flag once.
+ * @return `{ ok, changed, commit }` — `changed` is how many files differ from
+ *   what was already here, which is the number worth logging: zero means the
+ *   deploy was already current.
+ */
+function syncFromRepo(url, branch, subdir) {
+  if (!capture('git', ['--version'])) {
+    console.warn('[startup] git is not available, so the repository cannot be followed.');
+    return { ok: false, changed: 0, commit: null };
+  }
+
+  const repo = join(here, REPO_DIR_NAME);
+  const fresh = !existsSync(join(repo, '.git'));
+
+  if (fresh) {
+    console.log(`[startup] cloning ${url} (${branch}) -- first update on this server.`);
+    rmSync(repo, { recursive: true, force: true });
+    // Shallow: a server needs the tip of one branch, not the history of a
+    // repository it will never commit to. It is also the difference between
+    // seconds and minutes on a first deploy.
+    if (!run('git', ['clone', '-q', '--depth=1', '--branch', branch, url, repo])) {
+      console.warn('[startup] could not clone -- check GIT_URL and GIT_BRANCH.');
+      return { ok: false, changed: 0, commit: null };
+    }
+  } else {
+    if (!run('git', ['-C', repo, 'remote', 'set-url', 'origin', url])) {
+      console.warn('[startup] could not point the checkout at that repository.');
+      return { ok: false, changed: 0, commit: null };
+    }
+    if (!run('git', ['-C', repo, 'fetch', '-q', '--depth=1', 'origin', branch])) {
+      console.warn('[startup] could not fetch -- starting on the code already here.');
+      return { ok: false, changed: 0, commit: null };
+    }
+    if (!run('git', ['-C', repo, 'reset', '-q', '--hard', 'FETCH_HEAD'])) {
+      console.warn('[startup] fetched, but could not check it out.');
+      return { ok: false, changed: 0, commit: null };
+    }
+  }
+
+  const commit = capture('git', ['-C', repo, 'rev-parse', '--short', 'HEAD']);
+  const source = subdir ? join(repo, subdir) : repo;
+  if (!existsSync(source)) {
+    console.warn(
+      `[startup] the repository has no "${subdir}" directory.\n` +
+        '          Set GIT_SUBDIR to the folder this server lives in, or leave it\n' +
+        '          empty when the repository *is* the server.',
+    );
+    return { ok: false, changed: 0, commit };
+  }
+
+  // `.git` is never copied: this directory keeps its own identity, and the
+  // checkout's history belongs in the checkout. `node_modules` and `dist` are
+  // not in a clone to begin with, and are named anyway so that a checkout made
+  // by hand cannot be copied over the running tree's.
+  const changed = copyTree(source, here, new Set(['.git', 'node_modules', 'dist', REPO_DIR_NAME]));
+  return { ok: true, changed, commit };
+}
+
+/**
+ * Bring the running code up to date, then rebuild -- before anything is loaded.
  *
- * `GIT_URL` is what makes that possible on a deployment whose files were
- * uploaded rather than cloned -- see [bootstrapRepo]. It is only read when
- * there is no `.git` to read a remote from, so setting it on a real checkout
- * changes nothing.
+ * **On by default**, because the failure this exists for is a deploy that looks
+ * like it worked and did not: a panel restarts the server, the code on disk is
+ * whatever was uploaded months ago, and nothing says so. A server that follows
+ * its own repository is the only version of this that stays true without
+ * somebody remembering to re-upload a folder.
  *
- * Every failure is survivable and every one of them is only a warning. The
- * server starting on the code it already has is always better than the server
- * not starting, so a missing `git`, a detached head, a dirty tree, a branch
- * that has moved on with a conflict -- all of them end in "carry on with what is
- * on disk" rather than an exit.
+ * Off is available and is what a development tree gets automatically:
+ *
+ *   GIT_PULL=0   never update, whatever else is set
+ *   GIT_PULL=1   always update, even from a tree that looks like a checkout
+ *
+ * ## Two shapes of deployment, and how each is updated
+ *
+ * **The tree *is* the repository.** `.git` sits here, beside `startup.mjs`, and
+ * an ordinary fetch-and-checkout updates it in place.
+ *
+ * **The tree is a *folder* of a repository.** This is what a panel produces
+ * when somebody uploads a subdirectory: `/home/container` holds `package.json`,
+ * `src/`, `startup.mjs`, and the repository they came from has all of it one
+ * level down. There is no `.git` to pull with, and `git init` here would be
+ * wrong -- checking the branch out into this directory would scatter the whole
+ * monorepo across it. So the repository is cloned *beside* this tree and the
+ * one subdirectory is copied out of it. See [syncFromRepo].
+ *
+ * ## What it refuses to do
+ *
+ * A tree that sits inside somebody else's checkout is never updated -- see
+ * [insideLargerCheckout]. That is the developer's working copy, and the sources
+ * in it are edits that exist nowhere else.
+ *
+ * Every other failure is survivable and only a warning. The server starting on
+ * the code it already has is always better than the server not starting, so no
+ * network, a missing `git`, or a branch that has moved on all end in "carry on
+ * with what is on disk" rather than an exit.
  *
  * Ordering is the whole point of where this is called from: `dist/` is preferred
  * over `src/` by [loadBootstrap], so pulling without rebuilding would change
  * nothing at all. The rebuild has to happen here, before that decision is made.
  */
 function autoUpdate() {
-  if (!flagOn('GIT_PULL')) {
-    // Said plainly, because this is the setting whose absence makes a deploy
-    // look like it silently did nothing: the panel pulls the repository, this
-    // server never does, and the sources it starts from are whatever the panel
-    // left behind. [loadBootstrap] still rebuilds when those sources are newer
-    // than the build, so the code that runs is at least the code on disk.
+  const forced = process.env.GIT_PULL?.trim();
+  const enabled = forced === undefined || forced === ''
+    ? !insideLargerCheckout()
+    : flagOn('GIT_PULL');
+
+  if (!enabled) {
     console.log(
-      '[startup] GIT_PULL not set -- this server does not update itself.\n' +
-        '          It will run the code on disk, rebuilding dist/ if src/ is newer.',
+      forced
+        ? '[startup] GIT_PULL is off -- this server does not update itself.'
+        : '[startup] this looks like a development tree -- not updating itself.',
+    );
+    console.log(
+      '          It will run the code on disk, rebuilding dist/ if src/ is newer.\n' +
+        '          Set GIT_PULL=1 to make it follow the repository anyway.',
     );
     return;
   }
 
-  const branch = process.env.GIT_BRANCH?.trim() || 'main';
-  const remote = process.env.GIT_REMOTE?.trim() || 'origin';
-  const url = process.env.GIT_URL?.trim() || '';
-
-  // The one case a repository can be pointed at from outside: an uploaded tree
-  // that has no identity of its own yet.
-  if (!existsSync(join(here, '.git'))) {
-    if (!url) {
-      console.log(
-        '[startup] GIT_PULL is set but there is no .git here -- nothing to pull.\n' +
-          '          Set GIT_URL to the repository this server should follow and it\n' +
-          '          will be set up on the next start; see the README.',
-      );
-      return;
-    }
-    if (!bootstrapRepo(url, branch)) {
-      console.warn('[startup] starting on the code already here.');
-      return;
-    }
-  }
-
-  if (!capture('git', ['--version'])) {
-    console.warn('[startup] GIT_PULL is set but git is not available -- skipping.');
-    return;
-  }
-
-  // A dirty tree is not an error to report at every boot -- it is the normal
-  // state of a server somebody has patched by hand. Checking out over it would
-  // either fail or overwrite their change, so neither is attempted.
-  const dirty = capture('git', ['status', '--porcelain']);
-  if (dirty === null) {
-    console.warn('[startup] could not read the git status -- skipping the update.');
-    return;
-  }
-  if (dirty.length > 0) {
-    console.warn(
-      `[startup] the working tree has local changes (${dirty.split('\n').length} file(s));\n` +
-        '          not updating, because it would overwrite them.\n' +
-        '          Commit or discard them, or delete .git to start following the\n' +
-        '          branch again from scratch.',
-    );
-    return;
-  }
-
-  if (!run('git', ['fetch', '-q', '--prune', remote, branch])) {
-    console.warn('[startup] git fetch failed -- starting on the code already here.');
-    return;
-  }
-
-  // Compared by commit id rather than by `rev-list --count`. A shallow fetch
-  // has no history to count through, and this deployment's first fetch is
-  // shallow by design -- so the count would be a number nobody could trust.
-  const local = capture('git', ['rev-parse', 'HEAD']);
-  const target = capture('git', ['rev-parse', `refs/remotes/${remote}/${branch}`]);
-  if (local === null || target === null) {
-    console.warn(`[startup] could not compare against ${remote}/${branch} -- skipping.`);
-    return;
-  }
-  if (local === target) {
-    console.log(`[startup] already up to date with ${remote}/${branch} (${local.slice(0, 7)}).`);
-    return;
-  }
-
-  console.log(`[startup] ${local.slice(0, 7)} -> ${target.slice(0, 7)} on ${remote}/${branch}.`);
+  const branch = process.env.GIT_BRANCH?.trim() || DEFAULT_BRANCH;
+  const url = process.env.GIT_URL?.trim() || DEFAULT_REPO_URL;
+  const subdir = process.env.GIT_SUBDIR?.trim() ?? DEFAULT_SUBDIR;
   const lockBefore = existsSync(join(here, 'package-lock.json'))
     ? readFileSync(join(here, 'package-lock.json'), 'utf8')
     : '';
 
-  // A hard checkout rather than a merge. There is nothing here to merge with:
-  // the tree is clean by the check above, this process holds no commits of its
-  // own, and a merge commit on a server nobody is watching is how a deployment
-  // ends up in a state its own history cannot explain. The files the repo does
-  // not track -- `.env`, `node_modules/`, anything hand-written -- are outside
-  // this either way.
-  if (!run('git', ['reset', '--hard', `refs/remotes/${remote}/${branch}`])) {
-    console.warn('[startup] could not check out the new commit -- starting on the code already here.');
-    return;
+  const updated = existsSync(join(here, '.git'))
+    ? pullInPlace(branch)
+    : syncFromRepo(url, branch, subdir);
+  if (!updated.ok) return;
+
+  if (updated.changed === 0) {
+    console.log(`[startup] already current at ${updated.commit ?? 'HEAD'} -- nothing changed.`);
+  } else {
+    console.log(
+      `[startup] updated to ${updated.commit ?? 'HEAD'}: ${updated.changed} file(s) changed.`,
+    );
   }
 
   // Only when the dependency graph actually moved. `npm ci` deletes
@@ -324,12 +397,79 @@ function autoUpdate() {
       console.warn('[startup] npm ci failed -- the build below may not be usable.');
     }
   }
+}
 
-  if (rebuild()) {
-    console.log('[startup] updated and rebuilt.');
-  } else {
-    console.warn('[startup] updated, but the rebuild did not succeed.');
+/**
+ * The ordinary case: `.git` is here, so the branch is fetched and checked out
+ * in place.
+ *
+ * A hard checkout rather than a merge. There is nothing here to merge with —
+ * this process holds no commits of its own, and a merge commit on a server
+ * nobody is watching is how a deployment ends up in a state its own history
+ * cannot explain. The files the repository does not track (`.env`,
+ * `node_modules/`, anything hand-written) are outside this either way; a local
+ * edit to a *tracked* file stops the update rather than being overwritten.
+ */
+function pullInPlace(branch) {
+  const remote = process.env.GIT_REMOTE?.trim() || 'origin';
+
+  if (!existsSync(join(here, '.git'))) {
+    console.log(
+      '[startup] GIT_PULL is set, but there is no .git here and no GIT_URL.\n' +
+        '          Nothing to pull. Set GIT_URL to the repository this server\n' +
+        '          should follow, or leave GIT_PULL off and update it by hand.',
+    );
+    return { ok: false, changed: 0, commit: null };
   }
+  if (!capture('git', ['--version'])) {
+    console.warn('[startup] GIT_PULL is set but git is not available -- skipping.');
+    return { ok: false, changed: 0, commit: null };
+  }
+
+  // A dirty tree is not an error to report at every boot -- it is the normal
+  // state of a server somebody has patched by hand.
+  const dirty = capture('git', ['status', '--porcelain']);
+  if (dirty === null) {
+    console.warn('[startup] could not read the git status -- skipping the update.');
+    return { ok: false, changed: 0, commit: null };
+  }
+  if (dirty.length > 0) {
+    console.warn(
+      `[startup] the working tree has local changes (${dirty.split('\n').length} file(s));\n` +
+        '          not updating, because it would overwrite them.\n' +
+        '          Commit or discard them, or set GIT_URL to follow the branch in a\n' +
+        '          separate checkout instead.',
+    );
+    return { ok: false, changed: 0, commit: null };
+  }
+
+  if (!run('git', ['fetch', '-q', '--prune', remote, branch])) {
+    console.warn('[startup] git fetch failed -- starting on the code already here.');
+    return { ok: false, changed: 0, commit: null };
+  }
+
+  // Compared by commit id rather than by `rev-list --count`. A shallow fetch
+  // has no history to count through, so the count would be a number nobody
+  // could trust.
+  const local = capture('git', ['rev-parse', 'HEAD']);
+  const target = capture('git', ['rev-parse', `refs/remotes/${remote}/${branch}`]);
+  if (local === null || target === null) {
+    console.warn(`[startup] could not compare against ${remote}/${branch} -- skipping.`);
+    return { ok: false, changed: 0, commit: null };
+  }
+  if (local === target) {
+    console.log(`[startup] already up to date with ${remote}/${branch} (${local.slice(0, 7)}).`);
+    return { ok: true, changed: 0, commit: local.slice(0, 7) };
+  }
+
+  if (!run('git', ['reset', '--hard', `refs/remotes/${remote}/${branch}`])) {
+    console.warn('[startup] could not check out the new commit -- starting on the code already here.');
+    return { ok: false, changed: 0, commit: null };
+  }
+  // Counted rather than reported by git: what matters to the log is how much of
+  // this tree moved, and that is the same question [syncFromRepo] answers.
+  const diff = capture('git', ['diff', '--name-only', local, target]);
+  return { ok: true, changed: diff === null ? 1 : diff.split('\n').filter(Boolean).length, commit: target.slice(0, 7) };
 }
 
 /**
@@ -695,7 +835,28 @@ async function main() {
 
 // Nothing below `main` should throw synchronously; a rejected promise here is a
 // process that would otherwise exit 0 on a failure to boot.
-main().catch((error) => {
-  console.error('[startup] unhandled failure:', error);
-  process.exit(1);
-});
+//
+// Guarded so that importing this file — which the tests do, to exercise the
+// update and freshness rules without a server — does not also start one.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error('[startup] unhandled failure:', error);
+    process.exit(1);
+  });
+}
+
+/**
+ * The pieces worth testing on their own.
+ *
+ * Exported rather than duplicated in the test file, because a copy of a rule is
+ * not the rule: a test that re-implements the staleness comparison passes
+ * whether or not the entry point still does it. Everything here is a pure
+ * decision about files, with no process to start and no port to bind.
+ */
+export {
+  copyTree,
+  distIsStale,
+  insideLargerCheckout,
+  newestMtimeMs,
+  syncFromRepo,
+};

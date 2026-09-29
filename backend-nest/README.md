@@ -141,45 +141,60 @@ docker run -p 8080:8080 velthy-party
 ## Deploying an update (and knowing it landed)
 
 A restart does **not** mean new code is running. There are three separate things
-that can be stale, and each fails quietly:
+that can be stale, and each used to fail quietly:
 
 | What can be stale | What it looks like | What fixes it |
 |---|---|---|
-| The files on disk | the panel pulled, the code did not change | `GIT_PULL=1` (or pull yourself) |
+| The files on disk | the panel pulled, the code did not change | automatic: the server follows its own repository |
 | `dist/` — the compiled output | sources are new, the server runs the previous build | automatic: rebuilt when `src/` is newer |
 | The process | it is running the code it started with | restart |
 
-The middle one is the trap: `dist/` is what the server actually loads, and it is
-*preferred* over `src/`, so a fresh checkout beside an old build changes nothing
-at all — no error, no warning, just a server that is healthy and out of date.
-`startup.mjs` now compares the two and rebuilds when `src/` is newer, so a
-restart always runs at least the code that is on disk.
+The middle one is the trap that started all of this: `dist/` is what the server
+actually loads, and it is *preferred* over `src/`, so a fresh checkout beside an
+old build changes nothing at all — no error, no warning, just a server that is
+healthy and out of date. `startup.mjs` now compares the two and rebuilds when
+`src/` is newer, so a restart always runs at least the code that is on disk.
 
-### 1. Let the server update itself
+### 1. Nothing to configure
 
-Set these on the server (Pterodactyl: **Startup** tab, or `.env`):
+The server follows its own repository **by default**. The three values it needs
+are compiled into `startup.mjs`:
 
-```bash
-GIT_PULL=1
-GIT_URL=https://github.com/Synxx12/velthy.git
-GIT_BRANCH=main
+| | |
+|---|---|
+| repository | `https://github.com/Synxx12/velthy.git` |
+| branch | `main` |
+| subfolder | `backend-nest` — this project is one folder of a monorepo |
+
+So a restart is a deploy. The log says what happened:
+
+```
+[startup] updated to 07747ac: 3 file(s) changed.
+[startup] already current at 07747ac -- nothing changed.
 ```
 
-Then **restart**. The server fetches, checks the new commit out, reinstalls only
-if `package-lock.json` moved, and rebuilds. The log says which of those happened:
+Overrides exist for a fork or another branch — `GIT_URL`, `GIT_BRANCH`,
+`GIT_SUBDIR` — and `GIT_PULL=0` turns the whole thing off.
 
-```
-[startup] 67315b1 -> d5ef700 on origin/main.
-[startup] updated and rebuilt.
-```
+**A development tree turns it off by itself.** A folder that sits *inside*
+somebody else's checkout is never updated, because the sources there are
+uncommitted edits that exist nowhere else. `GIT_PULL=1` forces it on anywhere.
 
-`GIT_URL` is only needed once, on a tree that was uploaded rather than cloned —
-the server sets up `.git` itself and updates normally from then on. `.env` and
-`node_modules/` are untouched by an update; a local edit to a *tracked* file
-stops the update rather than being overwritten.
+### How the update works on an uploaded deployment
 
-Without `GIT_PULL`, the server still rebuilds a stale `dist/`, so it never runs
-a build older than its own sources — it just will not fetch anything new.
+A panel's folder holds the *contents* of this project — `package.json`, `src/`,
+`startup.mjs` — and the repository those came from has all of it one level down
+in `backend-nest/`. There is no `.git` to pull with, and `git init` here would be
+wrong: checking the branch out into this directory would scatter the whole
+monorepo across it, an `app/` folder beside `src/`.
+
+So the repository is cloned **beside** the tree, into `.velthy-repo/`, and the
+one subfolder is copied out of it. A clone carries tracked files only, so
+`node_modules/`, `dist/`, `.env`, and anything put here by hand all survive —
+and nothing is ever deleted, only written over.
+
+The copy is idempotent: a restart on an unchanged commit writes nothing, which is
+what makes the ordinary restart cheap.
 
 ### 2. Check what is actually running
 
