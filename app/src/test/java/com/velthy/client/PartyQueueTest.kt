@@ -229,10 +229,18 @@ class PartyInviteLinkTest {
     }
 
     @Test
-    fun `an invite to a custom server points at that server`() {
+    fun `an invite to a custom server still lives on the invite domain`() {
+        // The party *server* is an API with no web page on it. A link pointing
+        // at it would 404 in a browser and open nothing on a phone, so the
+        // server travels as a query parameter on the one host that serves the
+        // join page and is registered as an App Link.
         assertEquals(
-            "https://party.example.com/join/ABC123",
+            "https://velthy.my.id/join/ABC123?server=https%3A%2F%2Fparty.example.com",
             JamInviteLink.url("ABC123", "https://party.example.com"),
+        )
+        assertEquals(
+            JamInviteLink.url("ABC123", "https://party.example.com"),
+            JamInviteLink.webUrl("ABC123", "https://party.example.com"),
         )
     }
 
@@ -241,5 +249,15 @@ class PartyInviteLinkTest {
         val scheme = JamInviteLink.schemeUrl("ABC123", "https://party.example.com")
         assertTrue(scheme.startsWith("velthy://join/ABC123?server="))
         assertTrue(scheme.contains("party.example.com"))
+    }
+
+    @Test
+    fun `a custom-server web link round-trips back into the same invite`() {
+        // The link the app hands out and the link the app reads back have to
+        // agree, or a self-hosted party is shareable but not joinable.
+        val shared = JamInviteLink.url("ABC123", "https://party.example.com")
+        val parsed = JamInviteLink.parseInvite(shared)
+        assertEquals("ABC123", parsed?.code)
+        assertEquals("https://party.example.com", parsed?.serverUrl)
     }
 }

@@ -202,7 +202,41 @@ Yang dikerjakan:
 ### 3c. Auto-update di `startup.mjs` ✅ SELESAI (commit `36b8fa4`)
 Lihat §1c.
 
-### 3d. Belum dikerjakan (sisa kecil)
+### 3d. Sesi UX + deep link invite ✅ SELESAI (belum di-commit)
+
+Permintaan user (3 poin), semuanya selesai di working tree:
+
+| Permintaan | Yang dikerjakan |
+|---|---|
+| "log itu kyk terminal console yang bisa di-scroll, bukan makan tempat" | `ActivityConsole` — `LazyColumn` tinggi tetap **176.dp** di dalam `Box` ber-`border`, font monospace, timestamp `HH:mm:ss`, background `#0B0B0D`. Menggantikan `ActivityGroup` yang menumpuk di scroll halaman. Tanpa `key` (list prepend-only; key dari timestamp+isi bisa bentrok). |
+| "adjust party size & settings berat/gk stabil, harusnya cepat" | Optimistic + debounce. `pendingMaxMembers` / `pendingHostOnly` di `ListenTogetherScreen`, `SETTINGS_DEBOUNCE_MS = 220L`, `SETTINGS_ECHO_TIMEOUT_MS = 3_000L`. Satu kontrol per gesture, bukan per tap; nilai balik ke server kalau echo tak datang. |
+| "tombol gabung party selain full player gimana" | Dua jalan masuk baru: `ListenTogetherTopBarButton` di `FrostedTopBar` (menyala + badge jumlah saat in-party), dan baris **Listen Together** di grup "Together" pada `SettingsScreen` (`onOpenListenTogether`). |
+
+**Bonus (permintaan lanjutan user): deep link invite di web**
+
+- `D:\Vs code\Velthy-web\app\join\[code]\page.tsx` — halaman undangan (metadata + `robots: noindex`).
+- `D:\Vs code\Velthy-web\src\components\join\JoinPageClient.tsx` — kartu undangan bilingual, tombol `velthy://join/{code}`, tombol unduh APK, langkah cara masuk.
+- `D:\Vs code\Velthy-web\app\api\party-preview\[code]\route.ts` — **proxy** ke party server. Wajib: CORS server party tertutup (`JAM_ALLOWED_ORIGINS=''`), jadi browser tidak bisa fetch langsung.
+- `D:\Vs code\Velthy-web\public\.well-known\assetlinks.json` — fingerprint SHA-256 rilis **dan** debug.
+- `AndroidManifest.xml` — `android:autoVerify="true"` pada intent-filter `/join`.
+- `JamInviteLink.url()` / `webUrl()` — **diubah**: link web SELALU ke `velthy.my.id`, server kustom dibawa sebagai `?server=`. Sebelumnya link ke server kustom (`https://party.example.com/join/CODE`) → 404 di browser dan tidak membuka apa pun di HP.
+
+**Fingerprint rilis** (dari APK `v1.4.7`, `keytool`/`apksigner`):
+```
+DA:D2:A1:D2:5F:1A:85:50:15:4C:71:31:15:41:CC:D0:C3:2D:E4:4C:74:26:87:1C:B5:2E:1D:FF:F6:34:B6:B1
+```
+Debug (`com.velthy.client.dev`):
+```
+AD:28:DA:0E:82:75:C0:61:5B:C0:C8:CA:BD:22:29:89:9E:BC:3A:FB:5D:73:B8:D8:BE:06:AF:5C:88:01:45:96
+```
+
+**Verifikasi yang sudah lulus:**
+- `compileDevDebugKotlin` → BUILD SUCCESSFUL
+- `testDevDebugUnitTest --tests PartyInviteLinkTest` → BUILD SUCCESSFUL
+- `next build` → sukses; route `/join/[code]` + `/api/party-preview/[code]` terdaftar
+- `next start -p 3010` → `/join/ABC123` 200, `.well-known/assetlinks.json` 200, proxy preview 404 (party tak ada) — semua benar
+
+### 3e. Belum dikerjakan (sisa kecil)
 - **Probe + fallback server** (v1.7 `ServerConnectionState.CustomFallback`): Velthy
   hanya memvalidasi alamat dan punya health check sederhana. Belum ada fallback
   otomatis ke server bawaan saat server kustom mati.
@@ -210,6 +244,8 @@ Lihat §1c.
   (lihat komentar di `MemberRow`), bukan URL avatar.
 - **`PartyServerEditor.kt` sebagai layar terpisah**: Velthy menaruh editor di
   dalam `ListenTogetherScreen`, bukan file sendiri.
+- **Uji di perangkat**: deep link `autoVerify` baru diverifikasi saat *install*
+  (Android fetch `assetlinks.json` sekali). Perlu reinstall APK baru untuk uji.
 
 ---
 
@@ -303,6 +339,8 @@ karena server berikutnya akan gagal `EADDRINUSE`.
    - Keluarkan satu anggota → perangkat itu keluar dan tidak bisa masuk lagi sehari
    - Buka QR, pindai dari perangkat lain → kode terisi otomatis
 4. **Sisa kecil** (§3d): probe + fallback server otomatis ke server bawaan.
+5. **Deploy web** - Velthy-web harus di-deploy agar /join/[code] dan assetlinks.json hidup di velthy.my.id. Tanpa itu autoVerify gagal dan link undangan jatuh ke browser (404).
+6. **Uji deep link** - butuh reinstall APK (verifikasi App Link hanya saat install), lalu adb shell pm get-app-links com.velthy.client harus verified.
 
 ---
 

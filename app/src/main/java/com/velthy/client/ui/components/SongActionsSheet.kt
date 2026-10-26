@@ -75,6 +75,7 @@ import com.velthy.client.data.model.artworkAt
 import com.velthy.client.download.DownloadState
 import com.velthy.client.download.Downloads
 import com.velthy.client.playback.SleepTimer
+import com.velthy.client.playback.hasYouTubeOriginal
 import com.velthy.client.ui.components.thumbnailBorder
 import com.velthy.client.ui.theme.ArtworkPalette
 import com.velthy.client.ui.theme.rememberArtworkPalette
@@ -159,10 +160,12 @@ fun SongActionsSheet(
 
         // Which recording is playing is the one question that has to be answered
         // before any of the rows below mean anything: there is no point rating,
-        // queueing or downloading the wrong version of a song. It leads the list
-        // for that reason, and the two states are exclusive — one is offered for
-        // a track playing a substituted copy, the other for a track held on
-        // YouTube's own.
+        // queueing or downloading the wrong version of a song. Revert leads the
+        // list for any track with a YouTube upload, not only for one whose
+        // substitute is visible: a source can take first refusal silently, so
+        // the listener is the only one who can hear that it is the wrong take.
+        // Upgrade is separate and only offered while the copy on screen is not
+        // already coming from a module.
         val nerd = com.velthy.client.data.NerdStats.current.collectAsStateWithLifecycle().value
         val isPlayingThis = com.velthy.client.playback.PlaybackService.isCurrentMediaId(song.videoId)
         if (isPlayingThis && !isLocalFile) {
@@ -171,8 +174,8 @@ fun SongActionsSheet(
             val declared = com.velthy.client.data.NerdStats.declaredFormat(song.videoId)
             val isFromModule = declared != null || nerd?.isLossless == true
 
-            when {
-                isSearchingLossless -> ActionRow(
+            if (isSearchingLossless) {
+                ActionRow(
                     icon = Icons.Rounded.HighQuality,
                     label = "Upgrade quality",
                     value = "Searching\u2026",
@@ -187,22 +190,27 @@ fun SongActionsSheet(
                     },
                     onClick = {},
                 )
-                isFromModule -> ActionRow(
-                    icon = Icons.AutoMirrored.Rounded.Undo,
-                    label = "Revert to original",
-                    accent = palette.accent,
-                    onClick = {
-                        com.velthy.client.playback.PlaybackService.switchToOriginalYouTube(song.videoId)
-                    },
-                )
-                com.velthy.client.data.settings.AppSettings.isLosslessAllowedNow -> ActionRow(
-                    icon = Icons.Rounded.HighQuality,
-                    label = "Upgrade quality",
-                    accent = palette.accent,
-                    onClick = {
-                        com.velthy.client.playback.PlaybackService.switchToLossless(song.videoId)
-                    },
-                )
+            } else {
+                if (song.hasYouTubeOriginal()) {
+                    ActionRow(
+                        icon = Icons.AutoMirrored.Rounded.Undo,
+                        label = "Revert to original",
+                        accent = palette.accent,
+                        onClick = {
+                            com.velthy.client.playback.PlaybackService.switchToOriginalYouTube(song.videoId)
+                        },
+                    )
+                }
+                if (!isFromModule && com.velthy.client.data.settings.AppSettings.isLosslessAllowedNow) {
+                    ActionRow(
+                        icon = Icons.Rounded.HighQuality,
+                        label = "Upgrade quality",
+                        accent = palette.accent,
+                        onClick = {
+                            com.velthy.client.playback.PlaybackService.switchToLossless(song.videoId)
+                        },
+                    )
+                }
             }
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = 6.dp),

@@ -44,6 +44,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.velthy.client.MainActivity
 import com.velthy.client.R
+import com.velthy.client.VelthyApplication
 import com.velthy.client.data.Http
 import com.velthy.client.data.LikeState
 import com.velthy.client.data.NerdStats
@@ -162,6 +163,8 @@ class PlaybackService : MediaSessionService() {
 
     private val favoriteCommand =
         SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY)
+    private val repeatCommand =
+        SessionCommand(ACTION_CYCLE_REPEAT, Bundle.EMPTY)
     private val autoplayCommand =
         SessionCommand(ACTION_TOGGLE_AUTOPLAY, Bundle.EMPTY)
     private val shuffleCommand =
@@ -185,6 +188,7 @@ class PlaybackService : MediaSessionService() {
         ): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(favoriteCommand)
+                .add(repeatCommand)
                 .add(autoplayCommand)
                 .add(shuffleCommand)
                 .add(stationCommand)
@@ -204,6 +208,7 @@ class PlaybackService : MediaSessionService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
+                ACTION_CYCLE_REPEAT -> cycleRepeatFromNotification()
                 ACTION_TOGGLE_AUTOPLAY -> toggleAutoplayFromNotification()
                 ACTION_TOGGLE_SHUFFLE -> toggleShuffleFromNotification()
                 ACTION_START_STATION -> startStationFromSession()
@@ -263,15 +268,6 @@ class PlaybackService : MediaSessionService() {
                 .apply { setSmallIcon(R.drawable.ic_notification_logo) },
         )
 
-        // The player screen toggles QueueShuffle directly on its MediaController.
-        // Observe the shared state here so the notification's Shuffle icon and
-        // label follow that toggle immediately as well.
-        scope.launch {
-            QueueShuffle.enabled
-                .collectLatest {
-                    mediaSession?.setCustomLayout(notificationButtons())
-                }
-        }
         scope.launch {
             LikeState.overrides.collectLatest {
                 mediaSession?.setCustomLayout(notificationButtons())
@@ -711,6 +707,9 @@ class PlaybackService : MediaSessionService() {
                 // Turning repeat-all back off can leave the current item at the end
                 // of the queue, which is the same trigger as a normal transition.
                 loadAutoplayForCurrentTrack()
+                // The notification's first button is repeat, so it has to change
+                // here rather than waiting for the next track.
+                mediaSession?.setCustomLayout(notificationButtons())
             }
 
             /**
@@ -2835,74 +2834,55 @@ class PlaybackService : MediaSessionService() {
 
     private fun notificationButtons(): List<CommandButton> {
         val current = player?.currentMediaItem?.toSong()
-        // Offered only while there is something to go back to: a real YouTube
-        // id, on a substitute stream, that the listener has not already pinned
-        // here. Anything else and the button would be a no-op with a label.
-        val revert = current
-            ?.takeIf {
-                it.canStartStation() &&
-                    it.localUri == null &&
-                    StreamChoice.isSubstitute(it.videoId)
-            }
-            ?.let {
-                CommandButton.Builder(CommandButton.ICON_SYNC)
-                    .setSessionCommand(revertCommand)
-                    .setDisplayName("Revert to original")
+        val currentId = current?.videoId
+        val repeatMode = player?.repeatMode ?: Player.REPEAT_MODE_OFF
+        val repeat = CommandButton.Builder(repeatButtonIcon(repeatMode))
+            .setSessionCommand(repeatCommand)
+            .setDisplayName(repeatButtonLabel(repeatMode))
+            .build()
+        // The heart is only offered when the service can actually write a
+        // rating: local files have no YouTube id to rate, and a signed-out
+        // session has no account to rate them on.
+        val showFavorite = current != null && shouldShowNotificationFavorite(
+            signedIn = VelthyApplication.authStore.isSignedIn,
+            isLocal = current.localUri != null,
+        )
+        return notificationControls(showFavorite).map { control ->
+            when (control) {
+                NotificationControl.REPEAT -> repeat
+                NotificationControl.FAVORITE -> CommandButton.Builder(
+                    if (LikeState.overrides.value[currentId] == LikeStatus.LIKE) {
+                        CommandButton.ICON_HEART_FILLED
+                    } else {
+                        CommandButton.ICON_HEART_UNFILLED
+                    },
+                )
+                    .setSessionCommand(favoriteCommand)
+                    .setDisplayName("Favorite")
                     .build()
             }
-        // The station leads, like BitChord's: Android Auto shows only the first
-        // few custom actions, and "play this as a radio" is the one worth
-        // reaching from a car without a menu.
-        val station = current
-            ?.takeIf { it.canStartStation() }
-            ?.let {
-                CommandButton.Builder(CommandButton.ICON_RADIO)
-                    .setSessionCommand(stationCommand)
-                    .setDisplayName("Start radio")
-                    .build()
-            }
-        val favorite = CommandButton.Builder(
-            if (LikeState.overrides.value[player?.currentMediaItem?.mediaId] == LikeStatus.LIKE) {
-                CommandButton.ICON_HEART_FILLED
-            } else {
-                CommandButton.ICON_HEART_UNFILLED
-            },
-        )
-            .setSessionCommand(favoriteCommand)
-            .setDisplayName("Favorite")
-            .build()
-        val shuffleEnabled = QueueShuffle.enabled.value
-        val shuffle = CommandButton.Builder(
-            if (shuffleEnabled) {
-                CommandButton.ICON_SHUFFLE_ON
-            } else {
-                CommandButton.ICON_SHUFFLE_OFF
-            },
-        )
-            .setSessionCommand(shuffleCommand)
-            .setDisplayName(if (shuffleEnabled) "Shuffle off" else "Shuffle on")
-            .build()
-        // AutoPlay last, and always present rather than only while it is on:
-        // Android Auto shows a fixed number of these without an overflow menu,
-        // so what is on the list has to be worth its slot in every state. The
-        // heart says whether the track is liked; shuffle and AutoPlay say what
-        // happens next — the three things worth reaching from a lock screen.
-        val autoplayEnabled = AppSettings.autoplay.value
-        val autoplay = CommandButton.Builder(
-            if (autoplayEnabled) {
-                CommandButton.ICON_REPEAT_ALL
-            } else {
-                CommandButton.ICON_REPEAT_OFF
-            },
-        )
-            .setSessionCommand(autoplayCommand)
-            .setDisplayName(if (autoplayEnabled) "Autoplay off" else "Autoplay on")
-            .build()
-        // Station and revert lead, and are conditional; the three that follow
-        // are always present. Android Auto shows only the first few without an
-        // overflow, so the two that describe *this track* come before the three
-        // that describe how the queue plays.
-        return listOfNotNull(station, revert, favorite, shuffle, autoplay)
+        }
+    }
+
+    /**
+     * Walks Repeat off → all → one, the same order as the player screen.
+     *
+     * Repeat-all drops any AutoPlay tail first, because the queue is about to
+     * loop on its own and a tail appended for the old "play to the end" state
+     * would be stranded there. The notification icon and label follow through
+     * [onRepeatModeChanged].
+     */
+    private fun cycleRepeatFromNotification() {
+        val exoPlayer = player ?: return
+        val next = nextRepeatMode(exoPlayer.repeatMode)
+        if (next == Player.REPEAT_MODE_ALL) {
+            dropAutoplayTracksFromQueue()
+            autoplaySeed = null
+        } else if (next == Player.REPEAT_MODE_OFF) {
+            autoplaySeed = null
+        }
+        exoPlayer.repeatMode = next
+        mediaSession?.setCustomLayout(notificationButtons())
     }
 
     private fun toggleShuffleFromNotification() {
@@ -2950,6 +2930,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun toggleFavoriteFromNotification(videoId: String) {
+        if (!VelthyApplication.authStore.isSignedIn) return
+        if (player?.currentMediaItem?.toSong()?.localUri != null) return
         favoriteActionJob?.cancel()
         val previous = LikeState.overrides.value[videoId] ?: LikeStatus.INDIFFERENT
         val target = if (previous == LikeStatus.LIKE) {
@@ -3237,6 +3219,7 @@ class PlaybackService : MediaSessionService() {
         const val CHANNEL_ID = "velthy_playback"
         const val SESSION_ID = "VelthyPlayback"
         const val ACTION_TOGGLE_FAVORITE = "com.velthy.client.action.TOGGLE_FAVORITE"
+        const val ACTION_CYCLE_REPEAT = "com.velthy.client.action.CYCLE_REPEAT"
         const val ACTION_TOGGLE_AUTOPLAY = "com.velthy.client.action.TOGGLE_AUTOPLAY"
         const val ACTION_TOGGLE_SHUFFLE = "com.velthy.client.action.TOGGLE_SHUFFLE"
         const val ACTION_START_STATION = "com.velthy.client.action.START_STATION"

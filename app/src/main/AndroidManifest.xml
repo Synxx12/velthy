@@ -180,7 +180,16 @@
                     android:path="/callback" />
             </intent-filter>
             <!-- Listen Together invites: velthy://join/ABC123 from a device that
-                 has the app, and the velthy.my.id web address as the fallback. -->
+                 has the app, and the velthy.my.id web address as the fallback.
+
+                 The https filter is verified (`autoVerify`), which is what makes
+                 a tapped invite link open Velthy directly instead of landing in
+                 the browser — Android checks /.well-known/assetlinks.json on the
+                 host against this build's signing certificate once, at install,
+                 and routes every matching link straight here afterwards. Without
+                 it the link opens the web page and the app is a second, manual
+                 step. A verification that fails simply falls back to that page,
+                 which is why the page exists as well. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -189,7 +198,7 @@
                     android:scheme="velthy"
                     android:host="join" />
             </intent-filter>
-            <intent-filter>
+            <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />

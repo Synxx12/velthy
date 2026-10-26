@@ -152,7 +152,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Rect
+
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -168,12 +168,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -735,14 +734,6 @@ private fun activeLyricRows(lines: List<LyricLine>, positionMs: Long): List<Int>
 }
 
 /**
- * How visible the player's own sleeve/banner should be while the host's cover
- * morph is running. Reads the morph's [State] inside the artwork layers' draw
- * lambdas, so it updates every frame without recomposing the whole screen.
- */
-private fun artRevealOf(morph: State<Float>?): Float =
-    coverArtReveal(morph?.value ?: 1f)
-
-/**
  * The finger's vertical speed, converted into the units the morph moves in.
  *
  * Pixels per second is not a number the host can use: what it has is a progress
@@ -862,15 +853,11 @@ fun NowPlayingScreen(
      */
     onPullEnd: (Float) -> Unit = {},
     /**
-     * The open/close progress (1 = fully open) driving the mini → full cover
-     * morph. While < 1 the player's own artwork stays hidden behind the moving
-     * cover drawn by the host (see [coverArtReveal]); the mesh, credits and
-     * controls fade in on their own gentler curve.
+     * The open/close progress (1 = fully open). The player's own artwork fades
+     * and grows in as the mini player's copy fades out; the mesh, credits and
+     * controls follow the same progress.
      */
     morph: State<Float>? = null,
-    /** Reports where this player's artwork will sit once fully open, in window
-     *  pixels, so the host can aim the morph's travelling cover at it. */
-    onArtTargetChanged: ((CoverTarget?) -> Unit)? = null,
     /**
      * The window's own measured size.
      *
@@ -890,7 +877,6 @@ fun NowPlayingScreen(
     val configuration = LocalConfiguration.current
     val isCompactScreen = configuration.screenHeightDp < 740
     val landscape = landscapePlayerAvailable(windowWidth, windowHeight)
-    var sleeveRootRect by remember { mutableStateOf<Rect?>(null) }
 
     val syncedLyricsEnabled by AppSettings.syncedLyrics.collectAsStateWithLifecycle()
     val hideVolumeBar by AppSettings.hideVolumeBar.collectAsStateWithLifecycle()
@@ -977,10 +963,15 @@ fun NowPlayingScreen(
     // then slides back on its own once the list rests. Raised by the lists
     // themselves (only a real finger-drag counts), never by their auto-scroll.
     var panelScrollHidden by remember { mutableStateOf(false) }
+    var lyricsControlsInteraction by remember { mutableIntStateOf(0) }
+    var lyricsControlsTouching by remember { mutableStateOf(false) }
     LaunchedEffect(queueOpen, lyricsOpen) {
         // Never leave the controls stranded behind artwork: closing either
         // panel means the content no longer needs the borrowed height.
-        if (!queueOpen && !lyricsOpen) panelScrollHidden = false
+        if (!queueOpen && !lyricsOpen) {
+            panelScrollHidden = false
+            lyricsControlsTouching = false
+        }
     }
     val activeDevice by rememberActiveAudioDevice()
     val palette = rememberArtworkPalette(song.thumbnailUrl)
@@ -1063,6 +1054,37 @@ fun NowPlayingScreen(
     // [lyricsUnavailable] is the "came back empty" flag; empty without it is
     // still out.
     val lyricsLooking = !lyricsUnavailable && lyrics.isNullOrEmpty()
+
+    LaunchedEffect(
+        lyricsOpen,
+        queueOpen,
+        panelScrollHidden,
+        lyricsControlsInteraction,
+        showSleepTimerSheet,
+        showAudioOutputSheet,
+        showPartyMembers,
+        showLyricsOffset,
+        displayedLyrics.isNotEmpty(),
+        landscape,
+        lyricsControlsTouching,
+    ) {
+        if (landscape) return@LaunchedEffect
+        val overlayOpen = showSleepTimerSheet || showAudioOutputSheet ||
+            showPartyMembers || showLyricsOffset
+        if (!autoHideLyricsControls(
+                lyricsOpen = lyricsOpen,
+                queueOpen = queueOpen,
+                hasLyrics = displayedLyrics.isNotEmpty(),
+                overlayOpen = overlayOpen,
+                controlsHidden = panelScrollHidden,
+                controlsTouching = lyricsControlsTouching,
+            )
+        ) {
+            return@LaunchedEffect
+        }
+        delay(LYRICS_CONTROLS_IDLE_MS)
+        panelScrollHidden = true
+    }
 
     val translationScope = rememberCoroutineScope()
     val toggleTranslation: () -> Unit = toggleTranslation@{
@@ -1336,13 +1358,23 @@ fun NowPlayingScreen(
     var heroHeight by remember { mutableStateOf(0.dp) }
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
-    // Where the artwork a morph should aim at finally sits: the square sleeve,
-    // which on a phone sits inside the full-bleed banner's region. Reported
-    // whenever it moves so the host's travelling cover can follow it.
-    val coverTarget: CoverTarget? = sleeveRootRect?.let { CoverTarget(isHero = false, rect = it) }
-    LaunchedEffect(coverTarget) { onArtTargetChanged?.invoke(coverTarget) }
-
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(lyricsOpen) {
+                if (!lyricsOpen) return@pointerInput
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val touching = event.changes.any { it.pressed }
+                        if (touching != lyricsControlsTouching) {
+                            lyricsControlsTouching = touching
+                            if (!touching) lyricsControlsInteraction++
+                        }
+                    }
+                }
+            },
+    ) {
         if (meshColors != null) {
             // Keyed on the track: the backdrop drifts when the player opens and
             // on every skip, then rests. Position ticks recompose this screen
@@ -1410,8 +1442,7 @@ fun NowPlayingScreen(
                             // over, and takes it straight back if there is no
                             // clip mounted to hand it to.
                             alpha = heroT *
-                                (1f - if (heroClip != null) canvasCover.floatValue else 0f) *
-                                artRevealOf(morph)
+                                (1f - if (heroClip != null) canvasCover.floatValue else 0f)
                             // The mask below erases part of what this layer
                             // drew, which it can only do in a buffer of its own.
                             compositingStrategy = CompositingStrategy.Offscreen
@@ -1448,8 +1479,7 @@ fun NowPlayingScreen(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .fillMaxWidth()
-                            .height(heroHeight)
-                            .graphicsLayer { alpha = artRevealOf(morph) },
+                            .height(heroHeight),
                     )
                 }
             }
@@ -1563,17 +1593,16 @@ fun NowPlayingScreen(
                                 // The paused shrink and the swipe nudge only make
                                 // sense on the full sleeve.
                                 val idle = artScale
-                                scaleX = idle
-                                scaleY = idle
+                                val intro = playerArtScale(morph?.value ?: 1f)
+                                scaleX = idle * intro
+                                scaleY = idle * intro
                                 translationX = swipeSettle
-                            }
-                            .onGloballyPositioned { sleeveRootRect = it.boundsInRoot() },
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { alpha = artRevealOf(morph) }
                                 .shadow(
                                     if (artLoaded) 14.dp else 0.dp,
                                     RoundedCornerShape(10.dp),
@@ -1891,13 +1920,10 @@ fun NowPlayingScreen(
                             looking = lyricsLooking,
                             isPlaying = isPlaying,
                             onSeekToLine = onSeek,
-                            // A constant `true`: the flag exists because the
-                            // portrait player hides its transport behind the
-                            // lyrics and needs a tap to bring it back. Here
-                            // there is nothing hidden for a tap to reveal, and
-                            // leaving the reveal gesture armed would only eat
-                            // taps meant for the lines.
-                            onUserScroll = {},
+                            // The landscape player keeps its transport on
+                            // screen, so reading ahead has nothing to duck and
+                            // there is no reveal gesture to arm.
+                            onScrollForward = {},
                             translationProgress = particleProgress,
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -2145,8 +2171,9 @@ fun NowPlayingScreen(
                             // The paused shrink and the swipe nudge only make
                             // sense on the full sleeve.
                             val idle = artScale + (1f - artScale) * p
-                            scaleX = idle
-                            scaleY = idle
+                            val intro = playerArtScale(morph?.value ?: 1f)
+                            scaleX = idle * intro
+                            scaleY = idle * intro
                             translationX = swipeSettle * (1f - p)
                         }
                         // Collapsed, the sleeve is the way back: tapping the
@@ -2160,8 +2187,7 @@ fun NowPlayingScreen(
                             } else {
                                 Modifier
                             },
-                        )
-                        .onGloballyPositioned { sleeveRootRect = it.boundsInRoot() },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     // The sleeve proper. Separated from the box around it so
@@ -2170,7 +2196,7 @@ fun NowPlayingScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .graphicsLayer { alpha = (1f - heroT) * artRevealOf(morph) }
+                            .graphicsLayer { alpha = 1f - heroT }
                             // A drop shadow grounds a photo; on the flat
                             // placeholder tile it has nothing to sit behind, so
                             // it just reads as a second, darker square ringing
@@ -2255,7 +2281,7 @@ fun NowPlayingScreen(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
-                                .graphicsLayer { alpha = (1f - p * 2f) * artRevealOf(morph) },
+                                .graphicsLayer { alpha = 1f - p * 2f },
                         ) {
                             nerdStats?.describe()?.let { stats ->
                                 Text(
@@ -2351,12 +2377,10 @@ fun NowPlayingScreen(
                         .height(HEADER_HEIGHT)
                         // The credits rise the last stretch into place behind
                         // the backdrop, on their own run. Sibling of the
-                        // artwork, never its ancestor: a transform over the
-                        // sleeve's own box would move the bounds the morph aims
-                        // its cover at, and every frame of the flight would
-                        // then push a new target back up to the host.
+                        // artwork, never its ancestor, so the small scale on
+                        // the sleeve does not drag the title row with it.
                         .graphicsLayer {
-                            translationY = (1f - playerCreditsReveal(morph?.value ?: 1f)) *
+                            translationY = (1f - playerReveal(morph?.value ?: 1f)) *
                                 18.dp.toPx()
                         },
                     verticalAlignment = Alignment.CenterVertically,
@@ -2442,15 +2466,18 @@ fun NowPlayingScreen(
 
                 if (lyricsOpen) {
                     Box(
-                        // A tap on the lower half brings the transport back once
-                        // a scroll has ducked it away. The detector is only
-                        // installed while it is actually hidden, so with the
-                        // controls on screen the list scrolls off its own slop
-                        // as it always has — see [revealLyricsControlsOnTap].
+                        // Dragging back toward earlier lyrics, or tapping the
+                        // lower half, brings the transport back once a scroll
+                        // has ducked it away. Reading ahead (finger moving up)
+                        // leaves it hidden. The detector only consumes a tap
+                        // while the controls are actually hidden; with them on
+                        // screen the lyric row underneath still owns the tap and
+                        // seeks as usual — see [revealLyricsControlsOnGesture].
                         modifier = Modifier
                             .fillMaxSize()
-                            .revealLyricsControlsOnTap(
-                                enabled = panelScrollHidden,
+                            .padding(top = HEADER_HEIGHT + 10.dp)
+                            .revealLyricsControlsOnGesture(
+                                controlsHidden = panelScrollHidden,
                                 onReveal = { panelScrollHidden = false },
                             ),
                     ) {
@@ -2472,11 +2499,9 @@ fun NowPlayingScreen(
                                 looking = lyricsLooking,
                                 isPlaying = isPlaying,
                                 onSeekToLine = onSeek,
-                                onUserScroll = { panelScrollHidden = it },
+                                onScrollForward = { panelScrollHidden = true },
                                 translationProgress = particleProgress,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(top = HEADER_HEIGHT + 10.dp),
+                                modifier = Modifier.fillMaxSize(),
                             )
                         }
                     }
@@ -2544,7 +2569,7 @@ fun NowPlayingScreen(
                     // after the title it belongs to. Drawn, not composed: this
                     // moves on every frame of the morph.
                     .graphicsLayer {
-                        translationY = (1f - playerControlsReveal(morph?.value ?: 1f)) *
+                        translationY = (1f - playerReveal(morph?.value ?: 1f)) *
                             28.dp.toPx()
                     },
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -4129,7 +4154,8 @@ private fun LyricsPanel(
     looking: Boolean,
     isPlaying: Boolean,
     onSeekToLine: (Long) -> Unit,
-    onUserScroll: (Boolean) -> Unit = {},
+    /** Called when a real drag starts reading ahead (toward later lines). */
+    onScrollForward: () -> Unit = {},
     translationProgress: State<Float>? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -4171,11 +4197,32 @@ private fun LyricsPanel(
     val activeLine = activeRows.firstOrNull() ?: -1
     val listState = rememberLazyListState()
     val keepScroll = remember(listState) { keepScrollInList(listState) }
-    // Tells the player's transport auto-hide whether a finger is genuinely
-    // scrolling this list (down or the fling it left behind) — programmatic
-    // scrolls like auto-follow never count.
+    // True only for a genuine finger scroll (and the fling it left behind),
+    // never for the auto-follow, so the direction check below cannot mistake
+    // the song's own scroll for someone reading ahead.
     val panelScrolling = rememberPanelScrolling(listState)
-    LaunchedEffect(panelScrolling) { onUserScroll(panelScrolling) }
+    // Duck the transport only while reading ahead. A backward drag — the finger
+    // moving down toward earlier lines — is the reveal gesture and is left to
+    // [revealLyricsControlsOnGesture], so the state stays put when the scroll
+    // ends and letting go never pops the transport in by itself. Programmatic
+    // auto-follow is ignored because [panelScrolling] only turns on for a real
+    // drag and the fling it leaves.
+    val currentOnScrollForward by rememberUpdatedState(onScrollForward)
+    val currentPanelScrolling by rememberUpdatedState(panelScrolling)
+    LaunchedEffect(listState) {
+        var previous = Long.MIN_VALUE
+        snapshotFlow {
+            currentPanelScrolling to (
+                listState.firstVisibleItemIndex.toLong() * 1_000_000L +
+                    listState.firstVisibleItemScrollOffset
+                )
+        }.collect { (scrolling, position) ->
+            val last = previous
+            previous = position
+            if (!scrolling || last == Long.MIN_VALUE || position <= last) return@collect
+            currentOnScrollForward()
+        }
+    }
     var browsing by remember { mutableStateOf(false) }
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
@@ -5329,8 +5376,8 @@ private fun keepScrollInList(listState: LazyListState) = object : NestedScrollCo
  * transport, so only a real drag (DragInteraction.Start) raises this.
  *
  * It stays true for a beat after the list rests ([PANEL_REST_MS]), so a short
- * pause mid-browse doesn't flash the controls in and out; letting go after
- * that stillness is what brings the transport back.
+ * pause mid-browse doesn't flash the controls in and out; each caller decides
+ * what that stillness means for its own transport.
  */
 @Composable
 private fun rememberPanelScrolling(listState: LazyListState): Boolean {

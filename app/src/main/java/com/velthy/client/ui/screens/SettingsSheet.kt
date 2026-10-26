@@ -58,6 +58,7 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.Podcasts
 import androidx.compose.material.icons.rounded.SignalCellularAlt
 import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material.icons.rounded.Refresh
@@ -196,6 +197,13 @@ fun SettingsScreen(
      * languages long.
      */
     onTranslationLanguage: () -> Unit = {},
+    /**
+     * Opens Listen Together. Offered here, beside the other integrations, so
+     * joining a party is not something only the full player can do — the player
+     * is where a listener already playing looks, and Settings is where
+     * everybody else does.
+     */
+    onOpenListenTogether: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -396,6 +404,15 @@ fun SettingsScreen(
                     title = "Lyrics",
                     subtitle = "Synced lyrics, sources and translation",
                     onClick = { onCategoryChange(SettingsCategory.LYRICS) },
+                )
+            }
+
+            SettingsGroup(header = "Together") {
+                SettingsRow(
+                    icon = Icons.Rounded.Podcasts,
+                    title = "Listen Together",
+                    subtitle = "Start or join a party and listen in sync",
+                    onClick = onOpenListenTogether,
                 )
             }
 
@@ -1266,6 +1283,35 @@ fun SettingsScreen(
                 )
             }
 
+            if (confirmImport) {
+                AlertDialog(
+                    onDismissRequest = { confirmImport = false },
+                    title = { Text("Import data?") },
+                    text = {
+                        Text(
+                            "This replaces the settings and listening history on this " +
+                                "device with the ones in the file. Your export is not changed.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                confirmImport = false
+                                importPicker.launch(
+                                    arrayOf(
+                                        "application/json",
+                                        "application/octet-stream",
+                                        "text/plain",
+                                    ),
+                                )
+                            },
+                        ) { Text("Choose file") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmImport = false }) { Text("Cancel") }
+                    },
+                )
+            }
         }
 
         if (page == SettingsCategory.MISC) {

@@ -92,23 +92,20 @@ object JamInviteLink {
     /**
      * The link to hand somebody else.
      *
-     * The `velthy://` form comes first because it is the one that opens the app
-     * directly, on a device that has it installed. The web address is the
-     * fallback a chat client will still make clickable, and it carries the same
-     * code in the same place.
+     * Always on this project's own domain, whichever server the party lives on.
+     * That is not branding: `velthy.my.id` is the only host with a page at
+     * `/join/{code}` and the only host this app registers as a verified App
+     * Link, so a link pointing at a self-hosted *party server* — an API with no
+     * web page on it — would 404 in a browser and open nothing at all on a
+     * phone. The server travels as a `?server=` query parameter instead, which
+     * the page reads and the app applies before it looks the code up.
      *
-     * [customServer] rides along only when it is the server the party is
-     * actually on: an invite that names the built-in address is the ordinary
-     * case, and putting it in every link would leak it into every chat.
+     * [customServer] rides along only when it is not the built-in address: an
+     * invite that names the built-in server is the ordinary case, and putting
+     * it in every link would leak it into every chat.
      */
-    fun url(code: String, customServer: String? = null): String {
-        val base = customServer?.trim()?.trimEnd('/')
-        return if (!base.isNullOrBlank() && !base.equals(ORIGIN, ignoreCase = true)) {
-            "$base/join/${code.uppercase()}"
-        } else {
-            "$ORIGIN/join/${code.uppercase()}"
-        }
-    }
+    fun url(code: String, customServer: String? = null): String =
+        "$ORIGIN/join/${code.uppercase()}${serverQuery(customServer)}"
 
     /** The same invite in the app's own scheme, for a device that has Velthy. */
     fun schemeUrl(code: String, customServer: String? = null): String {
@@ -122,14 +119,23 @@ object JamInviteLink {
         }
     }
 
-    /** The same invite as a plain web address, for anywhere a custom scheme is not clickable. */
-    fun webUrl(code: String, customServer: String? = null): String {
-        val base = customServer?.trim()?.trimEnd('/')
-        return if (!base.isNullOrBlank() && !base.equals(ORIGIN, ignoreCase = true)) {
-            "$base/join/${code.uppercase()}"
-        } else {
-            "$ORIGIN/join/${code.uppercase()}"
-        }
+    /**
+     * The same invite as a plain web address.
+     *
+     * Identical to [url] — there is one web address per invite, and it is the
+     * one that both a browser and Android's link handling can follow. Kept as
+     * a named function because the share sheet reads as two different
+     * intentions, and because a future web-only form would land here.
+     */
+    fun webUrl(code: String, customServer: String? = null): String =
+        url(code, customServer)
+
+    /** `?server=` for a non-built-in server, or nothing. @see url */
+    private fun serverQuery(customServer: String?): String {
+        val base = customServer?.trim()?.trimEnd('/') ?: return ""
+        if (base.isBlank() || base.equals(ORIGIN, ignoreCase = true)) return ""
+        val encoded = runCatching { URLEncoder.encode(base, "UTF-8") }.getOrDefault(base)
+        return "?server=$encoded"
     }
 
     private fun cleanCode(raw: String): String? {

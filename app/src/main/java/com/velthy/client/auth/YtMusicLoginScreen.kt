@@ -7,14 +7,19 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -95,54 +100,38 @@ data class CapturedSession(
  * music.youtube.com and hands back a cookie for the account that was just
  * signed out of — a sign-in screen that cannot be used to sign in as anyone
  * else, and shows barely a flicker while refusing to.
+ *
+ * Google's jar cannot be cleared domain by domain. Expiring individual cookies
+ * misses HttpOnly ones, cookies on a path other than `/`, and the `__Secure-`
+ * family that rejects a value lacking its `Secure` attribute; and `setCookie`
+ * is asynchronous, so a load started straight after it can still see the old
+ * jar. [removeAllCookies] with its completion callback is the only removal that
+ * is both complete and ordered before the next load.
  */
 object BrowserSession {
 
     /**
-     * Forgets the Google login the in-app browser is holding.
+     * Forgets everything the in-app browser is holding, then calls [onCleared].
      *
-     * Google's cookies only, by name, rather than [CookieManager.removeAllCookies]:
-     * the same jar holds the Discord and Last.fm logins from their own in-app
-     * browsers, and signing out of YouTube Music is not a reason to sign out of
-     * those. There is no per-domain removal in the API, so each cookie is
-     * overwritten with an expired one of the same name.
+     * Saved YouTube Music accounts are not affected: their cookies live in the
+     * app's own store, not here. Discord and Last.fm keep their tokens there
+     * too, so clearing this jar only makes their next *web* sign-in fresh.
      */
-    fun clearGoogleCookies() {
+    fun clearAllCookies(onCleared: () -> Unit = {}) {
         // Best effort throughout. CookieManager needs a WebView provider, and
         // on a device that has none there isn't one — which is a reason for the
         // next sign-in to be less convenient, not a reason to crash.
         val manager = runCatching { CookieManager.getInstance() }.getOrElse {
             Log.w(TAG, "no cookie manager to clear: ${it.message}")
+            onCleared()
             return
         }
-        var cleared = 0
-        GOOGLE_ORIGINS.forEach { origin ->
-            val jar = manager.getCookie(origin) ?: return@forEach
-            val host = origin.substringAfter("://")
-            jar.split(';').forEach { entry ->
-                val name = entry.substringBefore('=').trim()
-                if (name.isEmpty()) return@forEach
-                // Both the host-only and the domain-wide form: a cookie set on
-                // `.google.com` is not removed by expiring it on the host, and
-                // which of the two a given cookie used is not recorded here.
-                manager.setCookie(origin, "$name=; Max-Age=0; Path=/")
-                manager.setCookie(origin, "$name=; Max-Age=0; Path=/; Domain=$host")
-                manager.setCookie(origin, "$name=; Max-Age=0; Path=/; Domain=.$host")
-                cleared++
-            }
+        manager.removeAllCookies {
+            runCatching { manager.flush() }
+            Log.d(TAG, "cleared the browser cookie jar")
+            onCleared()
         }
-        runCatching { manager.flush() }
-        Log.d(TAG, "cleared $cleared browser cookies for Google")
     }
-
-    private val GOOGLE_ORIGINS = listOf(
-        "https://music.youtube.com",
-        "https://www.youtube.com",
-        "https://youtube.com",
-        "https://accounts.google.com",
-        "https://www.google.com",
-        "https://google.com",
-    )
 }
 
 /**
@@ -153,9 +142,9 @@ object BrowserSession {
  * `continue=music.youtube.com`. The user authenticates directly against
  * accounts.google.com (2FA, passkeys etc. all work — it's the real page). When
  * Google redirects back to music.youtube.com the session is taken automatically
- * and the screen closes. The browser's own Google cookies are expired on the
- * way in, so a session it happens to be holding cannot answer for the listener
- * — see [BrowserSession.clearGoogleCookies].
+ * and the screen closes. The browser's cookie jar is emptied before anything
+ * loads, and again when the screen closes, so a session it happens to be
+ * holding cannot answer for the listener — see [BrowserSession.clearAllCookies].
  *
  * [WebSessionMode.SWITCH_CHANNEL] keeps those cookies and opens YouTube Music
  * itself, so the listener can use the avatar menu's own Accounts list — the one
@@ -179,19 +168,31 @@ fun YtMusicLoginScreen(
     onCaptureUnavailable: () -> Unit = {},
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var captureJob by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
     val currentOnCaptured by rememberUpdatedState(onCaptured)
     val currentOnUnavailable by rememberUpdatedState(onCaptureUnavailable)
 
     LaunchedEffect(captureRequest) {
         if (captureRequest == 0) return@LaunchedEffect
+        captureJob?.cancel()
         val view = webView
         if (view == null || !captureFrom(view, currentOnCaptured)) currentOnUnavailable()
+    }
+
+    DisposableEffect(mode) {
+        onDispose {
+            captureJob?.cancel()
+            // Leaving the sign-in screen leaves nothing behind: the next open
+            // must start from an empty jar even if the listener changed their
+            // mind and never completed a login.
+            if (mode == WebSessionMode.SIGN_IN) BrowserSession.clearAllCookies()
+        }
     }
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
-            if (mode == WebSessionMode.SIGN_IN) BrowserSession.clearGoogleCookies()
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
@@ -206,17 +207,47 @@ fun YtMusicLoginScreen(
                         // grabbing the session there would save the channel
                         // they came to change.
                         if (mode != WebSessionMode.SIGN_IN) return
-                        if (captured || url?.startsWith(MUSIC_ORIGIN) != true) return
-                        if (view != null && captureFrom(view, currentOnCaptured)) captured = true
+                        if (captured || view == null || !isMusicSessionUrl(url)) return
+                        // Google can report the page finished a frame before
+                        // the session cookie is visible to CookieManager, so
+                        // one look is not enough: retry briefly, and let the
+                        // manual button cover whatever remains.
+                        captureJob?.cancel()
+                        captureJob = scope.launch {
+                            repeat(CAPTURE_RETRY_DELAYS_MS.size + 1) { attempt ->
+                                if (captureFrom(view, currentOnCaptured)) {
+                                    captured = true
+                                    return@launch
+                                }
+                                val delayMs = CAPTURE_RETRY_DELAYS_MS.getOrNull(attempt)
+                                if (delayMs != null) delay(delayMs)
+                            }
+                        }
                     }
                 }
 
                 webView = this
-                loadUrl(if (mode == WebSessionMode.SIGN_IN) LOGIN_URL else "$MUSIC_ORIGIN/")
+                if (mode == WebSessionMode.SIGN_IN) {
+                    // Loaded only once the jar is actually empty: both the
+                    // removal and the load are asynchronous, and the old
+                    // ordering let a request start before the cookies were gone.
+                    BrowserSession.clearAllCookies {
+                        post { runCatching { loadUrl(LOGIN_URL) } }
+                    }
+                } else {
+                    loadUrl("$MUSIC_ORIGIN/")
+                }
             }
         },
     )
 }
+
+/** How long to keep looking for the session cookie after the redirect lands. */
+private val CAPTURE_RETRY_DELAYS_MS = longArrayOf(250, 600, 1200, 2000)
+
+/** True only for the origin Google's `continue` sends the listener back to. */
+internal fun isMusicSessionUrl(url: String?): Boolean =
+    url == MUSIC_ORIGIN || url?.startsWith("$MUSIC_ORIGIN/") == true
 
 /**
  * Takes the session from [view], if it is holding one.

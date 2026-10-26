@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,20 +46,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,7 +76,13 @@ import com.velthy.client.data.listentogether.PartyMember
 import com.velthy.client.data.listentogether.PartyPreview
 import com.velthy.client.ui.haptics.Haptic
 import com.velthy.client.ui.haptics.rememberHaptics
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * Listen Together — one party shared by up to ten signed-in devices.
@@ -119,6 +134,56 @@ fun ListenTogetherScreen(
     var pendingJoin by remember { mutableStateOf<PartyPreview?>(null) }
     /** The invite sheet, open while somebody is showing a code to a room. */
     var showInvite by remember { mutableStateOf(false) }
+
+    // A party-size change is optimistic: the number moves under the finger
+    // immediately and the server is told once the tapping stops. Sending one
+    // control per tap made a four-tap resize four round trips, and every tap
+    // that arrived before the previous echo was reconciled away — which is what
+    // the stepper feeling heavy and jumpy actually was. Held here rather than
+    // in the party state because it is a pending *intent*, not a fact: the
+    // server's own value takes over the moment the echo lands.
+    var pendingMaxMembers by remember(state.code) { mutableStateOf<Int?>(null) }
+    var pendingHostOnly by remember(state.code) { mutableStateOf<Boolean?>(null) }
+    // Never drawn below the people already in the room: a size the server would
+    // refuse (shrinking past the membership) is not one the screen should show
+    // for even the moment before the refusal lands.
+    val shownMaxMembers = (pendingMaxMembers ?: state.maxMembers)
+        .coerceAtLeast(state.members.size)
+    val shownHostOnly = pendingHostOnly ?: state.hostOnlyControl
+
+    // Each tap restarts this, so the debounce coalesces a burst of presses into
+    // one control, and only the last value in the burst is ever sent. A control
+    // that never comes back — socket down, a server that refuses it — drops the
+    // optimistic value so the row goes back to describing the party rather than
+    // the finger.
+    LaunchedEffect(pendingMaxMembers, state.code) {
+        val wanted = pendingMaxMembers ?: return@LaunchedEffect
+        if (ListenTogether.state.value.maxMembers == wanted) {
+            pendingMaxMembers = null
+            return@LaunchedEffect
+        }
+        delay(SETTINGS_DEBOUNCE_MS)
+        if (pendingMaxMembers != wanted) return@LaunchedEffect
+        ListenTogether.setMaxMembers(wanted)
+        withTimeoutOrNull(SETTINGS_ECHO_TIMEOUT_MS) {
+            snapshotFlow { ListenTogether.state.value.maxMembers }.first { it == wanted }
+        }
+        if (pendingMaxMembers == wanted) pendingMaxMembers = null
+    }
+    LaunchedEffect(pendingHostOnly, state.code) {
+        val wanted = pendingHostOnly ?: return@LaunchedEffect
+        if (ListenTogether.state.value.hostOnlyControl == wanted) {
+            pendingHostOnly = null
+            return@LaunchedEffect
+        }
+        delay(SETTINGS_DEBOUNCE_MS)
+        if (pendingHostOnly != wanted) return@LaunchedEffect
+        ListenTogether.setHostOnlyControl(wanted)
+        withTimeoutOrNull(SETTINGS_ECHO_TIMEOUT_MS) {
+            snapshotFlow { ListenTogether.state.value.hostOnlyControl }.first { it == wanted }
+        }
+        if (pendingHostOnly == wanted) pendingHostOnly = null
+    }
 
     // A membership restored from storage is worth a socket while somebody is
     // looking at it — which is exactly now.
@@ -217,6 +282,8 @@ fun ListenTogetherScreen(
         } else {
             InAParty(
                 state = state,
+                maxMembers = shownMaxMembers,
+                hostOnlyControl = shownHostOnly,
                 onCopy = {
                     haptics.play(Haptic.Tap)
                     clipboard.setText(AnnotatedString(state.code.orEmpty()))
@@ -256,7 +323,7 @@ fun ListenTogetherScreen(
                 },
                 onSetMaxMembers = { value ->
                     haptics.play(Haptic.Tap)
-                    ListenTogether.setMaxMembers(value)
+                    pendingMaxMembers = value
                 },
                 onKick = { memberId ->
                     haptics.play(Haptic.Tap)
@@ -264,7 +331,7 @@ fun ListenTogetherScreen(
                 },
                 onSetHostOnlyControl = { enabled ->
                     haptics.play(Haptic.Tap)
-                    ListenTogether.setHostOnlyControl(enabled)
+                    pendingHostOnly = enabled
                 },
             )
         }
@@ -279,7 +346,7 @@ fun ListenTogetherScreen(
         }
 
         if (state.inParty && activity.isNotEmpty()) {
-            ActivityGroup(activity)
+            ActivityConsole(activity)
         }
 
         // Last, and empty by default. Nothing here forces anybody to read an
@@ -547,6 +614,13 @@ private fun StepperButton(label: String, enabled: Boolean, onClick: () -> Unit) 
 @Composable
 private fun InAParty(
     state: ListenTogether.State,
+    /**
+     * The party size to draw, which may be one this device has asked for and
+     * the server has not echoed yet. See the optimistic state on the screen.
+     */
+    maxMembers: Int,
+    /** Likewise for who may drive the music. */
+    hostOnlyControl: Boolean,
     onCopy: () -> Unit,
     onShare: () -> Unit,
     onLeave: () -> Unit,
@@ -613,6 +687,7 @@ private fun InAParty(
 
     MembersGroup(
         state = state,
+        maxMembers = maxMembers,
         onKick = onKick,
     )
 
@@ -621,6 +696,8 @@ private fun InAParty(
     if (isHost) {
         HostControlsGroup(
             state = state,
+            maxMembers = maxMembers,
+            hostOnlyControl = hostOnlyControl,
             onSetMaxMembers = onSetMaxMembers,
             onSetHostOnlyControl = onSetHostOnlyControl,
         )
@@ -642,10 +719,11 @@ private fun InAParty(
 @Composable
 private fun MembersGroup(
     state: ListenTogether.State,
+    maxMembers: Int,
     onKick: (String) -> Unit,
 ) {
     val isHost = state.you?.isHost == true
-    SettingsGroup(header = "${state.members.size} of ${state.maxMembers} here") {
+    SettingsGroup(header = "${state.members.size} of $maxMembers here") {
         state.members.forEachIndexed { index, member ->
             if (index > 0) RowDivider()
             MemberRow(
@@ -667,6 +745,8 @@ private fun MembersGroup(
 @Composable
 private fun HostControlsGroup(
     state: ListenTogether.State,
+    maxMembers: Int,
+    hostOnlyControl: Boolean,
     onSetMaxMembers: (Int) -> Unit,
     onSetHostOnlyControl: (Boolean) -> Unit,
 ) {
@@ -679,19 +759,19 @@ private fun HostControlsGroup(
             // The floor is the people already in it: shrinking past them would
             // evict somebody as a side effect of a settings change, and the
             // server refuses it for the same reason.
-            value = state.maxMembers.coerceAtLeast(state.members.size),
+            value = maxMembers.coerceAtLeast(state.members.size),
             enabled = true,
             onChange = onSetMaxMembers,
         )
         RowDivider()
         ToggleRow(
             title = "Only I control the music",
-            subtitle = if (state.hostOnlyControl) {
+            subtitle = if (hostOnlyControl) {
                 "Listeners can listen but not change the song"
             } else {
                 "Anyone in the party can change the song"
             },
-            checked = state.hostOnlyControl,
+            checked = hostOnlyControl,
             onCheckedChange = onSetHostOnlyControl,
         )
     }
@@ -804,36 +884,116 @@ private fun MemberRow(
 }
 
 /**
- * What has been happening in the party, newest first.
+ * What has been happening in the party, newest first, as a terminal read-out.
  *
- * Shown as a plain list of sentences rather than as a log: the wording comes
- * from the server already composed, so every listener reads the same thing and
- * nothing here has to know what any particular action means.
+ * A fixed-height, independently scrolling console rather than a list of cards
+ * in the page: a busy party emits an entry per control — a queue being built
+ * track by track is a dozen lines a minute — and in the page's own scroll those
+ * lines pushed the members and the host's controls off the screen within a
+ * minute of the party starting. Here the feed has a box of its own, the page
+ * keeps its shape, and the newest line is always the one at the top.
+ *
+ * Monospaced and dimmed like a log because that is what it is: a read-out of
+ * what the party is doing, not prose anybody has to read in full. The wording
+ * still comes from the server already composed, so every listener reads the
+ * same sentence.
  */
 @Composable
-private fun ActivityGroup(activity: List<PartyActivity>) {
-    SettingsGroup(header = "Party activity") {
-        activity.forEachIndexed { index, entry ->
-            if (index > 0) RowDivider()
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = ROW_INSET, vertical = 12.dp),
-            ) {
-                Text(
-                    text = entry.detail.ifBlank { entry.action },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Text(
-                    text = entry.by,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+private fun ActivityConsole(activity: List<PartyActivity>) {
+    // Newest first in the model, so the list is already in the order the
+    // console draws it: index 0 is the top line, and a new entry does not need
+    // the scroll position touched at all.
+    val listState = rememberLazyListState()
+
+    Text(
+        text = "PARTY LOG",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(
+            start = GROUP_INSET + 4.dp,
+            end = GROUP_INSET,
+            top = 26.dp,
+            bottom = 8.dp,
+        ),
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = GROUP_INSET)
+            .clip(GroupShape)
+            .background(CONSOLE_BACKGROUND)
+            .border(0.5.dp, MaterialTheme.colorScheme.outline, GroupShape),
+    ) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(CONSOLE_HEIGHT)
+                .padding(vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+        ) {
+            // Deliberately no keys. The list is prepend-only and newest-first,
+            // and the entries carry no id of their own — two devices doing the
+            // same thing in the same millisecond would mint the same key and
+            // take the console down. Position keys are enough for a feed nobody
+            // scrolls far into.
+            items(items = activity) { entry ->
+                ConsoleLine(entry)
             }
         }
     }
 }
+
+/** One line of [ActivityConsole]: a timestamp, who, and what they did. */
+@Composable
+private fun ConsoleLine(entry: PartyActivity) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            text = CONSOLE_TIME_FORMAT.format(
+                Instant.ofEpochMilli(entry.atMs).atZone(ZoneId.systemDefault()),
+            ),
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = buildAnnotatedString {
+                withStyle(
+                    SpanStyle(
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                ) {
+                    append(entry.by)
+                }
+                append(" ")
+                append(entry.detail.ifBlank { entry.action })
+            },
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** What the console is drawn on: the terminal black, in either theme. */
+private val CONSOLE_BACKGROUND = Color(0xFF0B0B0D)
+
+/** Tall enough for about eight lines, then it scrolls inside itself. */
+private val CONSOLE_HEIGHT = 176.dp
+
+private val CONSOLE_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+/**
+ * How long a burst of stepper taps is allowed to coalesce before the server is
+ * told. Short enough that a single tap still lands inside a gesture, long
+ * enough that four presses on the way from five to nine are one control.
+ */
+private const val SETTINGS_DEBOUNCE_MS = 220L
+
+/** How long an optimistic setting waits for the party's echo before giving up. */
+private const val SETTINGS_ECHO_TIMEOUT_MS = 3_000L
 
 /**
  * The six cells of a party code, over one real text field.
